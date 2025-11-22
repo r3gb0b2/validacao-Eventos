@@ -276,81 +276,124 @@ const App: React.FC = () => {
             let found = false;
             let networkErrors = 0;
 
+            // PREPARE CODES TO TRY
+            // 1. Always try the raw code scanned
+            const codesToTry = [ticketId];
+            
+            // 2. If it looks like a URL, try to extract ID/Code from it
+            try {
+                if (ticketId.match(/^https?:\/\//i)) {
+                    const urlObj = new URL(ticketId);
+                    
+                    // Try query parameters common for tickets
+                    const paramKeys = ['code', 'id', 'uuid', 'ticket', 'ticket_code', 't'];
+                    for (const key of paramKeys) {
+                        if (urlObj.searchParams.has(key)) {
+                            const val = urlObj.searchParams.get(key);
+                            if (val) codesToTry.push(val);
+                        }
+                    }
+
+                    // Try the last segment of the path (e.g. /checkins/12345)
+                    const pathSegments = urlObj.pathname.split('/').filter(p => p && p.length > 0);
+                    if (pathSegments.length > 0) {
+                        const lastSegment = pathSegments[pathSegments.length - 1];
+                        // Avoid duplicates
+                        if (!codesToTry.includes(lastSegment)) codesToTry.push(lastSegment);
+                    }
+                }
+            } catch (e) {
+                console.warn("Error parsing potential URL code:", e);
+            }
+
+            const uniqueCodes = [...new Set(codesToTry)];
+            console.log(`[Online Scan] Codes derived:`, uniqueCodes);
+
             // Loop through configured APIs
             for (const api of endpoints) {
                 if (!api.url) continue;
                 
-                try {
-                    const payloadEventId = api.customEventId || eventId;
-                    // Try to parse to int if possible as many APIs require int for IDs, but fallback to original string.
-                    const finalEventId = /^\d+$/.test(String(payloadEventId)) ? parseInt(String(payloadEventId), 10) : payloadEventId;
+                // Loop through possible codes (Raw vs Extracted)
+                for (const codeAttempt of uniqueCodes) {
+                    try {
+                        const payloadEventId = api.customEventId || eventId;
+                        // Force numeric if possible, otherwise string
+                        const finalEventId = /^\d+$/.test(String(payloadEventId)) ? parseInt(String(payloadEventId), 10) : payloadEventId;
 
-                    const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-                    if (api.token) headers['Authorization'] = `Bearer ${api.token}`;
+                        const headers: HeadersInit = { 
+                            'Content-Type': 'application/json', 
+                            'Accept': 'application/json' 
+                        };
+                        if (api.token) headers['Authorization'] = `Bearer ${api.token}`;
 
-                    // Send strict and loose parameters to satisfy different API requirements (Laravel, Node, etc)
-                    const body = JSON.stringify({ 
-                        code: ticketId, 
-                        qr_code: ticketId, 
-                        ticket_code: ticketId,
-                        uuid: ticketId,
-                        event_id: finalEventId 
-                    });
+                        // Prepare Request Body
+                        const body = JSON.stringify({ 
+                            code: codeAttempt, 
+                            qr_code: codeAttempt, 
+                            ticket_code: codeAttempt,
+                            uuid: codeAttempt,
+                            event_id: finalEventId 
+                        });
 
-                    console.log(`[Online Scan] Checking ${api.name || api.url}...`, { event_id: finalEventId, code: ticketId });
+                        // Prepare URL - Append event_id to query string as fallback
+                        const fetchUrl = new URL(api.url);
+                        if (finalEventId) fetchUrl.searchParams.set('event_id', String(finalEventId));
 
-                    const response = await fetch(api.url, {
-                        method: 'POST',
-                        headers,
-                        body 
-                    });
+                        console.log(`[Online Scan] Checking ${api.name || api.url} with code: ${codeAttempt}`);
 
-                    // If 404, it means not found on THIS api. Continue to next.
-                    if (response.status === 404) {
-                        continue; 
-                    }
+                        const response = await fetch(fetchUrl.toString(), {
+                            method: 'POST',
+                            headers,
+                            body 
+                        });
 
-                    // If we get here, we got a definitive response (Valid, Used, or Server Error)
-                    found = true; 
-                    const json = await response.json().catch(() => ({}));
-                    
-                    // Detect sector - handle nested data structures common in APIs
-                    if (json.sector) resultSector = typeof json.sector === 'object' ? json.sector.name : json.sector;
-                    else if (json.data && json.data.sector) resultSector = typeof json.data.sector === 'object' ? json.data.sector.name : json.data.sector;
-                    else if (api.name) resultSector = api.name; // Fallback to identifying via API name
-
-                    if (response.ok) {
-                        // VALID (200/201)
-                        if (!isSectorAllowed(resultSector) && resultSector !== 'API' && resultSector !== api.name) {
-                            resultStatus = 'WRONG_SECTOR';
-                            resultMessage = `Setor incorreto! (${resultSector})`;
-                        } else {
-                            resultStatus = 'VALID';
-                            resultMessage = `Acesso Liberado${api.name ? ` (${api.name})` : ''}!`;
+                        // If 404, try next code or next API
+                        if (response.status === 404) {
+                            continue; 
                         }
-                    } else if (response.status === 422 || response.status === 409) {
-                        // USED
-                        resultStatus = 'USED';
-                        resultMessage = `Ingresso já utilizado${api.name ? ` (${api.name})` : ''}.`;
-                    } else {
-                        // OTHER ERROR (500, 403)
-                        resultStatus = 'ERROR';
-                        resultMessage = `Erro API${api.name ? ` (${api.name})` : ''}: ${response.status}`;
-                    }
-                    
-                    // Break the loop as we found the ticket
-                    break; 
 
-                } catch (err) {
-                    console.error(`API Error on ${api.url}`, err);
-                    networkErrors++;
-                    // Continue loop in case redundancy or other platform works.
+                        // If we get a definitive response (Success or Used or Server Error that isn't 404)
+                        found = true; 
+                        const json = await response.json().catch(() => ({}));
+                        
+                        // Detect sector
+                        if (json.sector) resultSector = typeof json.sector === 'object' ? json.sector.name : json.sector;
+                        else if (json.data && json.data.sector) resultSector = typeof json.data.sector === 'object' ? json.data.sector.name : json.data.sector;
+                        else if (api.name) resultSector = api.name;
+
+                        if (response.ok) {
+                            // VALID (200/201)
+                            if (!isSectorAllowed(resultSector) && resultSector !== 'API' && resultSector !== api.name) {
+                                resultStatus = 'WRONG_SECTOR';
+                                resultMessage = `Setor incorreto! (${resultSector})`;
+                            } else {
+                                resultStatus = 'VALID';
+                                resultMessage = `Acesso Liberado${api.name ? ` (${api.name})` : ''}!`;
+                            }
+                        } else if (response.status === 422 || response.status === 409) {
+                            // USED
+                            resultStatus = 'USED';
+                            resultMessage = `Ingresso já utilizado${api.name ? ` (${api.name})` : ''}.`;
+                        } else {
+                            // OTHER ERROR
+                            resultStatus = 'ERROR';
+                            resultMessage = `Erro API${api.name ? ` (${api.name})` : ''}: ${response.status}`;
+                        }
+                        
+                        // Found valid response, break inner loop (codes)
+                        break; 
+
+                    } catch (err) {
+                        console.error(`API Error on ${api.url}`, err);
+                        networkErrors++;
+                    }
                 }
+                // Found valid response, break outer loop (APIs)
+                if (found) break;
             }
 
             if (!found) {
-                 // If we looped through all and found nothing (or all were 404)
-                 if (networkErrors === endpoints.length) {
+                 if (networkErrors === (endpoints.length * uniqueCodes.length)) {
                      showScanResult('ERROR', 'Erro de conexão com a API.');
                  } else {
                      showScanResult('INVALID', `Ingresso não encontrado (API).`);
