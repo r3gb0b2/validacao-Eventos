@@ -7,7 +7,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -338,6 +338,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             console.error(e);
             alert("Erro ao salvar credenciais.");
         }
+    };
+
+    const handleCopyPublicLink = () => {
+        if (!selectedEvent) return;
+        const url = `${window.location.origin}${window.location.pathname}?mode=stats&eventId=${selectedEvent.id}`;
+        navigator.clipboard.writeText(url).then(() => {
+            alert("Link público copiado para a área de transferência!");
+        }).catch(err => {
+            console.error('Falha ao copiar:', err);
+            prompt("Copie o link abaixo:", url);
+        });
     };
 
     const handleImportFromApi = async () => {
@@ -835,16 +846,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
                     <div className="space-y-6 animate-fade-in">
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between items-center flex-wrap gap-2">
                             <h2 className="text-2xl font-bold text-white">Dashboard do Evento</h2>
-                             <button 
-                                onClick={handleDownloadReport} 
-                                disabled={isGeneratingPdf} 
-                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg transition-colors flex items-center shadow-lg disabled:opacity-50"
-                            >
-                                <CloudDownloadIcon className="w-5 h-5 mr-2" />
-                                {isGeneratingPdf ? 'Gerando PDF...' : 'Baixar Relatório PDF'}
-                            </button>
+                            <div className="flex space-x-2">
+                                <button 
+                                    onClick={handleCopyPublicLink}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center shadow-lg"
+                                    title="Gerar link para visualização pública das estatísticas"
+                                >
+                                    <LinkIcon className="w-5 h-5 mr-2" />
+                                    Link Público
+                                </button>
+                                <button 
+                                    onClick={handleDownloadReport} 
+                                    disabled={isGeneratingPdf} 
+                                    className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center shadow-lg disabled:opacity-50"
+                                >
+                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                                    {isGeneratingPdf ? 'Gerando...' : 'Baixar PDF'}
+                                </button>
+                            </div>
                         </div>
 
                         {/* Main Stats Component (KPIs + Table) */}
