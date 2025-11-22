@@ -7,7 +7,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, writeBatch, doc, setDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, CogIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon, CogIcon, EyeIcon, EyeSlashIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -53,6 +53,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiEndpoints, setApiEndpoints] = useState<ApiEndpoint[]>([
         { id: '1', name: 'Principal', url: 'https://public-api.stingressos.com.br/checkins', token: '', customEventId: '' }
     ]);
+    
+    // Visibility State for API tokens
+    const [visibleTokens, setVisibleTokens] = useState<{[key: string]: boolean}>({});
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -459,6 +462,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const handleEndpointChange = (id: string, field: keyof ApiEndpoint, value: string) => {
         setApiEndpoints(apiEndpoints.map(ep => ep.id === id ? { ...ep, [field]: value } : ep));
     };
+    
+    const toggleTokenVisibility = (id: string) => {
+        setVisibleTokens(prev => ({ ...prev, [id]: !prev[id] }));
+    };
 
     const handleSaveValidationSettings = async () => {
         if (!selectedEvent) return;
@@ -576,13 +583,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                     onChange={e => handleEndpointChange(ep.id, 'url', e.target.value)}
                                                     className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs mb-2"
                                                 />
-                                                <input 
-                                                    type="password" 
-                                                    placeholder="Token (Bearer)"
-                                                    value={ep.token}
-                                                    onChange={e => handleEndpointChange(ep.id, 'token', e.target.value)}
-                                                    className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs"
-                                                />
+                                                <div className="relative">
+                                                    <input 
+                                                        type={visibleTokens[ep.id] ? 'text' : 'password'}
+                                                        placeholder="Token (Bearer)"
+                                                        value={ep.token}
+                                                        onChange={e => handleEndpointChange(ep.id, 'token', e.target.value)}
+                                                        className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs pr-8"
+                                                    />
+                                                    <button 
+                                                        onClick={() => toggleTokenVisibility(ep.id)}
+                                                        className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white focus:outline-none"
+                                                        tabIndex={-1}
+                                                        title={visibleTokens[ep.id] ? "Ocultar senha" : "Mostrar senha"}
+                                                    >
+                                                        {visibleTokens[ep.id] ? <EyeSlashIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                                                    </button>
+                                                </div>
                                                 {!ep.customEventId && <p className="text-[10px] text-red-400 mt-1">* ID do Evento é obrigatório para evitar erro 404</p>}
                                             </div>
                                         ))}
