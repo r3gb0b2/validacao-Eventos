@@ -6,6 +6,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { CloudDownloadIcon } from './Icons';
 
 interface AdminViewProps {
   db: Firestore;
@@ -31,6 +32,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     // Event Management State
     const [newEventName, setNewEventName] = useState('');
     const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
+
+    // API Import State
+    const [apiUrl, setApiUrl] = useState('https://public-api.stingressos.com.br/tickets');
+    const [apiToken, setApiToken] = useState('');
+    const [apiEventId, setApiEventId] = useState('');
 
     useEffect(() => {
         setEditableSectorNames(sectorNames);
@@ -161,6 +167,131 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     
     const handleTicketCodeChange = (sector: string, codes: string) => {
         setTicketCodes(prev => ({ ...prev, [sector]: codes }));
+    };
+
+    const handleImportFromApi = async () => {
+        if (!selectedEvent) return;
+        if (!apiUrl.trim()) {
+            alert('A URL da API é obrigatória.');
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const url = new URL(apiUrl);
+            if (apiEventId) {
+                url.searchParams.append('event_id', apiEventId);
+            }
+
+            const headers: HeadersInit = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            };
+            if (apiToken.trim()) {
+                headers['Authorization'] = `Bearer ${apiToken.trim()}`;
+            }
+
+            const response = await fetch(url.toString(), { headers });
+            
+            if (!response.ok) {
+                throw new Error(`Erro na requisição: ${response.status} ${response.statusText}`);
+            }
+
+            const jsonResponse = await response.json();
+            
+            // Handle different API response structures (array root or data property)
+            let items: any[] = [];
+            if (Array.isArray(jsonResponse)) {
+                items = jsonResponse;
+            } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
+                items = jsonResponse.data;
+            } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
+                items = jsonResponse.tickets;
+            }
+
+            if (items.length === 0) {
+                alert('Nenhum ingresso encontrado na resposta da API. Verifique o ID do evento ou a estrutura dos dados.');
+                setIsLoading(false);
+                return;
+            }
+
+            // Identify new sectors
+            const newSectors = new Set<string>();
+            const ticketsToSave: Ticket[] = [];
+
+            items.forEach((item: any) => {
+                // Flexible field mapping
+                const code = item.code || item.qr_code || item.id || item.ticket_code;
+                const sector = item.sector || item.sector_name || item.section || item.setor || 'Geral';
+                const ownerName = item.owner_name || item.name || item.client_name || '';
+
+                if (code) {
+                    newSectors.add(sector);
+                    ticketsToSave.push({
+                        id: String(code),
+                        sector: String(sector),
+                        status: 'AVAILABLE', // Default to available unless API says otherwise
+                        details: {
+                            ownerName: ownerName
+                        }
+                    });
+                }
+            });
+
+            if (ticketsToSave.length === 0) {
+                alert('Não foi possível identificar códigos de ingresso válidos na resposta.');
+                setIsLoading(false);
+                return;
+            }
+
+            // 1. Update Sector Names if needed
+            const currentSectorsSet = new Set(sectorNames);
+            let sectorsUpdated = false;
+            newSectors.forEach(s => {
+                if (!currentSectorsSet.has(s)) {
+                    currentSectorsSet.add(s);
+                    sectorsUpdated = true;
+                }
+            });
+
+            if (sectorsUpdated) {
+                const updatedSectorList = Array.from(currentSectorsSet);
+                await onUpdateSectorNames(updatedSectorList);
+                setEditableSectorNames(updatedSectorList); // Update local state
+            }
+
+            // 2. Batch Save Tickets (Firestore limits batches to 500 ops)
+            const BATCH_SIZE = 450;
+            const chunks = [];
+            for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
+                chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
+            }
+
+            let savedCount = 0;
+            for (const chunk of chunks) {
+                const batch = writeBatch(db);
+                chunk.forEach(ticket => {
+                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', ticket.id);
+                    batch.set(ticketRef, {
+                        sector: ticket.sector,
+                        status: ticket.status,
+                        usedAt: null,
+                        details: ticket.details
+                    });
+                });
+                await batch.commit();
+                savedCount += chunk.length;
+            }
+
+            alert(`Importação concluída! ${savedCount} ingressos importados/atualizados e setores sincronizados.`);
+            setApiToken(''); // Clear sensitive data logic if desired, or keep for re-use
+            
+        } catch (error) {
+            console.error('API Import Error:', error);
+            alert(`Falha na importação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handleSaveTickets = async () => {
@@ -396,21 +527,74 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 {isSavingSectors ? 'Salvando...' : 'Salvar Nomes dos Setores'}
                             </button>
                         </div>
-                        <div className="bg-gray-800 p-4 rounded-lg">
-                            <h3 className="text-lg font-semibold mb-3">Gerenciar Ingressos</h3>
-                            <div className="space-y-3">
-                                {sectorNames.map((sector) => (
-                                    <textarea
-                                      key={sector}
-                                      value={ticketCodes[sector] || ''}
-                                      onChange={(e) => handleTicketCodeChange(sector, e.target.value)}
-                                      placeholder={`Cole os códigos do setor "${sector}" aqui (um por linha)`}
-                                      rows={3}
-                                      className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                                    />
-                                ))}
-                                <button onClick={handleSaveTickets} disabled={isLoading || isSavingSectors} className="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold disabled:bg-gray-500">{isLoading ? 'Salvando...' : 'Salvar Ingressos no Banco de Dados'}</button>
-                                {!isOnline && <p className="text-xs text-yellow-400 text-center mt-2">Você está offline. Os ingressos serão salvos quando a conexão for restaurada.</p>}
+                        
+                        <div className="space-y-6">
+                            <div className="bg-gray-800 p-4 rounded-lg border border-orange-500/30">
+                                <h3 className="text-lg font-semibold mb-3 text-orange-400 flex items-center">
+                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                                    Importar Ingressos (API)
+                                </h3>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="text-xs text-gray-400">URL da API</label>
+                                        <input
+                                            type="text"
+                                            value={apiUrl}
+                                            onChange={(e) => setApiUrl(e.target.value)}
+                                            className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="text-xs text-gray-400">API Token (Opcional)</label>
+                                            <input
+                                                type="password"
+                                                value={apiToken}
+                                                onChange={(e) => setApiToken(e.target.value)}
+                                                placeholder="Bearer Token"
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-gray-400">ID Evento Externo (Opcional)</label>
+                                            <input
+                                                type="text"
+                                                value={apiEventId}
+                                                onChange={(e) => setApiEventId(e.target.value)}
+                                                placeholder="Ex: 123"
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={handleImportFromApi}
+                                        disabled={isLoading}
+                                        className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center"
+                                    >
+                                        {isLoading ? 'Importando...' : 'Importar da API ST Ingressos'}
+                                    </button>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        *Novos setores serão adicionados automaticamente.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="bg-gray-800 p-4 rounded-lg">
+                                <h3 className="text-lg font-semibold mb-3">Gerenciar Ingressos Manualmente</h3>
+                                <div className="space-y-3">
+                                    {sectorNames.map((sector) => (
+                                        <textarea
+                                        key={sector}
+                                        value={ticketCodes[sector] || ''}
+                                        onChange={(e) => handleTicketCodeChange(sector, e.target.value)}
+                                        placeholder={`Cole os códigos do setor "${sector}" aqui (um por linha)`}
+                                        rows={3}
+                                        className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                        />
+                                    ))}
+                                    <button onClick={handleSaveTickets} disabled={isLoading || isSavingSectors} className="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold disabled:bg-gray-500">{isLoading ? 'Salvando...' : 'Salvar Ingressos no Banco de Dados'}</button>
+                                    {!isOnline && <p className="text-xs text-yellow-400 text-center mt-2">Você está offline. Os ingressos serão salvos quando a conexão for restaurada.</p>}
+                                </div>
                             </div>
                         </div>
                     </div>
