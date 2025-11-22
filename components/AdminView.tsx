@@ -205,8 +205,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setLoadingMessage('Iniciando conexão...');
         
         try {
-            // SETUP BASE URL
-            // We use manual pagination construction to be robust against broken next_page_urls
+            // SETUP INITIAL URL
             const urlObj = new URL(apiUrl);
             
             // Add ID if provided
@@ -214,12 +213,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 urlObj.searchParams.set('event_id', apiEventId);
             }
             
-            // Request large batches, but we will iterate pages regardless of whether the API respects this
-            urlObj.searchParams.set('per_page', '1000');
-            urlObj.searchParams.set('limit', '1000');
+            // Request large batches.
+            urlObj.searchParams.set('per_page', '500');
+            urlObj.searchParams.set('limit', '500');
             
-            // Remove existing page param to start fresh
-            urlObj.searchParams.delete('page');
+            // Ensure we start at page 1
+            if (!urlObj.searchParams.has('page')) {
+                urlObj.searchParams.set('page', '1');
+            }
 
             const headers: HeadersInit = {
                 'Content-Type': 'application/json',
@@ -230,82 +231,125 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
 
             const allItems: any[] = [];
-            let currentPage = 1;
-            let lastPage: number | null = null;
-            let totalRecords: number | null = null;
-            const baseUrl = urlObj.toString();
+            const seenIds = new Set<string>();
+            
+            let nextUrl: string | null = urlObj.toString();
+            let pageCount = 0;
+            const MAX_PAGES = 5000;
 
             // --- PAGINATION LOOP ---
-            while (true) {
-                // Construct URL for specific page
-                const requestUrlObj = new URL(baseUrl);
-                requestUrlObj.searchParams.set('page', String(currentPage));
-                const requestUrl = requestUrlObj.toString();
-
-                const msg = totalRecords 
-                    ? `Baixando página ${currentPage} de ${lastPage || '?'} (Total detectado: ${totalRecords})...`
-                    : `Baixando página ${currentPage}...`;
+            while (nextUrl && pageCount < MAX_PAGES) {
+                pageCount++;
+                const msg = `Baixando página ${pageCount} (Total importado: ${allItems.length})...`;
                 setLoadingMessage(msg);
+                
+                // Force HTTPS
+                if (nextUrl.startsWith('http://') && !nextUrl.startsWith('http://localhost')) {
+                     nextUrl = nextUrl.replace('http://', 'https://');
+                }
 
-                const response = await fetch(requestUrl, { headers });
+                // Small delay to prevent UI freeze and rate limiting
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                const response = await fetch(nextUrl, { headers });
                 
                 if (!response.ok) {
-                    throw new Error(`Erro na requisição (Página ${currentPage}): ${response.status} ${response.statusText}`);
+                    if (response.status === 404 && pageCount > 1) {
+                         // End of list reached for some APIs
+                         break;
+                    }
+                    throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
                 }
 
                 const jsonResponse = await response.json();
                 
-                // Determine structure and extract items for this page
+                // Determine structure
                 let pageItems: any[] = [];
-                let metaRoot: any = jsonResponse; // Where to look for 'last_page' or 'total'
+                let metaRoot: any = jsonResponse; 
 
                 if (Array.isArray(jsonResponse)) {
                     pageItems = jsonResponse;
                 } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
-                     // Standard Laravel Resource: { data: [...], meta: {...}, links: {...} }
-                     // OR { data: [...], current_page: 1... }
+                    // Standard Laravel Resource
                     pageItems = jsonResponse.data;
-                    // If meta is separate
                     if (jsonResponse.meta) metaRoot = jsonResponse.meta;
+                    if (jsonResponse.links) metaRoot = { ...metaRoot, ...jsonResponse.links }; // merge links for search
                 } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
                     pageItems = jsonResponse.tickets;
                 } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
-                    // Nested: { data: { data: [...], last_page: ... } }
+                    // Nested
                     metaRoot = jsonResponse.data;
                     pageItems = jsonResponse.data.data;
                 }
 
                 if (pageItems.length === 0) {
-                    // No more items, stop loop
                     break;
+                }
+
+                // --- DUPLICATE CHECK ---
+                let newItemsCount = 0;
+                pageItems.forEach((item: any) => {
+                    const id = item.id || item.code || item.qr_code || item.ticket_code || item.uuid || JSON.stringify(item);
+                    if (!seenIds.has(String(id))) {
+                        seenIds.add(String(id));
+                        newItemsCount++;
+                    }
+                });
+
+                if (newItemsCount === 0 && allItems.length > 0) {
+                     console.log("Stopping pagination: All items on this page are duplicates (Loop detection).");
+                     break;
                 }
 
                 allItems.push(...pageItems);
                 
-                // --- Extract Pagination Info ---
+                // --- NEXT PAGE DETERMINATION ---
+                // Priority: Explicit "next_page_url" from API -> Manual Page Increment
+                
+                let foundNextLink: string | null = null;
+                
+                // Look for standard Laravel/JSON:API links
                 if (metaRoot) {
-                    if (metaRoot.last_page) lastPage = Number(metaRoot.last_page);
-                    if (metaRoot.total) totalRecords = Number(metaRoot.total);
+                     if (metaRoot.next_page_url) foundNextLink = metaRoot.next_page_url;
+                     else if (metaRoot.next) foundNextLink = metaRoot.next;
                 }
+                // Root level fallback
+                if (!foundNextLink && jsonResponse.next_page_url) foundNextLink = jsonResponse.next_page_url;
 
-                // If we know the last page, check if we reached it
-                if (lastPage && currentPage >= lastPage) {
-                    break;
+                if (foundNextLink) {
+                    nextUrl = foundNextLink;
+                    
+                    // RE-INJECT PARAMS: Ensure critical params persist if API drops them
+                    try {
+                        const urlCheck = new URL(nextUrl);
+                        let changed = false;
+                        if (apiEventId && !urlCheck.searchParams.has('event_id')) {
+                            urlCheck.searchParams.set('event_id', apiEventId);
+                            changed = true;
+                        }
+                        if (!urlCheck.searchParams.has('per_page') && !urlCheck.searchParams.has('limit')) {
+                             urlCheck.searchParams.set('per_page', '500');
+                             changed = true;
+                        }
+                        if (changed) nextUrl = urlCheck.toString();
+                    } catch (e) {
+                        console.warn('Could not parse nextUrl params', e);
+                    }
+
+                } else {
+                    // Fallback: Manual pagination
+                    // Only continue if we received a full page (or at least some items)
+                    const currentUrlObj = new URL(nextUrl);
+                    const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
+                    
+                    // If we suspect there are more pages (e.g., we got exactly the limit we asked for, or just 'some' items and no meta info says stop)
+                    if (pageItems.length > 0) {
+                        currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
+                        nextUrl = currentUrlObj.toString();
+                    } else {
+                        nextUrl = null;
+                    }
                 }
-
-                // If we don't know last page, check if there's a next link in the response to hint continuation
-                // Note: We don't USE the link, just check existence to decide if we increment page
-                const hasNextLink = jsonResponse.next_page_url || (jsonResponse.links && jsonResponse.links.next) || (metaRoot && metaRoot.next_page_url);
-                
-                if (!lastPage && !hasNextLink) {
-                    // No last_page info and no next link -> assume single page
-                    break;
-                }
-                
-                // Safety break to prevent infinite loops if API returns infinite pages
-                if (currentPage > 2000) break;
-
-                currentPage++;
             }
 
             if (allItems.length === 0) {
@@ -321,12 +365,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ticketsToSave: Ticket[] = [];
             const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
 
-            // --- PROCESSING LOGIC BASED ON ENDPOINT TYPE ---
+            // --- PROCESSING LOGIC ---
             
             if (importType === 'checkins' || apiUrl.includes('checkins')) {
-                // Handling Checkins: We update existing tickets to USED
                 allItems.forEach((item: any) => {
-                    // Try to find the ticket identifier and timestamp
                     const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
                     const timestampStr = item.created_at || item.checked_in_at || item.timestamp;
                     
@@ -337,27 +379,20 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 });
 
             } else {
-                // Handling Tickets / Participants / Buyers (Inventory Import)
-                
                 const processItem = (item: any) => {
-                    // Generic mapping to try and find standard fields in varying JSON structures
                     const code = item.code || item.qr_code || item.ticket_code || item.barcode || item.id;
                     
-                    // Priority for sector name
                     let sector = item.sector || item.sector_name || item.section || item.setor || item.category || item.ticket_name || item.product_name || 'Geral';
-                    if (typeof sector === 'object' && sector.name) sector = sector.name; // Handle nested sector object
+                    if (typeof sector === 'object' && sector.name) sector = sector.name;
 
-                    // Priority for owner name
                     const ownerName = item.owner_name || item.name || item.participant_name || item.client_name || item.buyer_name || '';
 
-                    // Check if item has nested tickets (common in 'buyers' endpoint)
                     if (item.tickets && Array.isArray(item.tickets)) {
                         item.tickets.forEach((subTicket: any) => {
-                             // Merge buyer info if sub-ticket doesn't have owner
                              if (!subTicket.owner_name && ownerName) subTicket.owner_name = ownerName;
                              processItem(subTicket);
                         });
-                        return; // Done with this parent item
+                        return;
                     }
 
                     if (code) {
@@ -365,7 +400,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         ticketsToSave.push({
                             id: String(code),
                             sector: String(sector),
-                            status: 'AVAILABLE', // Default to available
+                            status: 'AVAILABLE',
                             details: {
                                 ownerName: String(ownerName)
                             }
@@ -378,7 +413,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
             // --- BATCH OPERATIONS ---
 
-            // 1. Update Sector Names (Only for inventory import)
+            // 1. Update Sector Names
             if (ticketsToSave.length > 0) {
                 const currentSectorsSet = new Set(sectorNames);
                 let sectorsUpdated = false;
@@ -400,7 +435,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let savedCount = 0;
             let updatedCount = 0;
 
-            // 2. Save/Overwrite Tickets
+            // 2. Save Tickets
             if (ticketsToSave.length > 0) {
                 setLoadingMessage('Salvando ingressos no banco de dados...');
                  const chunks = [];
@@ -422,7 +457,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             }
 
-            // 3. Update Status (Check-ins sync)
+            // 3. Update Status
             if (ticketsToUpdateStatus.length > 0) {
                 setLoadingMessage('Sincronizando check-ins...');
                 const chunks = [];
@@ -446,7 +481,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
             let msg = 'Processo concluído!\n';
             if (savedCount > 0) msg += `- ${savedCount} ingressos importados/atualizados.\n`;
-            if (updatedCount > 0) msg += `- ${updatedCount} ingressos marcados como utilizados (Check-ins sincronizados).\n`;
+            if (updatedCount > 0) msg += `- ${updatedCount} ingressos marcados como utilizados.\n`;
             
             alert(msg);
             
@@ -461,7 +496,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleSaveTickets = async () => {
         if (!selectedEvent) return;
-        // Explicitly cast Object.values result to string array
         if ((Object.values(ticketCodes) as string[]).every(codes => !codes.trim())) {
             alert('Nenhum código de ingresso para salvar.');
             return;
@@ -532,7 +566,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 name: newEventName.trim(),
                 isHidden: false,
             });
-            // Create a default settings document for the new event
             await setDoc(doc(db, 'events', eventRef.id, 'settings', 'main'), {
                 sectorNames: ['Pista', 'VIP']
             });
@@ -584,9 +617,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (window.confirm(`Tem certeza que deseja apagar o evento "${eventName}"? Esta ação é irreversível e removerá todos os dados associados.`)) {
             setIsLoading(true);
             try {
-                // Note: This only deletes the event document. Sub-collections (tickets, scans)
-                // will become orphaned. For a production app, a Cloud Function is recommended
-                // to handle cascading deletes.
                 await deleteDoc(doc(db, 'events', eventId));
                 alert(`Evento "${eventName}" apagado com sucesso.`);
             } catch (error) {
@@ -788,48 +818,40 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             <div className="bg-gray-800 p-4 rounded-lg">
                                 <h3 className="text-lg font-semibold mb-3">Criar Novo Evento</h3>
                                 <div className="space-y-3">
-                                    <input type="text" value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="Nome do Novo Evento" className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
-                                    <button onClick={handleCreateEvent} disabled={isLoading} className="w-full bg-green-600 hover:bg-green-700 py-2 rounded font-bold disabled:bg-gray-500">{isLoading ? 'Criando...' : 'Criar Evento'}</button>
+                                    <input type="text" value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="Nome do Evento" className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
+                                    <button onClick={handleCreateEvent} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500">Criar Evento</button>
                                 </div>
                             </div>
-                            {selectedEvent && (
-                                <div className="bg-gray-800 p-4 rounded-lg">
-                                    <h3 className="text-lg font-semibold mb-3">Renomear Evento Atual ({selectedEvent.name})</h3>
-                                    <div className="space-y-3">
-                                        <input type="text" value={renameEventName} onChange={(e) => setRenameEventName(e.target.value)} placeholder="Novo Nome do Evento" className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
-                                        <button onClick={handleRenameEvent} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500">{isLoading ? 'Renomeando...' : 'Renomear Evento'}</button>
+                            
+                            <div className="bg-gray-800 p-4 rounded-lg">
+                                <h3 className="text-lg font-semibold mb-3">Lista de Eventos</h3>
+                                <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                                    {events.map(event => (
+                                        <div key={event.id} className="flex items-center justify-between bg-gray-700 p-2 rounded">
+                                            <span className={`${event.isHidden ? 'text-gray-500 italic' : 'text-white'}`}>{event.name}</span>
+                                            <div className="flex space-x-2">
+                                                <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden || false)} className="text-xs px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded">
+                                                    {event.isHidden ? 'Mostrar' : 'Ocultar'}
+                                                </button>
+                                                <button onClick={() => handleDeleteEvent(event.id, event.name)} className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 rounded">
+                                                    Apagar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {events.length === 0 && <p className="text-gray-500 text-sm text-center">Nenhum evento criado.</p>}
+                                </div>
+                            </div>
+
+                             {selectedEvent && (
+                                <div className="bg-gray-800 p-4 rounded-lg md:col-span-2">
+                                    <h3 className="text-lg font-semibold mb-3">Renomear Evento Selecionado</h3>
+                                    <div className="flex space-x-2">
+                                        <input type="text" value={renameEventName} onChange={(e) => setRenameEventName(e.target.value)} className="flex-grow bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
+                                        <button onClick={handleRenameEvent} disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded font-bold disabled:bg-gray-500">Renomear</button>
                                     </div>
                                 </div>
                             )}
-                        </div>
-                        <div className="bg-gray-800 p-4 rounded-lg">
-                            <h3 className="text-lg font-semibold mb-3">Eventos Existentes</h3>
-                             <ul className="space-y-2 max-h-96 overflow-y-auto">
-                                {events.map(event => (
-                                    <li key={event.id} className="flex items-center justify-between bg-gray-700 p-2 rounded-md">
-                                        <span className="font-medium">
-                                            {event.name}
-                                            {event.isHidden && <span className="text-xs text-yellow-400 ml-2">(Oculto)</span>}
-                                        </span>
-                                        <div className="flex items-center space-x-2">
-                                            <button 
-                                                onClick={() => handleToggleEventVisibility(event.id, event.isHidden ?? false)}
-                                                disabled={isLoading}
-                                                className="text-sm bg-gray-600 hover:bg-gray-500 text-white font-semibold py-1 px-3 rounded-md transition-colors disabled:opacity-50"
-                                            >
-                                                {event.isHidden ? 'Mostrar' : 'Ocultar'}
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteEvent(event.id, event.name)}
-                                                disabled={isLoading}
-                                                className="text-sm bg-red-600 hover:bg-red-700 text-white font-semibold py-1 px-3 rounded-md transition-colors disabled:opacity-50"
-                                            >
-                                                Apagar
-                                            </button>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
                         </div>
                     </div>
                 );
@@ -837,39 +859,16 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return null;
         }
     };
-  
-    const TABS = [
-        { id: 'stats', name: 'Estatísticas' },
-        { id: 'settings', name: 'Configurações' },
-        { id: 'history', name: 'Histórico' },
-        { id: 'events', name: 'Gerenciar Eventos' },
-    ] as const;
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h2 className="text-2xl font-bold mb-4">Painel Administrativo</h2>
-                <div className="flex space-x-1 bg-gray-800 p-1 rounded-lg mb-6">
-                    {TABS.map(tab => {
-                         const isDisabled = !selectedEvent && tab.id !== 'events';
-                         return (
-                             <button
-                                key={tab.id}
-                                onClick={() => !isDisabled && setActiveTab(tab.id)}
-                                disabled={isDisabled}
-                                className={`flex-1 py-2 px-3 text-sm font-bold rounded-md transition-colors ${
-                                    activeTab === tab.id 
-                                    ? 'bg-orange-600 text-white' 
-                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
-                                } ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            >
-                                {tab.name}
-                            </button>
-                         );
-                    })}
-                </div>
-                {renderContent()}
+        <div className="w-full max-w-6xl mx-auto">
+            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-2">
+                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'stats' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Dashboard e Stats</button>
+                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'settings' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Configurações e Importação</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'history' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Histórico Completo</button>
+                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'events' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Gerenciar Eventos</button>
             </div>
+            {renderContent()}
         </div>
     );
 };
