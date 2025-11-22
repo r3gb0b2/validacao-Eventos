@@ -165,7 +165,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleSaveTickets = async () => {
         if (!selectedEvent) return;
-        if (Object.values(ticketCodes).every(codes => !codes.trim())) {
+        // FIX: Explicitly cast Object.values result to string[] as some TS configs infer unknown[].
+        if ((Object.values(ticketCodes) as string[]).every(codes => !codes.trim())) {
             alert('Nenhum código de ingresso para salvar.');
             return;
         }

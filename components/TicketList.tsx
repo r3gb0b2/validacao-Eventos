@@ -38,24 +38,37 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames }) => {
       }
   };
 
+  const translateStatus = (status: ScanStatus): string => {
+      switch (status) {
+          case 'VALID': return 'Válido';
+          case 'USED': return 'Utilizado';
+          case 'WRONG_SECTOR': return 'Setor Incorreto';
+          case 'INVALID': return 'Inválido';
+          case 'ERROR': return 'Erro';
+          default: return status;
+      }
+  };
+
   return (
     <div className="w-full bg-gray-800/80 backdrop-blur-sm p-4 rounded-lg border border-gray-700 shadow-lg">
-      <div className="flex justify-between items-center mb-3">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 gap-2">
         <h3 className="text-lg font-semibold text-white">Histórico de Validações</h3>
-        <div className="flex space-x-1 bg-gray-700 p-1 rounded-lg">
-            {(['All', ...sectorNames] as (Sector | 'All')[]).map(tab => (
-                 <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`px-3 py-1 text-sm font-bold rounded-md transition-colors ${
-                        activeTab === tab
-                        ? 'bg-orange-600 text-white'
-                        : 'text-gray-300 hover:bg-gray-600'
-                    }`}
-                >
-                    {tab === 'All' ? 'Todos' : tab}
-                </button>
-            ))}
+        <div className="w-full md:w-auto overflow-x-auto pb-1">
+            <div className="flex space-x-1 bg-gray-700 p-1 rounded-lg min-w-max">
+                {(['All', ...sectorNames] as (Sector | 'All')[]).map(tab => (
+                    <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
+                        className={`px-3 py-1 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${
+                            activeTab === tab
+                            ? 'bg-orange-600 text-white'
+                            : 'text-gray-300 hover:bg-gray-600'
+                        }`}
+                    >
+                        {tab === 'All' ? 'Todos' : tab}
+                    </button>
+                ))}
+            </div>
         </div>
       </div>
       <ul className="divide-y divide-gray-700 h-96 overflow-y-auto">
@@ -77,7 +90,7 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames }) => {
             </div>
             <div className="flex items-center space-x-3">
                 <span className="px-2 py-1 text-xs font-semibold text-white bg-gray-600 rounded-full">{ticket.ticketSector}</span>
-                <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeStyle(ticket.status)}`}>{ticket.status}</span>
+                <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeStyle(ticket.status)}`}>{translateStatus(ticket.status)}</span>
             </div>
           </li>
         ))}

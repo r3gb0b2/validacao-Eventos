@@ -331,13 +331,13 @@ const App: React.FC = () => {
                     {view === 'scanner' && selectedEvent ? (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
-                                <div className="bg-gray-800 p-2 rounded-lg">
-                                    <div className="flex space-x-1">
+                                <div className="bg-gray-800 p-2 rounded-lg overflow-hidden">
+                                    <div className="flex space-x-2 overflow-x-auto pb-1">
                                         {TABS.map(sector => (
                                             <button 
                                                 key={sector}
                                                 onClick={() => setSelectedSector(sector)}
-                                                className={`flex-1 py-2 px-3 text-sm font-bold rounded-md transition-colors ${selectedSector === sector ? 'bg-orange-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                                                className={`flex-shrink-0 py-2 px-3 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${selectedSector === sector ? 'bg-orange-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
                                             >
                                                 {sector === 'All' ? 'Todos os Setores' : sector}
                                             </button>
