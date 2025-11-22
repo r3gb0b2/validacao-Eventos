@@ -14,13 +14,13 @@ interface PublicStatsViewProps {
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
-const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, scanHistory, sectorNames, isLoading = false }) => {
+const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [], scanHistory = [], sectorNames = [], isLoading = false }) => {
     
     // Logic extracted from AdminView to calculate charts data
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        const validScans = scanHistory.filter(s => s.status === 'VALID');
+        const validScans = (scanHistory || []).filter(s => s && s.status === 'VALID');
         if (validScans.length === 0) {
             return {
                 timeBuckets: [],
@@ -44,11 +44,13 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
-                const initialCounts = sectorNames.reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
+                const initialCounts = (sectorNames || []).reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
                 buckets.set(key, initialCounts);
             }
             const currentBucket = buckets.get(key)!;
-            currentBucket[scan.ticketSector] = (currentBucket[scan.ticketSector] || 0) + 1;
+            if (scan.ticketSector) {
+                currentBucket[scan.ticketSector] = (currentBucket[scan.ticketSector] || 0) + 1;
+            }
         }
 
         let peak = { time: '-', count: 0 };
@@ -68,17 +70,17 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
 
      const pieChartData = useMemo(() => {
         if (isLoading) return [];
-        const usedTickets = allTickets.filter(t => t.status === 'USED');
+        const usedTickets = (allTickets || []).filter(t => t && t.status === 'USED');
         if (usedTickets.length === 0) return [];
         
-        const counts = sectorNames.reduce((acc, sector) => {
+        const counts = (sectorNames || []).reduce((acc, sector) => {
             acc[sector] = usedTickets.filter(t => t.sector === sector).length;
             return acc;
         }, {} as Record<string, number>);
 
-        return sectorNames.map((name, index) => ({
+        return (sectorNames || []).map((name, index) => ({
             name: name,
-            value: counts[name],
+            value: counts[name] || 0,
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
     }, [allTickets, sectorNames, isLoading]);
@@ -88,7 +90,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
             <div className="w-full max-w-6xl mx-auto space-y-6">
                 <header className="flex justify-between items-center w-full border-b border-gray-700 pb-4 mb-6">
                     <div>
-                        <h1 className="text-3xl font-bold text-orange-500">{event.name}</h1>
+                        <h1 className="text-3xl font-bold text-orange-500">{event?.name || 'Evento'}</h1>
                         <p className="text-sm text-gray-400">Painel de Acesso em Tempo Real</p>
                     </div>
                      <div className="text-right">
@@ -108,9 +110,9 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
                     <div className="space-y-6 animate-pulse">
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                             {[1, 2, 3, 4].map(i => (
-                                <div key={i} className="bg-gray-800 p-4 rounded-lg h-24 border-l-4 border-gray-600">
-                                    <div className="h-4 bg-gray-700 rounded w-1/2 mb-2"></div>
-                                    <div className="h-8 bg-gray-700 rounded w-1/3"></div>
+                                <div key={i} className="bg-gray-800 p-4 rounded-lg h-24 border-l-4 border-gray-600 flex flex-col justify-center">
+                                    <div className="h-3 bg-gray-600 rounded w-1/2 mb-3"></div>
+                                    <div className="h-6 bg-gray-500 rounded w-3/4"></div>
                                 </div>
                             ))}
                         </div>
@@ -119,12 +121,12 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
                              <div className="bg-gray-800 h-64 rounded-lg"></div>
                              <div className="bg-gray-800 h-64 rounded-lg"></div>
                          </div>
-                         <div className="text-center text-gray-500 mt-4">Carregando estatísticas...</div>
+                         <div className="text-center text-white font-bold mt-4 text-lg">Carregando estatísticas...</div>
                     </div>
                 ) : (
                     <div className="space-y-6 animate-fade-in">
                         {/* Main Stats Component (KPIs + Table) */}
-                        <Stats allTickets={allTickets} sectorNames={sectorNames} />
+                        <Stats allTickets={allTickets || []} sectorNames={sectorNames || []} />
 
                         {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -132,7 +134,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
                                 <PieChart data={pieChartData} title="Distribuição por Setor"/>
                             </div>
                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
+                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames || []} />
                             </div>
                         </div>
 

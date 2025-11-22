@@ -94,6 +94,9 @@ const App: React.FC = () => {
             const eventIdParam = params.get('eventId');
             
             if (mode === 'stats' && eventIdParam) {
+                // IMPORTANT: Set loading state immediately to prevent "blank screen" rendering on mobile
+                setTicketsLoaded(false); 
+                
                 // Direct fetch to avoid waiting for full event list
                 try {
                     const eventDoc = await getDoc(doc(db, 'events', eventIdParam));
@@ -101,6 +104,8 @@ const App: React.FC = () => {
                         setSelectedEvent({ id: eventDoc.id, name: eventDoc.data().name, isHidden: eventDoc.data().isHidden });
                         setView('public_stats');
                         setIsSectorSelectionStep(false);
+                    } else {
+                        console.error("Event not found for public stats");
                     }
                 } catch (e) {
                     console.error("Error fetching event from URL", e);
@@ -192,7 +197,7 @@ const App: React.FC = () => {
                 return ticket;
             });
             setAllTickets(ticketsData);
-            setTicketsLoaded(true); // Data loaded
+            setTicketsLoaded(true); // Data loaded - set to true to hide skeleton
         });
 
         // Load Scan History
@@ -557,9 +562,9 @@ const App: React.FC = () => {
         return (
             <PublicStatsView 
                 event={selectedEvent}
-                allTickets={allTickets}
-                scanHistory={scanHistory}
-                sectorNames={sectorNames}
+                allTickets={allTickets || []} // Safeguard for mobile
+                scanHistory={scanHistory || []} // Safeguard for mobile
+                sectorNames={sectorNames || []} // Safeguard for mobile
                 isLoading={!ticketsLoaded} // Pass loading state
             />
         );

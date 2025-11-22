@@ -6,8 +6,10 @@ interface StatsProps {
   sectorNames: string[];
 }
 
-const Stats: React.FC<StatsProps> = ({ allTickets, sectorNames }) => {
+const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
     const calculateStats = (filter?: string) => {
+        if (!allTickets) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
+        
         const relevantTickets = filter ? allTickets.filter(t => t.sector === filter) : allTickets;
         const total = relevantTickets.length;
         const scanned = relevantTickets.filter(t => t.status === 'USED').length;
@@ -17,6 +19,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets, sectorNames }) => {
     };
 
     const generalStats = calculateStats();
+    const safeSectorNames = sectorNames || [];
 
   return (
     <div className="space-y-6">
@@ -61,7 +64,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets, sectorNames }) => {
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700">
-                      {sectorNames.map((sector) => {
+                      {safeSectorNames.map((sector) => {
                           const stats = calculateStats(sector);
                           return (
                               <tr key={sector} className="hover:bg-gray-700/50 transition-colors">
@@ -84,7 +87,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets, sectorNames }) => {
                   </tbody>
               </table>
           </div>
-          {sectorNames.length === 0 && (
+          {safeSectorNames.length === 0 && (
               <div className="p-6 text-center text-gray-500">
                   Nenhum setor configurado.
               </div>
