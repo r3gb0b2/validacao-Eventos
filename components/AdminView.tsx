@@ -6,7 +6,7 @@ import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, onSnapshot } from 'firebase/firestore';
+import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, CogIcon } from './Icons';
 import Papa from 'papaparse';
 
@@ -382,10 +382,20 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     // Events CRUD handlers... (retained but omitted for brevity if not changed)
-    const handleCreateEvent = async () => { /*...*/ }; 
-    const handleRenameEvent = async () => { /*...*/ };
-    const handleToggleEventVisibility = async (id: string, val: boolean) => { /*...*/ };
-    const handleDeleteEvent = async (id: string, name: string) => { /*...*/ };
+    const handleCreateEvent = async () => {
+        if (!newEventName.trim()) { alert("Nome inválido"); return; }
+        try {
+            await addDoc(collection(db, 'events'), { name: newEventName, createdAt: serverTimestamp(), isHidden: false });
+            setNewEventName('');
+            alert("Evento criado!");
+        } catch (e) { alert("Erro ao criar evento."); }
+    }; 
+    
+    const handleToggleEventVisibility = async (id: string, isHidden: boolean) => {
+        try {
+            await updateDoc(doc(db, 'events', id), { isHidden: !isHidden });
+        } catch (e) { alert("Erro ao atualizar evento."); }
+    };
 
     const NoEventSelectedMessage = () => (
         <div className="text-center text-gray-400 py-10 bg-gray-800 rounded-lg">
@@ -499,8 +509,32 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         <option value="tickets">API Tickets</option>
                                         <option value="google_sheets">Google Sheets (CSV)</option>
                                         <option value="custom">API Custom</option>
+                                        <option value="participants">Participantes</option>
+                                        <option value="buyers">Compradores</option>
+                                        <option value="checkins">Histórico de Check-ins</option>
                                     </select>
-                                    <input type="text" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="URL" className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
+                                    
+                                    <input type="text" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="URL da API" className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
+                                    
+                                    {importType !== 'google_sheets' && (
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <input 
+                                                type="text" 
+                                                value={importToken} 
+                                                onChange={(e) => setImportToken(e.target.value)} 
+                                                placeholder="Token (Opcional)" 
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" 
+                                            />
+                                            <input 
+                                                type="text" 
+                                                value={importEventId} 
+                                                onChange={(e) => setImportEventId(e.target.value)} 
+                                                placeholder="ID Evento (Opcional)" 
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" 
+                                            />
+                                        </div>
+                                    )}
+
                                     <button onClick={handleImportFromApi} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500">
                                         {isLoading ? loadingMessage : 'Importar para Banco de Dados'}
                                     </button>
@@ -520,9 +554,24 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
             case 'events': return (
                 <div className="grid grid-cols-1 gap-6">
-                    <div className="bg-gray-800 p-4 rounded-lg"><input value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} placeholder="Nome do Evento" className="bg-gray-700 p-2 rounded mr-2 text-white"/> <button onClick={() => { /* Logic to add event */ }} className="bg-orange-600 px-4 py-2 rounded font-bold">Criar</button></div>
+                    <div className="bg-gray-800 p-4 rounded-lg flex items-center">
+                        <input value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} placeholder="Nome do Novo Evento" className="bg-gray-700 p-2 rounded mr-2 text-white flex-grow"/> 
+                        <button onClick={handleCreateEvent} className="bg-orange-600 px-4 py-2 rounded font-bold">Criar</button>
+                    </div>
                     <div className="bg-gray-800 p-4 rounded-lg space-y-2">
-                        {events.map(e => <div key={e.id} className="p-2 bg-gray-700 rounded text-white flex justify-between"><span>{e.name}</span> <button onClick={()=> {/* Select */}} className="text-xs bg-blue-600 px-2 rounded">Selecionar</button></div>)}
+                        <h3 className="text-lg font-semibold mb-2">Eventos Existentes</h3>
+                        {events.map(e => (
+                            <div key={e.id} className={`p-3 rounded text-white flex justify-between items-center ${e.isHidden ? 'bg-gray-700/50' : 'bg-gray-700'}`}>
+                                <span className={e.isHidden ? 'text-gray-500 italic' : ''}>{e.name}</span> 
+                                <div className="flex space-x-2">
+                                    <button onClick={() => handleToggleEventVisibility(e.id, e.isHidden || false)} className="text-xs bg-gray-600 hover:bg-gray-500 px-2 py-1 rounded">
+                                        {e.isHidden ? 'Mostrar' : 'Ocultar'}
+                                    </button>
+                                    <button onClick={()=> {/* Select logic handled by parent mostly, but visual select here implies management context */}} className="text-xs bg-blue-600 px-2 py-1 rounded opacity-50 cursor-default">Selecionado</button>
+                                </div>
+                            </div>
+                        ))}
+                         {events.length === 0 && <p className="text-gray-500 text-center">Nenhum evento encontrado.</p>}
                     </div>
                 </div>
             );
