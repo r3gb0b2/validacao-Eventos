@@ -7,7 +7,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -443,7 +443,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const seenIds = new Set<string>();
                 let nextUrl: string | null = urlObj.toString();
                 let pageCount = 0;
-                const MAX_PAGES = 200; 
+                const MAX_PAGES = 400; 
 
                 while (nextUrl && pageCount < MAX_PAGES) {
                     pageCount++;
@@ -512,22 +512,27 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     if (!foundNextLink && jsonResponse.next_page_url) foundNextLink = jsonResponse.next_page_url;
 
                     if (foundNextLink) {
-                        nextUrl = foundNextLink;
                         try {
-                            const urlCheck = new URL(nextUrl);
-                            let changed = false;
-                            if (apiEventId && !urlCheck.searchParams.has('event_id')) {
-                                urlCheck.searchParams.set('event_id', apiEventId);
-                                changed = true;
-                            }
-                            if (changed) nextUrl = urlCheck.toString();
-                        } catch (e) {}
+                            const urlCheck = new URL(foundNextLink);
+                            // FORCE PARAMS TO PERSIST
+                            if (apiEventId) urlCheck.searchParams.set('event_id', apiEventId);
+                            urlCheck.searchParams.set('per_page', '200');
+                            urlCheck.searchParams.set('limit', '200');
+                            
+                            nextUrl = urlCheck.toString();
+                        } catch (e) {
+                             nextUrl = foundNextLink; // Fallback if parse fails
+                        }
                     } else {
-                        // Speculative pagination: if we got full page (e.g. 200 items), try next
-                        if (newItemsCount >= 150) { // Threshold close to limit
+                        // Speculative pagination: if we got full page (e.g. > 150 items), try next
+                        if (newItemsCount >= 15) { // lowered threshold to catch even small pages if they are full
                              const currentUrlObj = new URL(nextUrl);
                              const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
                              currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
+                             currentUrlObj.searchParams.set('per_page', '200'); // Ensure limit persists
+                             currentUrlObj.searchParams.set('limit', '200');
+                             if (apiEventId) currentUrlObj.searchParams.set('event_id', apiEventId);
+                             
                              nextUrl = currentUrlObj.toString();
                         } else {
                             nextUrl = null;
@@ -1236,14 +1241,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return null;
         }
     };
-
-    // Helper component for icons not in scope if needed, but assuming CogIcon etc are imported
-    const CogIcon = ({ className }: { className?: string }) => (
-        <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-    );
 
     return (
         <div className="w-full max-w-6xl mx-auto pb-10">
