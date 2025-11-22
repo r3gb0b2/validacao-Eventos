@@ -9,14 +9,17 @@ interface PublicStatsViewProps {
   allTickets: Ticket[];
   scanHistory: DisplayableScanLog[];
   sectorNames: string[];
+  isLoading?: boolean;
 }
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
-const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, scanHistory, sectorNames }) => {
+const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, scanHistory, sectorNames, isLoading = false }) => {
     
     // Logic extracted from AdminView to calculate charts data
     const analyticsData: AnalyticsData = useMemo(() => {
+        if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
+
         const validScans = scanHistory.filter(s => s.status === 'VALID');
         if (validScans.length === 0) {
             return {
@@ -61,9 +64,10 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
             .sort((a, b) => a.time.localeCompare(b.time));
 
         return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [scanHistory, sectorNames]);
+    }, [scanHistory, sectorNames, isLoading]);
 
      const pieChartData = useMemo(() => {
+        if (isLoading) return [];
         const usedTickets = allTickets.filter(t => t.status === 'USED');
         if (usedTickets.length === 0) return [];
         
@@ -77,7 +81,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
             value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
-    }, [allTickets, sectorNames]);
+    }, [allTickets, sectorNames, isLoading]);
 
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8">
@@ -99,45 +103,65 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets, sc
                     </div>
                 </header>
 
-                <div className="space-y-6 animate-fade-in">
-                    {/* Main Stats Component (KPIs + Table) */}
-                    <Stats allTickets={allTickets} sectorNames={sectorNames} />
+                {isLoading ? (
+                    /* Loading Skeleton */
+                    <div className="space-y-6 animate-pulse">
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                            {[1, 2, 3, 4].map(i => (
+                                <div key={i} className="bg-gray-800 p-4 rounded-lg h-24 border-l-4 border-gray-600">
+                                    <div className="h-4 bg-gray-700 rounded w-1/2 mb-2"></div>
+                                    <div className="h-8 bg-gray-700 rounded w-1/3"></div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="bg-gray-800 h-64 rounded-lg border border-gray-700"></div>
+                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                             <div className="bg-gray-800 h-64 rounded-lg"></div>
+                             <div className="bg-gray-800 h-64 rounded-lg"></div>
+                         </div>
+                         <div className="text-center text-gray-500 mt-4">Carregando estatísticas...</div>
+                    </div>
+                ) : (
+                    <div className="space-y-6 animate-fade-in">
+                        {/* Main Stats Component (KPIs + Table) */}
+                        <Stats allTickets={allTickets} sectorNames={sectorNames} />
 
-                    {/* Charts Section */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Charts Section */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                <PieChart data={pieChartData} title="Distribuição por Setor"/>
+                            </div>
                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                            <PieChart data={pieChartData} title="Distribuição por Setor"/>
+                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
+                            </div>
                         </div>
-                        <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                            <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
-                        </div>
-                    </div>
 
-                    {/* Temporal Analysis Cards */}
-                    <div>
-                        <h3 className="text-xl font-bold text-white mb-4">Análise Temporal</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
-                                <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
-                                <p className="text-2xl font-bold text-green-400">
-                                    {analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}
-                                </p>
-                            </div>
-                            <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
-                                <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
-                                <p className="text-2xl font-bold text-red-400">
-                                    {analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}
-                                </p>
-                            </div>
-                            <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
-                                <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({analyticsData.peak.time})</p>
-                                <p className="text-2xl font-bold text-orange-400">
-                                    {analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
-                                </p>
+                        {/* Temporal Analysis Cards */}
+                        <div>
+                            <h3 className="text-xl font-bold text-white mb-4">Análise Temporal</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
+                                    <p className="text-2xl font-bold text-green-400">
+                                        {analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}
+                                    </p>
+                                </div>
+                                <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
+                                    <p className="text-2xl font-bold text-red-400">
+                                        {analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}
+                                    </p>
+                                </div>
+                                <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({analyticsData.peak.time})</p>
+                                    <p className="text-2xl font-bold text-orange-400">
+                                        {analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
+                )}
             </div>
         </div>
     );

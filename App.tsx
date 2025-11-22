@@ -1,7 +1,7 @@
 // FIX: Implement the main App component, resolving "not a module" and other related errors.
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getDb } from './firebaseConfig';
-import { collection, onSnapshot, doc, writeBatch, serverTimestamp, query, orderBy, addDoc, Timestamp, Firestore, setDoc, limit, updateDoc, getDocs, where } from 'firebase/firestore';
+import { collection, onSnapshot, doc, writeBatch, serverTimestamp, query, orderBy, addDoc, Timestamp, Firestore, setDoc, limit, updateDoc, getDocs, where, getDoc } from 'firebase/firestore';
 
 import Scanner from './components/Scanner';
 import StatusDisplay from './components/StatusDisplay';
@@ -33,6 +33,7 @@ const App: React.FC = () => {
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats'>('scanner');
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
+    const [ticketsLoaded, setTicketsLoaded] = useState(false); // New state to track if data is ready
     
     // New state for Sector Selection Flow
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
@@ -84,29 +85,37 @@ const App: React.FC = () => {
             });
     }, []);
 
-    // Check for Public Stats Mode in URL
+    // Check for Public Stats Mode in URL - OPTIMIZED for Mobile
     useEffect(() => {
-        if (events.length > 0) {
+        const checkUrlParams = async () => {
+            if (!db) return;
             const params = new URLSearchParams(window.location.search);
             const mode = params.get('mode');
             const eventIdParam = params.get('eventId');
             
             if (mode === 'stats' && eventIdParam) {
-                const targetEvent = events.find(e => e.id === eventIdParam);
-                if (targetEvent) {
-                    setSelectedEvent(targetEvent);
-                    setView('public_stats');
-                    // Skip sector selection
-                    setIsSectorSelectionStep(false);
-                    return;
+                // Direct fetch to avoid waiting for full event list
+                try {
+                    const eventDoc = await getDoc(doc(db, 'events', eventIdParam));
+                    if (eventDoc.exists()) {
+                        setSelectedEvent({ id: eventDoc.id, name: eventDoc.data().name, isHidden: eventDoc.data().isHidden });
+                        setView('public_stats');
+                        setIsSectorSelectionStep(false);
+                    }
+                } catch (e) {
+                    console.error("Error fetching event from URL", e);
                 }
             }
-        }
-    }, [events]);
+        };
 
-    // Effect for fetching the list of events
+        if (db && firebaseStatus === 'success') {
+            checkUrlParams();
+        }
+    }, [db, firebaseStatus]);
+
+    // Effect for fetching the list of events (Only if NOT in public stats mode to save bandwidth)
     useEffect(() => {
-        if (!db) return;
+        if (!db || view === 'public_stats') return;
 
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
             const eventsData = snapshot.docs.map(doc => ({
@@ -117,20 +126,9 @@ const App: React.FC = () => {
             setEvents(eventsData);
             
             // If a selected event is deleted elsewhere, deselect it.
-            // UNLESS we are in public stats mode (handled by URL logic separately)
-            if (view !== 'public_stats' && selectedEvent && !eventsData.some(e => e.id === selectedEvent.id)) {
+            if (selectedEvent && !eventsData.some(e => e.id === selectedEvent.id)) {
                 setSelectedEvent(null);
                 localStorage.removeItem('selectedEventId');
-            }
-
-            // Restore session only if not already selected (avoids overwriting sector selection flow)
-            // Skip this if we are in public stats mode
-            const params = new URLSearchParams(window.location.search);
-            if (params.get('mode') === 'stats') return;
-
-            const lastEventId = localStorage.getItem('selectedEventId');
-            if (lastEventId && !selectedEvent) {
-                // Logic to restore session handled implicitly by UI state if needed
             }
         }, (error) => {
             console.error("Firebase connection failed.", error);
@@ -147,10 +145,12 @@ const App: React.FC = () => {
             setScanHistory([]);
             setSectorNames(['Pista', 'VIP']); // Reset to default
             setValidationMode('OFFLINE');
+            setTicketsLoaded(false);
             return;
         };
 
         const eventId = selectedEvent.id;
+        setTicketsLoaded(false); // Reset loading state when event changes
 
         // Load Event Settings (Sector Names & Validation Mode)
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
@@ -192,6 +192,7 @@ const App: React.FC = () => {
                 return ticket;
             });
             setAllTickets(ticketsData);
+            setTicketsLoaded(true); // Data loaded
         });
 
         // Load Scan History
@@ -307,9 +308,6 @@ const App: React.FC = () => {
             // 1. Google Sheets Validation
             if (validationMode === 'ONLINE_SHEETS' && onlineSheetUrl) {
                 // ... (Google Sheets logic logic)
-                // For brevity, skipping full re-implementation of sheets logic here unless requested, 
-                // assuming previous implementation was correct. 
-                // Merging existing logic pattern:
                  showScanResult('ERROR', 'Validação Online via Planilha não implementada completamente neste passo.');
                  return;
             }
@@ -562,6 +560,7 @@ const App: React.FC = () => {
                 allTickets={allTickets}
                 scanHistory={scanHistory}
                 sectorNames={sectorNames}
+                isLoading={!ticketsLoaded} // Pass loading state
             />
         );
     }
