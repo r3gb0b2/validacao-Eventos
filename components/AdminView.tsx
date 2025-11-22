@@ -205,20 +205,21 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setLoadingMessage('Iniciando conexão...');
         
         try {
-            // Build Initial URL with forced pagination size
+            // SETUP BASE URL
+            // We use manual pagination construction to be robust against broken next_page_urls
             const urlObj = new URL(apiUrl);
             
             // Add ID if provided
-            if (apiEventId) {
+            if (apiEventId && !urlObj.searchParams.has('event_id')) {
                 urlObj.searchParams.set('event_id', apiEventId);
             }
             
-            // Force a large per_page to minimize requests and avoid default 15 limits
-            // We set both 'per_page' and 'limit' to cover different API standards
+            // Request large batches, but we will iterate pages regardless of whether the API respects this
             urlObj.searchParams.set('per_page', '1000');
             urlObj.searchParams.set('limit', '1000');
-
-            let nextUrl: string | null = urlObj.toString();
+            
+            // Remove existing page param to start fresh
+            urlObj.searchParams.delete('page');
 
             const headers: HeadersInit = {
                 'Content-Type': 'application/json',
@@ -229,90 +230,82 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
 
             const allItems: any[] = [];
-            let pageCount = 0;
-            let totalFetched = 0;
+            let currentPage = 1;
+            let lastPage: number | null = null;
+            let totalRecords: number | null = null;
+            const baseUrl = urlObj.toString();
 
             // --- PAGINATION LOOP ---
-            while (nextUrl) {
-                pageCount++;
-                setLoadingMessage(`Baixando página ${pageCount} (Itens: ${totalFetched})...`);
+            while (true) {
+                // Construct URL for specific page
+                const requestUrlObj = new URL(baseUrl);
+                requestUrlObj.searchParams.set('page', String(currentPage));
+                const requestUrl = requestUrlObj.toString();
 
-                // Fix Protocol Mismatch (HTTP vs HTTPS)
-                // APIs behind proxies sometimes return http links in next_page_url while the app is https
-                if (window.location.protocol === 'https:' && nextUrl.startsWith('http:')) {
-                    nextUrl = nextUrl.replace('http:', 'https:');
-                }
+                const msg = totalRecords 
+                    ? `Baixando página ${currentPage} de ${lastPage || '?'} (Total detectado: ${totalRecords})...`
+                    : `Baixando página ${currentPage}...`;
+                setLoadingMessage(msg);
 
-                const response = await fetch(nextUrl, { headers });
+                const response = await fetch(requestUrl, { headers });
                 
                 if (!response.ok) {
-                    throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
+                    throw new Error(`Erro na requisição (Página ${currentPage}): ${response.status} ${response.statusText}`);
                 }
 
                 const jsonResponse = await response.json();
                 
                 // Determine structure and extract items for this page
                 let pageItems: any[] = [];
-                let paginationRoot = jsonResponse;
+                let metaRoot: any = jsonResponse; // Where to look for 'last_page' or 'total'
 
                 if (Array.isArray(jsonResponse)) {
                     pageItems = jsonResponse;
                 } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
+                     // Standard Laravel Resource: { data: [...], meta: {...}, links: {...} }
+                     // OR { data: [...], current_page: 1... }
                     pageItems = jsonResponse.data;
+                    // If meta is separate
+                    if (jsonResponse.meta) metaRoot = jsonResponse.meta;
                 } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
                     pageItems = jsonResponse.tickets;
                 } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
-                    // Nested structure: { data: { data: [...], next_page_url: ... } }
-                    paginationRoot = jsonResponse.data;
+                    // Nested: { data: { data: [...], last_page: ... } }
+                    metaRoot = jsonResponse.data;
                     pageItems = jsonResponse.data.data;
-                } else if (jsonResponse.data && typeof jsonResponse.data === 'object') {
-                    // Single object wrapped
-                    pageItems = [jsonResponse.data];
                 }
 
-                if (pageItems.length > 0) {
-                    allItems.push(...pageItems);
-                    totalFetched += pageItems.length;
-                } else {
-                     // Empty page usually means we are done
-                     // But we continue to check next_page_url just in case logic differs
+                if (pageItems.length === 0) {
+                    // No more items, stop loop
+                    break;
                 }
 
-                // Determine Next URL for Pagination
-                let rawNextUrl = paginationRoot.next_page_url || (paginationRoot.links && paginationRoot.links.next);
+                allItems.push(...pageItems);
                 
-                // Manual Fallback: if next_page_url is missing but we have current/last page info
-                // This happens if API doesn't return full URLs
-                if (!rawNextUrl && paginationRoot.current_page && paginationRoot.last_page && paginationRoot.current_page < paginationRoot.last_page) {
-                     const u = new URL(nextUrl);
-                     u.searchParams.set('page', String(paginationRoot.current_page + 1));
-                     rawNextUrl = u.toString();
+                // --- Extract Pagination Info ---
+                if (metaRoot) {
+                    if (metaRoot.last_page) lastPage = Number(metaRoot.last_page);
+                    if (metaRoot.total) totalRecords = Number(metaRoot.total);
                 }
 
-                if (rawNextUrl) {
-                    // CRITICAL: Re-attach params (like event_id and per_page) if the API drops them in the next_link
-                    const nextUrlObj = new URL(rawNextUrl);
-                    
-                    // Persist event_id
-                    if (apiEventId && !nextUrlObj.searchParams.has('event_id')) {
-                        nextUrlObj.searchParams.set('event_id', apiEventId);
-                    } else if (urlObj.searchParams.has('event_id') && !nextUrlObj.searchParams.has('event_id')) {
-                        // Inherit from initial URL if explicit ID wasn't provided but was in URL
-                        nextUrlObj.searchParams.set('event_id', urlObj.searchParams.get('event_id')!);
-                    }
-
-                    // Persist limits
-                    if (!nextUrlObj.searchParams.has('per_page')) {
-                        nextUrlObj.searchParams.set('per_page', '1000');
-                    }
-                    if (!nextUrlObj.searchParams.has('limit')) {
-                        nextUrlObj.searchParams.set('limit', '1000');
-                    }
-                    
-                    nextUrl = nextUrlObj.toString();
-                } else {
-                    nextUrl = null; // No more pages
+                // If we know the last page, check if we reached it
+                if (lastPage && currentPage >= lastPage) {
+                    break;
                 }
+
+                // If we don't know last page, check if there's a next link in the response to hint continuation
+                // Note: We don't USE the link, just check existence to decide if we increment page
+                const hasNextLink = jsonResponse.next_page_url || (jsonResponse.links && jsonResponse.links.next) || (metaRoot && metaRoot.next_page_url);
+                
+                if (!lastPage && !hasNextLink) {
+                    // No last_page info and no next link -> assume single page
+                    break;
+                }
+                
+                // Safety break to prevent infinite loops if API returns infinite pages
+                if (currentPage > 2000) break;
+
+                currentPage++;
             }
 
             if (allItems.length === 0) {
@@ -468,7 +461,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleSaveTickets = async () => {
         if (!selectedEvent) return;
-        // FIX: Explicitly cast Object.values result to string[] as some TS configs infer unknown[].
+        // Explicitly cast Object.values result to string array
         if ((Object.values(ticketCodes) as string[]).every(codes => !codes.trim())) {
             alert('Nenhum código de ingresso para salvar.');
             return;
