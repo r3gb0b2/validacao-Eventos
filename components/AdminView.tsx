@@ -7,7 +7,8 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp } from 'firebase/firestore';
-import { CloudDownloadIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon } from './Icons';
+import Papa from 'papaparse';
 
 interface AdminViewProps {
   db: Firestore;
@@ -22,7 +23,7 @@ interface AdminViewProps {
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
-type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom';
+type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
@@ -59,6 +60,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
+        setApiToken(''); // Reset token usually
+        setApiEventId('');
+        
         switch (type) {
             case 'tickets':
                 setApiUrl('https://public-api.stingressos.com.br/tickets');
@@ -71,6 +75,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 break;
             case 'checkins':
                 setApiUrl('https://public-api.stingressos.com.br/checkins');
+                break;
+            case 'google_sheets':
+                setApiUrl(''); // User must paste link
                 break;
             default:
                 setApiUrl('');
@@ -197,221 +204,257 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const handleImportFromApi = async () => {
         if (!selectedEvent) return;
         if (!apiUrl.trim()) {
-            alert('A URL da API é obrigatória.');
+            alert('A URL/Link é obrigatória.');
             return;
         }
 
         setIsLoading(true);
-        setLoadingMessage('Iniciando conexão...');
+        setLoadingMessage('Iniciando...');
         
         try {
-            // SETUP INITIAL URL
-            const urlObj = new URL(apiUrl);
-            
-            // Add ID if provided
-            if (apiEventId && !urlObj.searchParams.has('event_id')) {
-                urlObj.searchParams.set('event_id', apiEventId);
-            }
-            
-            // Request large batches.
-            urlObj.searchParams.set('per_page', '500');
-            urlObj.searchParams.set('limit', '500');
-            
-            // Ensure we start at page 1
-            if (!urlObj.searchParams.has('page')) {
-                urlObj.searchParams.set('page', '1');
-            }
-
-            const headers: HeadersInit = {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            };
-            if (apiToken.trim()) {
-                headers['Authorization'] = `Bearer ${apiToken.trim()}`;
-            }
-
             const allItems: any[] = [];
-            const seenIds = new Set<string>();
-            
-            let nextUrl: string | null = urlObj.toString();
-            let pageCount = 0;
-            const MAX_PAGES = 5000;
-
-            // --- PAGINATION LOOP ---
-            while (nextUrl && pageCount < MAX_PAGES) {
-                pageCount++;
-                const msg = `Baixando página ${pageCount} (Total importado: ${allItems.length})...`;
-                setLoadingMessage(msg);
-                
-                // Force HTTPS
-                if (nextUrl.startsWith('http://') && !nextUrl.startsWith('http://localhost')) {
-                     nextUrl = nextUrl.replace('http://', 'https://');
-                }
-
-                // Small delay to prevent UI freeze and rate limiting
-                await new Promise(resolve => setTimeout(resolve, 50));
-
-                const response = await fetch(nextUrl, { headers });
-                
-                if (!response.ok) {
-                    if (response.status === 404 && pageCount > 1) {
-                         // End of list reached for some APIs
-                         break;
-                    }
-                    throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
-                }
-
-                const jsonResponse = await response.json();
-                
-                // Determine structure
-                let pageItems: any[] = [];
-                let metaRoot: any = jsonResponse; 
-
-                if (Array.isArray(jsonResponse)) {
-                    pageItems = jsonResponse;
-                } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
-                    // Standard Laravel Resource
-                    pageItems = jsonResponse.data;
-                    if (jsonResponse.meta) metaRoot = jsonResponse.meta;
-                    if (jsonResponse.links) metaRoot = { ...metaRoot, ...jsonResponse.links }; // merge links for search
-                } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
-                    pageItems = jsonResponse.tickets;
-                } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
-                    // Nested
-                    metaRoot = jsonResponse.data;
-                    pageItems = jsonResponse.data.data;
-                }
-
-                if (pageItems.length === 0) {
-                    break;
-                }
-
-                // --- DUPLICATE CHECK ---
-                let newItemsCount = 0;
-                pageItems.forEach((item: any) => {
-                    const id = item.id || item.code || item.qr_code || item.ticket_code || item.uuid || JSON.stringify(item);
-                    if (!seenIds.has(String(id))) {
-                        seenIds.add(String(id));
-                        newItemsCount++;
-                    }
-                });
-
-                if (newItemsCount === 0 && allItems.length > 0) {
-                     console.log("Stopping pagination: All items on this page are duplicates (Loop detection).");
-                     break;
-                }
-
-                allItems.push(...pageItems);
-                
-                // --- NEXT PAGE DETERMINATION ---
-                // Priority: Explicit "next_page_url" from API -> Manual Page Increment
-                
-                let foundNextLink: string | null = null;
-                
-                // Look for standard Laravel/JSON:API links
-                if (metaRoot) {
-                     if (metaRoot.next_page_url) foundNextLink = metaRoot.next_page_url;
-                     else if (metaRoot.next) foundNextLink = metaRoot.next;
-                }
-                // Root level fallback
-                if (!foundNextLink && jsonResponse.next_page_url) foundNextLink = jsonResponse.next_page_url;
-
-                if (foundNextLink) {
-                    nextUrl = foundNextLink;
-                    
-                    // RE-INJECT PARAMS: Ensure critical params persist if API drops them
-                    try {
-                        const urlCheck = new URL(nextUrl);
-                        let changed = false;
-                        if (apiEventId && !urlCheck.searchParams.has('event_id')) {
-                            urlCheck.searchParams.set('event_id', apiEventId);
-                            changed = true;
-                        }
-                        if (!urlCheck.searchParams.has('per_page') && !urlCheck.searchParams.has('limit')) {
-                             urlCheck.searchParams.set('per_page', '500');
-                             changed = true;
-                        }
-                        if (changed) nextUrl = urlCheck.toString();
-                    } catch (e) {
-                        console.warn('Could not parse nextUrl params', e);
-                    }
-
-                } else {
-                    // Fallback: Manual pagination
-                    // Only continue if we received a full page (or at least some items)
-                    const currentUrlObj = new URL(nextUrl);
-                    const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
-                    
-                    // If we suspect there are more pages (e.g., we got exactly the limit we asked for, or just 'some' items and no meta info says stop)
-                    if (pageItems.length > 0) {
-                        currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
-                        nextUrl = currentUrlObj.toString();
-                    } else {
-                        nextUrl = null;
-                    }
-                }
-            }
-
-            if (allItems.length === 0) {
-                alert('Nenhum registro encontrado na resposta da API.');
-                setIsLoading(false);
-                setLoadingMessage('');
-                return;
-            }
-
-            setLoadingMessage(`Processando ${allItems.length} registros...`);
-
             const newSectors = new Set<string>();
             const ticketsToSave: Ticket[] = [];
             const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
 
-            // --- PROCESSING LOGIC ---
-            
-            if (importType === 'checkins' || apiUrl.includes('checkins')) {
-                allItems.forEach((item: any) => {
-                    const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
-                    const timestampStr = item.created_at || item.checked_in_at || item.timestamp;
-                    
-                    if (code) {
-                        const usedAt = timestampStr ? new Date(timestampStr).getTime() : Date.now();
-                        ticketsToUpdateStatus.push({ id: String(code), usedAt });
-                    }
-                });
+            // --- GOOGLE SHEETS / CSV PROCESSING ---
+            if (importType === 'google_sheets') {
+                 setLoadingMessage('Baixando e processando planilha...');
+                 
+                 // Smart fix for common Google Sheet link mistake
+                 let fetchUrl = apiUrl;
+                 if (fetchUrl.includes('docs.google.com/spreadsheets') && !fetchUrl.includes('output=csv')) {
+                     // Try to convert Edit link to Export link
+                     // Replace /edit... with /export?format=csv
+                     if (fetchUrl.includes('/edit')) {
+                         fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
+                     }
+                 }
 
-            } else {
-                const processItem = (item: any) => {
-                    const code = item.code || item.qr_code || item.ticket_code || item.barcode || item.id;
-                    
-                    let sector = item.sector || item.sector_name || item.section || item.setor || item.category || item.ticket_name || item.product_name || 'Geral';
-                    if (typeof sector === 'object' && sector.name) sector = sector.name;
+                 const response = await fetch(fetchUrl);
+                 if (!response.ok) throw new Error('Falha ao baixar planilha. Verifique se o link é público.');
+                 
+                 const csvText = await response.text();
+                 
+                 const parsed = Papa.parse(csvText, {
+                     header: true,
+                     skipEmptyLines: true,
+                 });
 
-                    const ownerName = item.owner_name || item.name || item.participant_name || item.client_name || item.buyer_name || '';
+                 if (parsed.errors.length > 0) {
+                     console.warn('CSV Parse Warnings:', parsed.errors);
+                 }
+                 
+                 const rows = parsed.data as any[];
+                 setLoadingMessage(`Processando ${rows.length} linhas da planilha...`);
 
-                    if (item.tickets && Array.isArray(item.tickets)) {
-                        item.tickets.forEach((subTicket: any) => {
-                             if (!subTicket.owner_name && ownerName) subTicket.owner_name = ownerName;
-                             processItem(subTicket);
-                        });
-                        return;
-                    }
+                 rows.forEach((row) => {
+                     // Normalize keys to lowercase for easier matching
+                     const normalizedRow: {[key: string]: string} = {};
+                     Object.keys(row).forEach(k => {
+                         normalizedRow[k.toLowerCase().trim()] = row[k];
+                     });
 
-                    if (code) {
-                        newSectors.add(String(sector));
-                        ticketsToSave.push({
-                            id: String(code),
-                            sector: String(sector),
-                            status: 'AVAILABLE',
-                            details: {
-                                ownerName: String(ownerName)
-                            }
-                        });
-                    }
+                     // Try to find Code
+                     const code = normalizedRow['code'] || normalizedRow['código'] || normalizedRow['codigo'] || normalizedRow['id'] || normalizedRow['qr'] || normalizedRow['qrcode'] || normalizedRow['ticket'];
+                     
+                     // Try to find Sector
+                     let sector = normalizedRow['sector'] || normalizedRow['setor'] || normalizedRow['categoria'] || normalizedRow['category'] || 'Geral';
+                     
+                     // Try to find Name
+                     const ownerName = normalizedRow['name'] || normalizedRow['nome'] || normalizedRow['cliente'] || normalizedRow['owner'] || '';
+                     
+                     if (code) {
+                         newSectors.add(sector);
+                         ticketsToSave.push({
+                             id: String(code).trim(),
+                             sector: String(sector).trim(),
+                             status: 'AVAILABLE',
+                             details: { ownerName: String(ownerName).trim() }
+                         });
+                     }
+                 });
+                 
+                 if (ticketsToSave.length === 0) {
+                     alert('Não foi possível identificar as colunas na planilha.\nCertifique-se que a primeira linha contém cabeçalhos como: "Codigo", "Setor", "Nome".');
+                     setIsLoading(false);
+                     return;
+                 }
+
+            } 
+            // --- STANDARD API PROCESSING ---
+            else {
+                // SETUP INITIAL URL
+                const urlObj = new URL(apiUrl);
+                
+                // Add ID if provided
+                if (apiEventId && !urlObj.searchParams.has('event_id')) {
+                    urlObj.searchParams.set('event_id', apiEventId);
+                }
+                
+                // Request large batches.
+                urlObj.searchParams.set('per_page', '500');
+                urlObj.searchParams.set('limit', '500');
+                
+                // Ensure we start at page 1
+                if (!urlObj.searchParams.has('page')) {
+                    urlObj.searchParams.set('page', '1');
+                }
+
+                const headers: HeadersInit = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 };
+                if (apiToken.trim()) {
+                    headers['Authorization'] = `Bearer ${apiToken.trim()}`;
+                }
 
-                allItems.forEach(processItem);
-            }
+                const seenIds = new Set<string>();
+                let nextUrl: string | null = urlObj.toString();
+                let pageCount = 0;
+                const MAX_PAGES = 5000;
 
-            // --- BATCH OPERATIONS ---
+                // --- PAGINATION LOOP ---
+                while (nextUrl && pageCount < MAX_PAGES) {
+                    pageCount++;
+                    const msg = `Baixando página ${pageCount} (Total importado: ${allItems.length})...`;
+                    setLoadingMessage(msg);
+                    
+                    // Force HTTPS
+                    if (nextUrl.startsWith('http://') && !nextUrl.startsWith('http://localhost')) {
+                        nextUrl = nextUrl.replace('http://', 'https://');
+                    }
+
+                    // Small delay
+                    await new Promise(resolve => setTimeout(resolve, 50));
+
+                    const response = await fetch(nextUrl, { headers });
+                    
+                    if (!response.ok) {
+                        if (response.status === 404 && pageCount > 1) break;
+                        throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
+                    }
+
+                    const jsonResponse = await response.json();
+                    
+                    // Determine structure
+                    let pageItems: any[] = [];
+                    let metaRoot: any = jsonResponse; 
+
+                    if (Array.isArray(jsonResponse)) {
+                        pageItems = jsonResponse;
+                    } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
+                        pageItems = jsonResponse.data;
+                        if (jsonResponse.meta) metaRoot = jsonResponse.meta;
+                        if (jsonResponse.links) metaRoot = { ...metaRoot, ...jsonResponse.links };
+                    } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
+                        pageItems = jsonResponse.tickets;
+                    } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
+                        metaRoot = jsonResponse.data;
+                        pageItems = jsonResponse.data.data;
+                    }
+
+                    if (pageItems.length === 0) break;
+
+                    // --- DUPLICATE CHECK ---
+                    let newItemsCount = 0;
+                    pageItems.forEach((item: any) => {
+                        const id = item.id || item.code || item.qr_code || item.ticket_code || item.uuid || JSON.stringify(item);
+                        if (!seenIds.has(String(id))) {
+                            seenIds.add(String(id));
+                            newItemsCount++;
+                        }
+                    });
+
+                    if (newItemsCount === 0 && allItems.length > 0) {
+                        break;
+                    }
+
+                    allItems.push(...pageItems);
+                    
+                    // --- NEXT PAGE DETERMINATION ---
+                    let foundNextLink: string | null = null;
+                    if (metaRoot) {
+                        if (metaRoot.next_page_url) foundNextLink = metaRoot.next_page_url;
+                        else if (metaRoot.next) foundNextLink = metaRoot.next;
+                    }
+                    if (!foundNextLink && jsonResponse.next_page_url) foundNextLink = jsonResponse.next_page_url;
+
+                    if (foundNextLink) {
+                        nextUrl = foundNextLink;
+                        try {
+                            const urlCheck = new URL(nextUrl);
+                            let changed = false;
+                            if (apiEventId && !urlCheck.searchParams.has('event_id')) {
+                                urlCheck.searchParams.set('event_id', apiEventId);
+                                changed = true;
+                            }
+                            if (!urlCheck.searchParams.has('per_page') && !urlCheck.searchParams.has('limit')) {
+                                urlCheck.searchParams.set('per_page', '500');
+                                changed = true;
+                            }
+                            if (changed) nextUrl = urlCheck.toString();
+                        } catch (e) {
+                            console.warn('Could not parse nextUrl params', e);
+                        }
+                    } else {
+                        const currentUrlObj = new URL(nextUrl);
+                        const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
+                        if (pageItems.length > 0) {
+                            currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
+                            nextUrl = currentUrlObj.toString();
+                        } else {
+                            nextUrl = null;
+                        }
+                    }
+                }
+
+                if (allItems.length === 0) {
+                    alert('Nenhum registro encontrado na resposta da API.');
+                    setIsLoading(false);
+                    return;
+                }
+
+                // Process standard items
+                if (importType === 'checkins' || apiUrl.includes('checkins')) {
+                    allItems.forEach((item: any) => {
+                        const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
+                        const timestampStr = item.created_at || item.checked_in_at || item.timestamp;
+                        if (code) {
+                            const usedAt = timestampStr ? new Date(timestampStr).getTime() : Date.now();
+                            ticketsToUpdateStatus.push({ id: String(code), usedAt });
+                        }
+                    });
+                } else {
+                    const processItem = (item: any) => {
+                        const code = item.code || item.qr_code || item.ticket_code || item.barcode || item.id;
+                        let sector = item.sector || item.sector_name || item.section || item.setor || item.category || item.ticket_name || item.product_name || 'Geral';
+                        if (typeof sector === 'object' && sector.name) sector = sector.name;
+                        const ownerName = item.owner_name || item.name || item.participant_name || item.client_name || item.buyer_name || '';
+
+                        if (item.tickets && Array.isArray(item.tickets)) {
+                            item.tickets.forEach((subTicket: any) => {
+                                if (!subTicket.owner_name && ownerName) subTicket.owner_name = ownerName;
+                                processItem(subTicket);
+                            });
+                            return;
+                        }
+
+                        if (code) {
+                            newSectors.add(String(sector));
+                            ticketsToSave.push({
+                                id: String(code),
+                                sector: String(sector),
+                                status: 'AVAILABLE',
+                                details: { ownerName: String(ownerName) }
+                            });
+                        }
+                    };
+                    allItems.forEach(processItem);
+                }
+            } // END ELSE (Standard API)
+
+            // --- BATCH OPERATIONS (Common) ---
 
             // 1. Update Sector Names
             if (ticketsToSave.length > 0) {
@@ -486,7 +529,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             alert(msg);
             
         } catch (error) {
-            console.error('API Import Error:', error);
+            console.error('Import Error:', error);
             alert(`Falha na importação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
         } finally {
             setIsLoading(false);
@@ -727,53 +770,77 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             <div className="bg-gray-800 p-4 rounded-lg border border-orange-500/30">
                                 <h3 className="text-lg font-semibold mb-3 text-orange-400 flex items-center">
                                     <CloudDownloadIcon className="w-5 h-5 mr-2" />
-                                    Importar Ingressos (API)
+                                    Importar Dados (API ou Planilha)
                                 </h3>
                                 <div className="space-y-3">
                                     <div>
-                                        <label className="text-xs text-gray-400">Tipo de Dados / Fonte</label>
+                                        <label className="text-xs text-gray-400">Fonte de Dados</label>
                                         <select
                                             value={importType}
                                             onChange={(e) => handleImportTypeChange(e.target.value as ImportType)}
                                             className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2"
                                         >
-                                            <option value="tickets">Ingressos (Tickets)</option>
-                                            <option value="participants">Participantes (Participants)</option>
-                                            <option value="buyers">Compradores (Buyers)</option>
-                                            <option value="checkins">Sincronizar Check-ins (Marcar como Usado)</option>
-                                            <option value="custom">URL Personalizada</option>
+                                            <option value="tickets">API ST Ingressos (Tickets)</option>
+                                            <option value="participants">API ST Ingressos (Participants)</option>
+                                            <option value="buyers">API ST Ingressos (Buyers)</option>
+                                            <option value="checkins">API ST Ingressos (Sincronizar Check-ins)</option>
+                                            <option value="google_sheets">Planilha do Google (CSV Publicado)</option>
+                                            <option value="custom">API Genérica (Custom)</option>
                                         </select>
+                                        
+                                        {importType === 'google_sheets' && (
+                                            <div className="bg-blue-900/40 p-3 rounded mb-2 border border-blue-500/30">
+                                                <p className="text-xs text-blue-200 mb-1 font-bold flex items-center">
+                                                    <TableCellsIcon className="w-4 h-4 mr-1" />
+                                                    Como configurar:
+                                                </p>
+                                                <ol className="text-xs text-gray-300 list-decimal list-inside space-y-1">
+                                                    <li>No Google Sheets, clique em <strong>Arquivo</strong> {'>'} <strong>Compartilhar</strong>.</li>
+                                                    <li>Selecione <strong>Publicar na Web</strong>.</li>
+                                                    <li>Escolha a aba e selecione formato <strong>CSV</strong>.</li>
+                                                    <li>Copie o link gerado e cole abaixo.</li>
+                                                    <li>A planilha deve ter colunas como: <em>Codigo, Setor, Nome</em>.</li>
+                                                </ol>
+                                            </div>
+                                        )}
 
-                                        <label className="text-xs text-gray-400">URL da API</label>
+                                        <label className="text-xs text-gray-400">
+                                            {importType === 'google_sheets' ? 'Link Público do CSV (Google Sheets)' : 'URL da API'}
+                                        </label>
                                         <input
                                             type="text"
                                             value={apiUrl}
                                             onChange={(e) => setApiUrl(e.target.value)}
+                                            placeholder={importType === 'google_sheets' ? 'https://docs.google.com/spreadsheets/d/e/.../pub?output=csv' : 'https://api...'}
                                             className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
                                         />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <div>
-                                            <label className="text-xs text-gray-400">API Token (Opcional)</label>
-                                            <input
-                                                type="password"
-                                                value={apiToken}
-                                                onChange={(e) => setApiToken(e.target.value)}
-                                                placeholder="Bearer Token"
-                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
-                                            />
+                                    
+                                    {importType !== 'google_sheets' && (
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="text-xs text-gray-400">API Token (Opcional)</label>
+                                                <input
+                                                    type="password"
+                                                    value={apiToken}
+                                                    onChange={(e) => setApiToken(e.target.value)}
+                                                    placeholder="Bearer Token"
+                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs text-gray-400">ID Evento Externo (Opcional)</label>
+                                                <input
+                                                    type="text"
+                                                    value={apiEventId}
+                                                    onChange={(e) => setApiEventId(e.target.value)}
+                                                    placeholder="Ex: 123"
+                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                                />
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className="text-xs text-gray-400">ID Evento Externo (Opcional)</label>
-                                            <input
-                                                type="text"
-                                                value={apiEventId}
-                                                onChange={(e) => setApiEventId(e.target.value)}
-                                                placeholder="Ex: 123"
-                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
-                                            />
-                                        </div>
-                                    </div>
+                                    )}
+
                                     <button
                                         onClick={handleImportFromApi}
                                         disabled={isLoading}
@@ -781,10 +848,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     >
                                         {isLoading ? (loadingMessage || 'Processando...') : 'Importar Dados'}
                                     </button>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                        *Novos setores serão adicionados automaticamente.
-                                        <br />*O sistema importará todas as páginas de resultados.
-                                    </p>
                                 </div>
                             </div>
 
