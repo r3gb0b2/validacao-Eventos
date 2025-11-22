@@ -182,6 +182,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setTicketCodes(prev => ({ ...prev, [sector]: codes }));
     };
 
+    const handleDownloadTemplate = () => {
+        const csvContent = "codigo,setor,nome\n123456,VIP,João Silva\n789012,Pista,Maria Souza";
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.setAttribute("href", url);
+        link.setAttribute("download", "modelo_ingressos.csv");
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     // --- IMPORT LOGIC (RETAINED) ---
     const handleImportFromApi = async () => {
         if (!selectedEvent) return;
@@ -468,9 +481,16 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     {validationMode !== 'OFFLINE' && (
                                         <div className="bg-gray-700/50 p-3 rounded space-y-3 border border-gray-600">
                                             <div>
-                                                <label className="text-xs text-gray-300 font-semibold mb-1 block">
-                                                    {validationMode === 'ONLINE_SHEETS' ? 'Link Público CSV (Google Sheets)' : 'Lista de URLs da API (Check-ins)'}
-                                                </label>
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <label className="text-xs text-gray-300 font-semibold">
+                                                        {validationMode === 'ONLINE_SHEETS' ? 'Link Público CSV (Google Sheets)' : 'Lista de URLs da API (Check-ins)'}
+                                                    </label>
+                                                    {validationMode === 'ONLINE_SHEETS' && (
+                                                        <button onClick={handleDownloadTemplate} className="text-xs text-orange-400 hover:text-orange-300 underline flex items-center">
+                                                            <CloudDownloadIcon className="w-3 h-3 mr-1"/> Baixar Modelo
+                                                        </button>
+                                                    )}
+                                                </div>
                                                 {onlineUrls.map((url, i) => (
                                                     <div key={i} className="flex mb-2">
                                                         <input 
@@ -525,6 +545,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         <option value="custom">API Personalizada</option>
                                     </select>
                                     
+                                    {importType === 'google_sheets' && (
+                                        <div className="flex justify-end mb-2">
+                                            <button onClick={handleDownloadTemplate} className="text-xs text-orange-400 hover:text-orange-300 underline flex items-center">
+                                                <CloudDownloadIcon className="w-3 h-3 mr-1"/> Baixar Modelo Exemplo
+                                            </button>
+                                        </div>
+                                    )}
+
                                     <input type="text" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="URL da API ou Link do CSV" className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none" />
                                     
                                     {importType !== 'google_sheets' && (
