@@ -52,6 +52,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
+    const [ignoreExisting, setIgnoreExisting] = useState(false); // New state for skipping existing tickets
 
     // Presets State
     const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
@@ -355,6 +356,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ticketsToSave: Ticket[] = [];
             const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
 
+            // Create a Set of existing IDs for O(1) lookup
+            const existingTicketIds = new Set(allTickets.map(t => t.id));
+
             // Save credentials for future use
             if (importType !== 'google_sheets' && apiToken) {
                  await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'), {
@@ -399,9 +403,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                      const ownerName = normalizedRow['name'] || normalizedRow['nome'] || normalizedRow['cliente'] || normalizedRow['owner'] || '';
                      
                      if (code) {
+                         const idStr = String(code).trim();
+                         if (ignoreExisting && existingTicketIds.has(idStr)) {
+                             return; // Skip existing
+                         }
+
                          newSectors.add(sector);
                          ticketsToSave.push({
-                             id: String(code).trim(),
+                             id: idStr,
                              sector: String(sector).trim(),
                              status: 'AVAILABLE',
                              details: { ownerName: String(ownerName).trim() }
@@ -431,8 +440,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 try {
                     const urlObj = new URL(apiUrl);
                     baseUrl = urlObj.origin + urlObj.pathname;
-                    // if user put query params in apiUrl (like event_id), we should preserve them if they are not the ones we are managing
-                    // but for pagination safety, let's rebuild key params
                 } catch(e) { /* ignore invalid url here, fetch will catch it */ }
 
                 while (hasMore) {
@@ -514,8 +521,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     let newItemsOnPage = 0;
                     pageItems.forEach((item: any) => {
                         const id = item.id || item.code || item.qr_code || item.ticket_code || item.uuid || JSON.stringify(item);
-                        if (!seenIds.has(String(id))) {
-                            seenIds.add(String(id));
+                        const idStr = String(id);
+                        
+                        if (!seenIds.has(idStr)) {
+                            seenIds.add(idStr);
                             allItems.push(item);
                             newItemsOnPage++;
                         }
@@ -534,11 +543,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         } else if (totalRecords > 0 && allItems.length >= totalRecords) {
                             hasMore = false;
                         } else if (pageItems.length < (BATCH_LIMIT / 2) && totalRecords === 0) {
-                             // If we got significantly fewer items than requested and don't know the total, 
-                             // assume it's the last page. (Using /2 as a safety buffer, usually it's < limit)
-                             // However, safest is to continue until 0, but some APIs return partial last page.
-                             // Let's stick to: if pageItems < limit, it MIGHT be last, but let's try next just in case unless empty.
-                             // Actually, standard pagination: if items < per_page, it is the last page.
                              if (pageItems.length < BATCH_LIMIT) hasMore = false;
                         }
                         
@@ -581,9 +585,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         }
 
                         if (code) {
+                            const idStr = String(code);
+                            if (ignoreExisting && existingTicketIds.has(idStr)) {
+                                return; // Skip existing in API mode
+                            }
+
                             newSectors.add(String(sector));
                             ticketsToSave.push({
-                                id: String(code),
+                                id: idStr,
                                 sector: String(sector),
                                 status: 'AVAILABLE',
                                 details: { ownerName: String(ownerName) }
@@ -618,7 +627,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let updatedCount = 0;
 
             if (ticketsToSave.length > 0) {
-                setLoadingMessage(`Salvando ${ticketsToSave.length} ingressos...`);
+                setLoadingMessage(`Salvando ${ticketsToSave.length} ingressos (Novos)...`);
                  const chunks = [];
                 for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
                     chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
@@ -631,6 +640,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         batch.set(ticketRef, {
                             sector: ticket.sector,
                             details: ticket.details,
+                            status: ticket.status // Ensure status is set for new tickets
                         }, { merge: true });
                     });
                     await batch.commit();
@@ -660,7 +670,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
 
             let msg = 'Processo concluído!\n';
-            if (savedCount > 0) msg += `- ${savedCount} ingressos importados/atualizados.\n`;
+            if (savedCount > 0) msg += `- ${savedCount} novos ingressos importados.\n`;
+            else if (ticketsToSave.length === 0 && allItems.length > 0 && ignoreExisting) msg += `- Todos os ingressos baixados já existiam no sistema.\n`;
+            
             if (updatedCount > 0) msg += `- ${updatedCount} ingressos marcados como utilizados.\n`;
             
             alert(msg);
@@ -1166,6 +1178,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             </div>
                                         </div>
                                     )}
+
+                                    <div className="flex items-center my-2 bg-gray-700 p-2 rounded">
+                                        <input
+                                            type="checkbox"
+                                            id="ignoreExisting"
+                                            checked={ignoreExisting}
+                                            onChange={(e) => setIgnoreExisting(e.target.checked)}
+                                            className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
+                                        />
+                                        <label htmlFor="ignoreExisting" className="ml-2 text-xs text-gray-200 cursor-pointer select-none">
+                                            Ignorar ingressos já importados (Mais rápido)
+                                        </label>
+                                    </div>
                                     
                                     <div className="flex space-x-2 pt-2">
                                          <button
