@@ -6,7 +6,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, onSnapshot, serverTimestamp } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, CogIcon, TrashIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, CogIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -23,14 +23,6 @@ interface AdminViewProps {
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
 type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
-
-interface ImportPreset {
-    name: string;
-    type: ImportType;
-    url: string;
-    token: string;
-    eventId: string;
-}
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
@@ -50,11 +42,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [importUrl, setImportUrl] = useState('https://public-api.stingressos.com.br/tickets');
     const [importToken, setImportToken] = useState('');
     const [importEventId, setImportEventId] = useState('');
-    const [showImportToken, setShowImportToken] = useState(false);
-    
-    // Import Presets State
-    const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
-    const [selectedPresetIndex, setSelectedPresetIndex] = useState<number>(-1);
 
     // Validation Config State
     const [validationMode, setValidationMode] = useState<ValidationMode>('OFFLINE');
@@ -75,8 +62,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (!selectedEvent) {
             setActiveTab('events');
         } else {
-            // Load validation config
-             const unsubConfig = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'config'), (snap) => {
+            // Load config
+             const unsub = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'config'), (snap) => {
                 if (snap.exists()) {
                     const data = snap.data() as ValidationConfig;
                     setValidationMode(data.mode || 'OFFLINE');
@@ -85,44 +72,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     setOnlineEventId(data.onlineEventId || '');
                 }
             });
-
-            // Load import settings (Pre-defined credentials)
-            const unsubImport = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import'), (snap) => {
-                if (snap.exists()) {
-                    const data = snap.data();
-                    // Only load if not using a preset currently to avoid overwriting user selection
-                    if (selectedPresetIndex === -1) {
-                        setImportToken(data.token || '');
-                        setImportEventId(data.eventId || '');
-                    }
-                } else {
-                    if (selectedPresetIndex === -1) {
-                        setImportToken('');
-                        setImportEventId('');
-                    }
-                }
-            });
-            
-            // Load Import Presets
-            const unsubPresets = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_presets'), (snap) => {
-                if (snap.exists()) {
-                    setImportPresets(snap.data().list || []);
-                } else {
-                    setImportPresets([]);
-                }
-            });
-
-            return () => {
-                unsubConfig();
-                unsubImport();
-                unsubPresets();
-            }
+            return () => unsub();
         }
-    }, [selectedEvent, db, selectedPresetIndex]);
+    }, [selectedEvent, db]);
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
-        setSelectedPresetIndex(-1); // Reset preset selection when manually changing type
+        setImportToken(''); 
+        setImportEventId('');
         
         switch (type) {
             case 'tickets': setImportUrl('https://public-api.stingressos.com.br/tickets'); break;
@@ -131,54 +88,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'checkins': setImportUrl('https://public-api.stingressos.com.br/checkins'); break;
             case 'google_sheets': setImportUrl(''); break;
             default: setImportUrl('');
-        }
-    };
-    
-    // --- PRESET HANDLERS ---
-    const handleSavePreset = async () => {
-        if (!selectedEvent) return;
-        const name = prompt("Nome para salvar esta configuração (ex: Evento Principal):");
-        if (!name) return;
-        
-        const newPreset: ImportPreset = {
-            name,
-            type: importType,
-            url: importUrl,
-            token: importToken,
-            eventId: importEventId
-        };
-        
-        const updatedList = [...importPresets, newPreset];
-        try {
-            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_presets'), { list: updatedList });
-            alert("Configuração salva na lista!");
-            setSelectedPresetIndex(updatedList.length - 1);
-        } catch (e) {
-            alert("Erro ao salvar preset.");
-        }
-    };
-
-    const handleDeletePreset = async (index: number) => {
-        if (!selectedEvent) return;
-        if (!confirm("Tem certeza que deseja remover esta configuração da lista?")) return;
-        
-        const updatedList = importPresets.filter((_, i) => i !== index);
-        try {
-            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_presets'), { list: updatedList });
-            setSelectedPresetIndex(-1);
-        } catch (e) {
-            alert("Erro ao remover preset.");
-        }
-    };
-
-    const handleSelectPreset = (index: number) => {
-        setSelectedPresetIndex(index);
-        if (index >= 0 && importPresets[index]) {
-            const p = importPresets[index];
-            setImportType(p.type);
-            setImportUrl(p.url);
-            setImportToken(p.token);
-            setImportEventId(p.eventId);
         }
     };
 
@@ -271,35 +180,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     
     const handleTicketCodeChange = (sector: string, codes: string) => {
         setTicketCodes(prev => ({ ...prev, [sector]: codes }));
-    };
-
-    const handleDownloadTemplate = () => {
-        const csvContent = "codigo,setor,nome\n123456,VIP,João Silva\n789012,Pista,Maria Souza";
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        link.setAttribute("href", url);
-        link.setAttribute("download", "modelo_ingressos.csv");
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    };
-
-    const handleSaveImportCredentials = async () => {
-        if (!selectedEvent) return;
-        setIsLoading(true);
-        try {
-            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'), {
-                token: importToken,
-                eventId: importEventId
-            }, { merge: true });
-            alert("Credenciais de importação salvas!");
-        } catch(e) {
-            alert("Erro ao salvar credenciais.");
-        } finally {
-            setIsLoading(false);
-        }
     };
 
     // --- IMPORT LOGIC (RETAINED) ---
@@ -427,15 +307,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     });
                     await batch.commit();
                 }
-
-                // Save credentials automatically on success
-                if (importType !== 'google_sheets') {
-                    await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import'), {
-                        token: importToken,
-                        eventId: importEventId
-                    }, { merge: true });
-                }
-
                 alert(`${ticketsToSave.length} registros importados com sucesso!`);
             } else {
                 alert('Nenhum registro encontrado. Verifique o ID do Evento.');
@@ -597,16 +468,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     {validationMode !== 'OFFLINE' && (
                                         <div className="bg-gray-700/50 p-3 rounded space-y-3 border border-gray-600">
                                             <div>
-                                                <div className="flex justify-between items-center mb-1">
-                                                    <label className="text-xs text-gray-300 font-semibold">
-                                                        {validationMode === 'ONLINE_SHEETS' ? 'Link Público CSV (Google Sheets)' : 'Lista de URLs da API (Check-ins)'}
-                                                    </label>
-                                                    {validationMode === 'ONLINE_SHEETS' && (
-                                                        <button onClick={handleDownloadTemplate} className="text-xs text-orange-400 hover:text-orange-300 underline flex items-center">
-                                                            <CloudDownloadIcon className="w-3 h-3 mr-1"/> Baixar Modelo
-                                                        </button>
-                                                    )}
-                                                </div>
+                                                <label className="text-xs text-gray-300 font-semibold mb-1 block">
+                                                    {validationMode === 'ONLINE_SHEETS' ? 'Link Público CSV (Google Sheets)' : 'Lista de URLs da API (Check-ins)'}
+                                                </label>
                                                 {onlineUrls.map((url, i) => (
                                                     <div key={i} className="flex mb-2">
                                                         <input 
@@ -651,28 +515,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     Importar Dados (Modo Offline)
                                 </h3>
                                 <div className="space-y-3">
-                                    {/* PRESETS DROPDOWN */}
-                                    <div className="mb-2 bg-gray-700/30 p-2 rounded border border-gray-600/50">
-                                        <label className="block text-xs text-gray-400 mb-1">Carregar Configuração Salva (Preset)</label>
-                                        <div className="flex space-x-2">
-                                            <select 
-                                                className="flex-grow bg-gray-700 p-2 rounded border border-gray-600 text-sm outline-none focus:border-orange-500"
-                                                onChange={(e) => handleSelectPreset(Number(e.target.value))}
-                                                value={selectedPresetIndex}
-                                            >
-                                                <option value="-1">-- Selecione uma lista salva --</option>
-                                                {importPresets.map((p, i) => (
-                                                    <option key={i} value={i}>{p.name} ({p.type})</option>
-                                                ))}
-                                            </select>
-                                            {selectedPresetIndex >= 0 && (
-                                                <button onClick={() => handleDeletePreset(selectedPresetIndex)} className="bg-red-600 hover:bg-red-700 px-3 rounded text-white flex items-center" title="Excluir Preset">
-                                                    <TrashIcon className="w-4 h-4" />
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-
                                     <label className="block text-xs text-gray-400">Fonte de Dados</label>
                                     <select value={importType} onChange={(e) => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2 focus:border-orange-500 outline-none">
                                         <option value="tickets">Ingressos (API Padrão)</option>
@@ -683,34 +525,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         <option value="custom">API Personalizada</option>
                                     </select>
                                     
-                                    {importType === 'google_sheets' && (
-                                        <div className="flex justify-end mb-2">
-                                            <button onClick={handleDownloadTemplate} className="text-xs text-orange-400 hover:text-orange-300 underline flex items-center">
-                                                <CloudDownloadIcon className="w-3 h-3 mr-1"/> Baixar Modelo Exemplo
-                                            </button>
-                                        </div>
-                                    )}
-
                                     <input type="text" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="URL da API ou Link do CSV" className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none" />
                                     
                                     {importType !== 'google_sheets' && (
                                         <div className="grid grid-cols-2 gap-2">
-                                            <div className="relative">
-                                                <input 
-                                                    type={showImportToken ? "text" : "password"} 
-                                                    value={importToken} 
-                                                    onChange={(e) => setImportToken(e.target.value)} 
-                                                    placeholder="Token (Opcional)" 
-                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none pr-8" 
-                                                />
-                                                <button 
-                                                    onClick={() => setShowImportToken(!showImportToken)}
-                                                    className="absolute right-2 top-2 text-gray-400 hover:text-white"
-                                                    tabIndex={-1}
-                                                >
-                                                    {showImportToken ? <EyeSlashIcon className="w-4 h-4"/> : <EyeIcon className="w-4 h-4"/>}
-                                                </button>
-                                            </div>
+                                            <input 
+                                                type="text" 
+                                                value={importToken} 
+                                                onChange={(e) => setImportToken(e.target.value)} 
+                                                placeholder="Token (Opcional)" 
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none" 
+                                            />
                                             <input 
                                                 type="text" 
                                                 value={importEventId} 
@@ -720,17 +545,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             />
                                         </div>
                                     )}
-                                    
-                                    <div className="flex justify-between items-center mb-1">
-                                        <button onClick={handleSavePreset} className="text-xs text-blue-400 hover:text-blue-300 underline">
-                                            Salvar na Lista de Presets
-                                        </button>
-                                        {importType !== 'google_sheets' && selectedPresetIndex === -1 && (
-                                            <button onClick={handleSaveImportCredentials} className="text-xs text-gray-400 hover:text-white underline">
-                                                Salvar como Padrão
-                                            </button>
-                                        )}
-                                    </div>
 
                                     <button onClick={handleImportFromApi} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 transition-colors">
                                         {isLoading ? loadingMessage : 'Importar para Banco de Dados'}

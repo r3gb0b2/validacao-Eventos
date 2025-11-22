@@ -12,7 +12,7 @@ import AlertBanner from './components/AlertBanner';
 import EventSelector from './components/EventSelector';
 // FIX: Import TicketList to resolve 'Cannot find name' error.
 import TicketList from './components/TicketList';
-import { CogIcon, QrCodeIcon, VideoCameraIcon } from './components/Icons';
+import { CogIcon, QrCodeIcon } from './components/Icons';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, ValidationConfig } from './types';
 
@@ -33,8 +33,6 @@ const App: React.FC = () => {
     const [view, setView] = useState<'scanner' | 'admin'>('scanner');
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
-    const [isCameraActive, setIsCameraActive] = useState(true);
-    const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
     
     // Validation Config
     const [validationConfig, setValidationConfig] = useState<ValidationConfig>({ mode: 'OFFLINE', onlineUrls: [] });
@@ -189,33 +187,6 @@ const App: React.FC = () => {
         };
     }, []);
 
-    // --- INACTIVITY TIMER LOGIC ---
-    const resetInactivityTimer = useCallback(() => {
-        if (inactivityTimerRef.current) {
-            clearTimeout(inactivityTimerRef.current);
-        }
-        setIsCameraActive(true);
-        inactivityTimerRef.current = setTimeout(() => {
-            setIsCameraActive(false);
-        }, 60000); // 60 seconds (1 minute)
-    }, []);
-
-    useEffect(() => {
-        if (selectedEvent && view === 'scanner' && !isSectorSelectionStep) {
-            resetInactivityTimer();
-        } else {
-             if (inactivityTimerRef.current) {
-                clearTimeout(inactivityTimerRef.current);
-            }
-        }
-
-        return () => {
-            if (inactivityTimerRef.current) {
-                clearTimeout(inactivityTimerRef.current);
-            }
-        };
-    }, [selectedEvent, view, isSectorSelectionStep, resetInactivityTimer]);
-
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
         setIsSectorSelectionStep(true);
@@ -262,9 +233,6 @@ const App: React.FC = () => {
     };
 
     const handleScanSuccess = useCallback(async (decodedText: string) => {
-        // Reset timer on every scan attempt
-        resetInactivityTimer();
-
         if (cooldownRef.current || !db || !selectedEvent) return;
 
         cooldownRef.current = true;
@@ -458,7 +426,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados.');
         }
-    }, [db, selectedEvent, ticketsMap, selectedSector, validationConfig, isOnline, resetInactivityTimer]);
+    }, [db, selectedEvent, ticketsMap, selectedSector, validationConfig, isOnline]);
     
     const handleScanError = (errorMessage: string) => { };
 
@@ -620,25 +588,7 @@ const App: React.FC = () => {
                                 )}
                                 <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-lg overflow-hidden border-4 border-gray-700">
                                     {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} />}
-                                    
-                                    {isCameraActive ? (
-                                        <Scanner onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
-                                    ) : (
-                                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 z-20">
-                                            <div className="bg-gray-800 p-6 rounded-full mb-4">
-                                                <VideoCameraIcon className="w-16 h-16 text-gray-600" />
-                                            </div>
-                                            <p className="text-lg font-semibold text-gray-400 mb-6">Modo Econômico Ativo</p>
-                                            <button 
-                                                onClick={resetInactivityTimer}
-                                                className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-8 rounded-lg shadow-lg transition-transform transform hover:scale-105 flex items-center"
-                                            >
-                                                <VideoCameraIcon className="w-5 h-5 mr-2" />
-                                                Ativar Câmera
-                                            </button>
-                                            <p className="text-xs text-gray-600 mt-4">A câmera desligou por inatividade (1 min).</p>
-                                        </div>
-                                    )}
+                                    <Scanner onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
                                 </div>
                                 {validationConfig.mode === 'ONLINE_API' && !validationConfig.onlineEventId && (
                                     <p className="text-red-400 text-xs text-center font-bold">AVISO: ID do evento não configurado. A validação pode falhar.</p>
