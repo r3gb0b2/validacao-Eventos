@@ -16,6 +16,14 @@ import { CogIcon, QrCodeIcon } from './components/Icons';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event } from './types';
 
+interface ApiEndpointConfig {
+    id?: string;
+    name?: string;
+    url: string;
+    token: string;
+    customEventId?: string;
+}
+
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
@@ -35,7 +43,10 @@ const App: React.FC = () => {
     const [activeSectors, setActiveSectors] = useState<string[]>([]);
 
     // Validation Config State
-    const [validationConfig, setValidationConfig] = useState({ mode: 'OFFLINE', url: '', token: '' });
+    const [validationConfig, setValidationConfig] = useState<{
+        mode: string;
+        endpoints: ApiEndpointConfig[];
+    }>({ mode: 'OFFLINE', endpoints: [] });
 
     const cooldownRef = useRef<boolean>(false);
 
@@ -141,11 +152,17 @@ const App: React.FC = () => {
                     setSectorNames(data.sectorNames);
                 }
                 if (data.validation) {
-                    setValidationConfig({
-                        mode: data.validation.mode || 'OFFLINE',
-                        url: data.validation.url || '',
-                        token: data.validation.token || ''
-                    });
+                    const mode = data.validation.mode || 'OFFLINE';
+                    let endpoints: ApiEndpointConfig[] = [];
+                    
+                    if (data.validation.endpoints && Array.isArray(data.validation.endpoints)) {
+                        endpoints = data.validation.endpoints;
+                    } else if (data.validation.url) {
+                        // Legacy support
+                        endpoints.push({ url: data.validation.url, token: data.validation.token || '' });
+                    }
+                    
+                    setValidationConfig({ mode, endpoints });
                 }
             }
         });
@@ -249,49 +266,85 @@ const App: React.FC = () => {
                 return;
             }
             
-            // Optimistic Check for Sector (if we have local data)
-            let detectedSector = 'API';
-            const localTicket = ticketsMap.get(ticketId);
-            if (localTicket) detectedSector = localTicket.sector;
+            const endpoints = validationConfig.endpoints.length > 0 
+                ? validationConfig.endpoints 
+                : [{ url: '', token: '' }]; // Should not happen if config is right, but safeguards loop
 
-            try {
-                const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-                if (validationConfig.token) headers['Authorization'] = `Bearer ${validationConfig.token}`;
+            let resultStatus: ScanStatus | null = null;
+            let resultMessage = '';
+            let resultSector = 'API';
+            let found = false;
 
-                const response = await fetch(validationConfig.url, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({ code: ticketId, event_id: eventId }) // sending event_id just in case api needs it
-                });
+            // Loop through configured APIs
+            for (const api of endpoints) {
+                if (!api.url) continue;
+                
+                try {
+                    // Use custom ID if present in API config, else local ID
+                    const payloadEventId = api.customEventId || eventId;
 
-                if (response.ok) {
-                    // Success (200/201)
-                    const json = await response.json().catch(() => ({}));
-                    // Try to read sector from response if available
-                    if (json.sector) detectedSector = json.sector;
-                    else if (json.data && json.data.sector) detectedSector = json.data.sector;
+                    const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+                    if (api.token) headers['Authorization'] = `Bearer ${api.token}`;
 
-                    // Validate Sector Restriction
-                    if (!isSectorAllowed(detectedSector) && detectedSector !== 'API') {
-                        showScanResult('WRONG_SECTOR', `Setor incorreto! (${detectedSector})`);
-                        await logScan(ticketId, 'WRONG_SECTOR', detectedSector);
-                        return;
+                    const response = await fetch(api.url, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({ code: ticketId, event_id: payloadEventId }) 
+                    });
+
+                    // If 404, it means not found on THIS api. Continue to next.
+                    if (response.status === 404) {
+                        continue; 
                     }
 
-                    showScanResult('VALID', 'Acesso Liberado (Online)!');
-                    await logScan(ticketId, 'VALID', detectedSector);
-                } else if (response.status === 404) {
-                    showScanResult('INVALID', `Ingresso não encontrado (API).`);
-                    await logScan(ticketId, 'INVALID', 'Desconhecido');
-                } else if (response.status === 422 || response.status === 409) {
-                    showScanResult('USED', 'Ingresso já utilizado (API).');
-                    await logScan(ticketId, 'USED', detectedSector);
-                } else {
-                    showScanResult('ERROR', `Erro API: ${response.status}`);
+                    // If we get here, we got a definitive response (Valid, Used, or Server Error)
+                    found = true; 
+                    const json = await response.json().catch(() => ({}));
+                    
+                    // Detect sector
+                    if (json.sector) resultSector = json.sector;
+                    else if (json.data && json.data.sector) resultSector = json.data.sector;
+                    else if (api.name) resultSector = api.name; // Fallback to identifying via API name
+
+                    if (response.ok) {
+                        // VALID (200/201)
+                        if (!isSectorAllowed(resultSector) && resultSector !== 'API' && resultSector !== api.name) {
+                            resultStatus = 'WRONG_SECTOR';
+                            resultMessage = `Setor incorreto! (${resultSector})`;
+                        } else {
+                            resultStatus = 'VALID';
+                            resultMessage = `Acesso Liberado${api.name ? ` (${api.name})` : ''}!`;
+                        }
+                    } else if (response.status === 422 || response.status === 409) {
+                        // USED
+                        resultStatus = 'USED';
+                        resultMessage = `Ingresso já utilizado${api.name ? ` (${api.name})` : ''}.`;
+                    } else {
+                        // OTHER ERROR (500, 403)
+                        resultStatus = 'ERROR';
+                        resultMessage = `Erro API${api.name ? ` (${api.name})` : ''}: ${response.status}`;
+                    }
+                    
+                    // Break the loop as we found the ticket
+                    break; 
+
+                } catch (err) {
+                    console.error(`API Error on ${api.url}`, err);
+                    // If network error on one API, try next? 
+                    // Yes, continue loop in case redundancy or other platform works.
                 }
-            } catch (err) {
-                console.error(err);
-                showScanResult('ERROR', 'Erro de conexão com a API.');
+            }
+
+            if (!found) {
+                 // If we looped through all and found nothing (or all were 404)
+                 showScanResult('INVALID', `Ingresso não encontrado (API).`);
+                 await logScan(ticketId, 'INVALID', 'Desconhecido');
+                 return;
+            }
+
+            if (resultStatus) {
+                showScanResult(resultStatus, resultMessage);
+                await logScan(ticketId, resultStatus, resultSector);
             }
             return;
         }
@@ -468,7 +521,7 @@ const App: React.FC = () => {
                             <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3">
                                 {validationConfig.mode === 'ONLINE' && (
                                     <span className="text-xs font-bold bg-green-900 text-green-200 px-2 py-0.5 rounded border border-green-700 mb-1 sm:mb-0 self-start">
-                                        MODO ONLINE (API)
+                                        MODO ONLINE ({validationConfig.endpoints.length} APIs)
                                     </span>
                                 )}
                                 {activeSectors.length > 0 ? (
