@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
@@ -28,6 +29,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
     const [isLoading, setIsLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState('');
     const [isSavingSectors, setIsSavingSectors] = useState(false);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
@@ -200,10 +202,16 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
 
         setIsLoading(true);
+        setLoadingMessage('Iniciando conexão...');
+        
         try {
-            const url = new URL(apiUrl);
+            // Build Initial URL
+            let nextUrl: string | null = apiUrl;
+            const urlObj = new URL(apiUrl);
+            
             if (apiEventId) {
-                url.searchParams.append('event_id', apiEventId);
+                urlObj.searchParams.append('event_id', apiEventId);
+                nextUrl = urlObj.toString();
             }
 
             const headers: HeadersInit = {
@@ -214,29 +222,56 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 headers['Authorization'] = `Bearer ${apiToken.trim()}`;
             }
 
-            const response = await fetch(url.toString(), { headers });
-            
-            if (!response.ok) {
-                throw new Error(`Erro na requisição: ${response.status} ${response.statusText}`);
+            const allItems: any[] = [];
+            let pageCount = 0;
+
+            // --- PAGINATION LOOP ---
+            while (nextUrl) {
+                pageCount++;
+                setLoadingMessage(`Baixando página ${pageCount}...`);
+
+                const response = await fetch(nextUrl, { headers });
+                
+                if (!response.ok) {
+                    throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
+                }
+
+                const jsonResponse = await response.json();
+                
+                // Determine structure and extract items for this page
+                let pageItems: any[] = [];
+                if (Array.isArray(jsonResponse)) {
+                    pageItems = jsonResponse;
+                } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
+                    pageItems = jsonResponse.data;
+                } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
+                    pageItems = jsonResponse.tickets;
+                } else if (jsonResponse.data && typeof jsonResponse.data === 'object') {
+                    // Handle single object response wrapped in data
+                    pageItems = [jsonResponse.data];
+                }
+
+                allItems.push(...pageItems);
+
+                // Determine Next URL for Pagination
+                // Checks for 'next_page_url' (Laravel standard) or 'links.next' (JSON API standard)
+                if (jsonResponse.next_page_url) {
+                    nextUrl = jsonResponse.next_page_url;
+                } else if (jsonResponse.links && jsonResponse.links.next) {
+                    nextUrl = jsonResponse.links.next;
+                } else {
+                    nextUrl = null; // No more pages
+                }
             }
 
-            const jsonResponse = await response.json();
-            
-            // Handle different API response structures (array root or data property)
-            let items: any[] = [];
-            if (Array.isArray(jsonResponse)) {
-                items = jsonResponse;
-            } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
-                items = jsonResponse.data;
-            } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
-                items = jsonResponse.tickets;
-            }
-
-            if (items.length === 0) {
+            if (allItems.length === 0) {
                 alert('Nenhum registro encontrado na resposta da API.');
                 setIsLoading(false);
+                setLoadingMessage('');
                 return;
             }
+
+            setLoadingMessage(`Processando ${allItems.length} registros...`);
 
             const newSectors = new Set<string>();
             const ticketsToSave: Ticket[] = [];
@@ -246,7 +281,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             
             if (importType === 'checkins' || apiUrl.includes('checkins')) {
                 // Handling Checkins: We update existing tickets to USED
-                items.forEach((item: any) => {
+                allItems.forEach((item: any) => {
                     // Try to find the ticket identifier and timestamp
                     const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
                     const timestampStr = item.created_at || item.checked_in_at || item.timestamp;
@@ -294,7 +329,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     }
                 };
 
-                items.forEach(processItem);
+                allItems.forEach(processItem);
             }
 
             // --- BATCH OPERATIONS ---
@@ -323,6 +358,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
             // 2. Save/Overwrite Tickets
             if (ticketsToSave.length > 0) {
+                setLoadingMessage('Salvando ingressos no banco de dados...');
                  const chunks = [];
                 for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
                     chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
@@ -332,26 +368,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     const batch = writeBatch(db);
                     chunk.forEach(ticket => {
                         const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', ticket.id);
-                        // We use set with merge: true so we don't overwrite existing 'USED' status if we are just re-syncing details
-                        // actually, strictly speaking, if we are importing the "List of Tickets", we might want to reset? 
-                        // Let's assume merge to be safe, but ensure essential fields are set.
                         batch.set(ticketRef, {
                             sector: ticket.sector,
                             details: ticket.details,
-                            // If it doesn't exist, status is available. If it exists, keep status (unless we want to force reset?)
-                            // For now, let's only set status if it doesn't exist to prevent resetting used tickets during a mid-event sync.
-                            // But Firestore set() overwrites unless merge is used.
-                            // Let's do a merge, but if we want to ensure it's imported, we might set status.
-                            // Safer strategy: Only set status if ticket is new? Too complex for batch.
-                            // Let's set status to AVAILABLE only if we are sure.
-                            // Simple approach: Always set sector/details. Only set status if field missing? 
-                            // Standard import behavior: Overwrite details, keep status if exists, else AVAILABLE.
                         }, { merge: true });
-                        
-                        // To ensure new tickets get a status, we might need a separate logic or just assume the UI handles undefined as available.
-                        // However, let's force set status to AVAILABLE if we want to reset?
-                        // Let's stick to: Import adds/updates definitions.
-                        // If you want to RESET, delete the event or collection.
                     });
                     await batch.commit();
                     savedCount += chunk.length;
@@ -360,6 +380,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
             // 3. Update Status (Check-ins sync)
             if (ticketsToUpdateStatus.length > 0) {
+                setLoadingMessage('Sincronizando check-ins...');
                 const chunks = [];
                 for (let i = 0; i < ticketsToUpdateStatus.length; i += BATCH_SIZE) {
                     chunks.push(ticketsToUpdateStatus.slice(i, i + BATCH_SIZE));
@@ -369,9 +390,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                      const batch = writeBatch(db);
                      chunk.forEach(updateItem => {
                          const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', updateItem.id);
-                         // We blindly update status to USED. If ticket doesn't exist, this operation might fail in a batch update() 
-                         // unless we use set({ ... }, {merge:true}).
-                         // Let's use set with merge to ensure we don't crash if ticket missing (it will create a ghost ticket which is fine)
                          batch.set(ticketRef, {
                              status: 'USED',
                              usedAt: Timestamp.fromMillis(updateItem.usedAt)
@@ -393,6 +411,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             alert(`Falha na importação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
         } finally {
             setIsLoading(false);
+            setLoadingMessage('');
         }
     };
 
@@ -686,10 +705,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         disabled={isLoading}
                                         className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center"
                                     >
-                                        {isLoading ? 'Processando...' : 'Importar Dados'}
+                                        {isLoading ? (loadingMessage || 'Processando...') : 'Importar Dados'}
                                     </button>
                                     <p className="text-xs text-gray-500 mt-1">
                                         *Novos setores serão adicionados automaticamente.
+                                        <br />*O sistema importará todas as páginas de resultados.
                                     </p>
                                 </div>
                             </div>
