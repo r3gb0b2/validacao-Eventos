@@ -326,7 +326,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     };
 
-    // --- IMPORT API LOGIC ---
+    // --- IMPORT API LOGIC (REVISED) ---
     const handleImportApi = async () => {
         if (!selectedEvent) return;
         setIsLoading(true);
@@ -336,13 +336,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let allItems: any[] = [];
             let page = 1;
             let hasNextPage = true;
+            const PER_PAGE = 200; // Safe batch size
             
             // Construct Initial URL
             const baseUrlObj = new URL(apiUrl);
             if (apiEventId) baseUrlObj.searchParams.set('event_id', apiEventId);
-            baseUrlObj.searchParams.set('per_page', '500'); // Force high limit
+            baseUrlObj.searchParams.set('per_page', String(PER_PAGE)); 
             
             let currentUrl = baseUrlObj.toString();
+            let consecutiveEmptyPages = 0;
 
             while (hasNextPage) {
                 setLoadingMessage(`Baixando página ${page}... (Total: ${allItems.length})`);
@@ -360,31 +362,34 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
                 const data = await response.json();
                 
+                // --- ROBUST DATA EXTRACTION ---
                 let pageItems: any[] = [];
-                // Detect structure
+                
                 if (Array.isArray(data)) {
                     pageItems = data;
-                    hasNextPage = false;
                 } else if (data.data && Array.isArray(data.data)) {
                     pageItems = data.data;
+                } else if (data.tickets && Array.isArray(data.tickets)) {
+                    pageItems = data.tickets;
+                } else if (data.items && Array.isArray(data.items)) {
+                    pageItems = data.items;
                 } else {
-                     // Try to find any array
-                     Object.values(data).forEach(val => {
-                         if (Array.isArray(val) && val.length > 0) pageItems = val;
-                     });
+                    // Last resort: look for ANY array property
+                     const foundArray = Object.values(data).find(v => Array.isArray(v));
+                     if (foundArray) pageItems = foundArray as any[];
                 }
 
                 if (pageItems.length === 0) {
+                    // If we got empty list, assume end of data
                     hasNextPage = false;
                     break;
                 }
                 
-                // Duplicate Check to prevent infinite loops
-                const firstItem = pageItems[0];
+                // Check for duplicates to prevent loops
+                const firstNewItem = pageItems[0];
                 const isDuplicate = allItems.some(i => 
-                    (i.id && i.id === firstItem.id) || 
-                    (i.code && i.code === firstItem.code) ||
-                    (i.ticket_code && i.ticket_code === firstItem.ticket_code)
+                    (i.id && i.id === firstNewItem.id) || 
+                    (i.code && i.code === firstNewItem.code)
                 );
 
                 if (isDuplicate && page > 1) {
@@ -395,31 +400,32 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
                 allItems = [...allItems, ...pageItems];
 
-                // Determine Next URL
+                // --- DETERMINE NEXT URL ---
+                let nextLink = null;
+
                 if (data.next_page_url) {
-                    let nextLink = data.next_page_url;
-                    
-                    // FIX: Force HTTPS
+                    nextLink = data.next_page_url;
+                } else if (data.links && Array.isArray(data.links)) {
+                    // Laravel/JSON:API pagination links
+                    const nextObj = data.links.find((l: any) => l.label === 'Next' || l.rel === 'next');
+                    if (nextObj && nextObj.url) nextLink = nextObj.url;
+                }
+
+                if (nextLink) {
+                    // Use official next link with fixes
                     if (nextLink.startsWith('http:')) nextLink = nextLink.replace('http:', 'https:');
-                    
                     const nextUrlObj = new URL(nextLink);
-                    
-                    // FIX: Re-inject Params if lost
-                    if (apiEventId && !nextUrlObj.searchParams.has('event_id')) {
-                        nextUrlObj.searchParams.set('event_id', apiEventId);
-                    }
-                    if (!nextUrlObj.searchParams.has('per_page')) {
-                        nextUrlObj.searchParams.set('per_page', '500');
-                    }
-                    
+                    if (apiEventId && !nextUrlObj.searchParams.has('event_id')) nextUrlObj.searchParams.set('event_id', apiEventId);
+                    nextUrlObj.searchParams.set('per_page', String(PER_PAGE));
                     currentUrl = nextUrlObj.toString();
                     page++;
-                } else if (data.last_page && page < data.last_page) {
-                    // Manual fallback
+                } else if (pageItems.length >= PER_PAGE) {
+                    // Speculative Pagination: If we got a full page but no link, try next page number manually
                     page++;
-                    baseUrlObj.searchParams.set('page', page.toString());
+                    baseUrlObj.searchParams.set('page', String(page));
                     currentUrl = baseUrlObj.toString();
                 } else {
+                    // Less items than limit and no next link -> End of list
                     hasNextPage = false;
                 }
             }
@@ -434,17 +440,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 
                 // Normalize item data based on endpoint type
                 if (importType === 'tickets') {
-                    code = item.code || item.qr_code;
-                    sector = item.sector?.name || item.sector || 'Geral';
-                    ownerName = item.participant?.name || item.owner_name || 'Participante';
-                    // Some APIs return used status
+                    code = item.code || item.qr_code || item.uuid || item.id;
+                    sector = item.sector?.name || item.sector || item.category || 'Geral';
+                    ownerName = item.participant?.name || item.owner_name || item.owner || 'Participante';
                     if (item.is_used || item.status === 'used') status = 'USED';
                 } else if (importType === 'participants') {
                      code = item.ticket_code || item.code;
                      sector = item.sector || 'Geral';
                      ownerName = item.name;
                 } else if (importType === 'buyers') {
-                     // Buyers often have nested tickets
                      if (item.tickets && Array.isArray(item.tickets)) {
                          item.tickets.forEach((t: any) => {
                              newSectors.add(t.sector || 'Geral');
@@ -455,7 +459,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                  details: { ownerName: item.name }
                              });
                          });
-                         return; // Skip adding the buyer itself
+                         return;
                      }
                 }
 
@@ -469,11 +473,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     });
                 }
             });
-
-            await saveImportedData(newSectors, ticketsToSave);
             
-            setLoadingMessage('');
-            alert(`Importação concluída! ${ticketsToSave.length} ingressos importados.`);
+            if (ticketsToSave.length === 0) {
+                alert('Importação concluída, mas 0 ingressos foram encontrados. \n\nDica: Verifique se o ID do Evento está correto.');
+            } else {
+                await saveImportedData(newSectors, ticketsToSave);
+                alert(`Importação concluída! ${ticketsToSave.length} ingressos importados.`);
+            }
 
         } catch (error: any) {
             console.error("Erro importação:", error);
