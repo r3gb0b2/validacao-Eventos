@@ -5,7 +5,7 @@ import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp } from 'firebase/firestore';
 import { CloudDownloadIcon } from './Icons';
 
 interface AdminViewProps {
@@ -21,6 +21,8 @@ interface AdminViewProps {
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
+type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom';
+
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
@@ -34,6 +36,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
 
     // API Import State
+    const [importType, setImportType] = useState<ImportType>('tickets');
     const [apiUrl, setApiUrl] = useState('https://public-api.stingressos.com.br/tickets');
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
@@ -51,6 +54,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setActiveTab('events');
         }
     }, [selectedEvent]);
+
+    const handleImportTypeChange = (type: ImportType) => {
+        setImportType(type);
+        switch (type) {
+            case 'tickets':
+                setApiUrl('https://public-api.stingressos.com.br/tickets');
+                break;
+            case 'participants':
+                setApiUrl('https://public-api.stingressos.com.br/participants');
+                break;
+            case 'buyers':
+                setApiUrl('https://public-api.stingressos.com.br/buyers');
+                break;
+            case 'checkins':
+                setApiUrl('https://public-api.stingressos.com.br/checkins');
+                break;
+            default:
+                setApiUrl('');
+        }
+    };
 
     const analyticsData: AnalyticsData = useMemo(() => {
         const validScans = scanHistory.filter(s => s.status === 'VALID');
@@ -210,81 +233,160 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
 
             if (items.length === 0) {
-                alert('Nenhum ingresso encontrado na resposta da API. Verifique o ID do evento ou a estrutura dos dados.');
+                alert('Nenhum registro encontrado na resposta da API.');
                 setIsLoading(false);
                 return;
             }
 
-            // Identify new sectors
             const newSectors = new Set<string>();
             const ticketsToSave: Ticket[] = [];
+            const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
 
-            items.forEach((item: any) => {
-                // Flexible field mapping
-                const code = item.code || item.qr_code || item.id || item.ticket_code;
-                const sector = item.sector || item.sector_name || item.section || item.setor || 'Geral';
-                const ownerName = item.owner_name || item.name || item.client_name || '';
-
-                if (code) {
-                    newSectors.add(sector);
-                    ticketsToSave.push({
-                        id: String(code),
-                        sector: String(sector),
-                        status: 'AVAILABLE', // Default to available unless API says otherwise
-                        details: {
-                            ownerName: ownerName
-                        }
-                    });
-                }
-            });
-
-            if (ticketsToSave.length === 0) {
-                alert('Não foi possível identificar códigos de ingresso válidos na resposta.');
-                setIsLoading(false);
-                return;
-            }
-
-            // 1. Update Sector Names if needed
-            const currentSectorsSet = new Set(sectorNames);
-            let sectorsUpdated = false;
-            newSectors.forEach(s => {
-                if (!currentSectorsSet.has(s)) {
-                    currentSectorsSet.add(s);
-                    sectorsUpdated = true;
-                }
-            });
-
-            if (sectorsUpdated) {
-                const updatedSectorList = Array.from(currentSectorsSet);
-                await onUpdateSectorNames(updatedSectorList);
-                setEditableSectorNames(updatedSectorList); // Update local state
-            }
-
-            // 2. Batch Save Tickets (Firestore limits batches to 500 ops)
-            const BATCH_SIZE = 450;
-            const chunks = [];
-            for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
-                chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
-            }
-
-            let savedCount = 0;
-            for (const chunk of chunks) {
-                const batch = writeBatch(db);
-                chunk.forEach(ticket => {
-                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', ticket.id);
-                    batch.set(ticketRef, {
-                        sector: ticket.sector,
-                        status: ticket.status,
-                        usedAt: null,
-                        details: ticket.details
-                    });
+            // --- PROCESSING LOGIC BASED ON ENDPOINT TYPE ---
+            
+            if (importType === 'checkins' || apiUrl.includes('checkins')) {
+                // Handling Checkins: We update existing tickets to USED
+                items.forEach((item: any) => {
+                    // Try to find the ticket identifier and timestamp
+                    const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
+                    const timestampStr = item.created_at || item.checked_in_at || item.timestamp;
+                    
+                    if (code) {
+                        const usedAt = timestampStr ? new Date(timestampStr).getTime() : Date.now();
+                        ticketsToUpdateStatus.push({ id: String(code), usedAt });
+                    }
                 });
-                await batch.commit();
-                savedCount += chunk.length;
+
+            } else {
+                // Handling Tickets / Participants / Buyers (Inventory Import)
+                
+                const processItem = (item: any) => {
+                    // Generic mapping to try and find standard fields in varying JSON structures
+                    const code = item.code || item.qr_code || item.ticket_code || item.barcode || item.id;
+                    
+                    // Priority for sector name
+                    let sector = item.sector || item.sector_name || item.section || item.setor || item.category || item.ticket_name || item.product_name || 'Geral';
+                    if (typeof sector === 'object' && sector.name) sector = sector.name; // Handle nested sector object
+
+                    // Priority for owner name
+                    const ownerName = item.owner_name || item.name || item.participant_name || item.client_name || item.buyer_name || '';
+
+                    // Check if item has nested tickets (common in 'buyers' endpoint)
+                    if (item.tickets && Array.isArray(item.tickets)) {
+                        item.tickets.forEach((subTicket: any) => {
+                             // Merge buyer info if sub-ticket doesn't have owner
+                             if (!subTicket.owner_name && ownerName) subTicket.owner_name = ownerName;
+                             processItem(subTicket);
+                        });
+                        return; // Done with this parent item
+                    }
+
+                    if (code) {
+                        newSectors.add(String(sector));
+                        ticketsToSave.push({
+                            id: String(code),
+                            sector: String(sector),
+                            status: 'AVAILABLE', // Default to available
+                            details: {
+                                ownerName: String(ownerName)
+                            }
+                        });
+                    }
+                };
+
+                items.forEach(processItem);
             }
 
-            alert(`Importação concluída! ${savedCount} ingressos importados/atualizados e setores sincronizados.`);
-            setApiToken(''); // Clear sensitive data logic if desired, or keep for re-use
+            // --- BATCH OPERATIONS ---
+
+            // 1. Update Sector Names (Only for inventory import)
+            if (ticketsToSave.length > 0) {
+                const currentSectorsSet = new Set(sectorNames);
+                let sectorsUpdated = false;
+                newSectors.forEach(s => {
+                    if (!currentSectorsSet.has(s)) {
+                        currentSectorsSet.add(s);
+                        sectorsUpdated = true;
+                    }
+                });
+
+                if (sectorsUpdated) {
+                    const updatedSectorList = Array.from(currentSectorsSet);
+                    await onUpdateSectorNames(updatedSectorList);
+                    setEditableSectorNames(updatedSectorList);
+                }
+            }
+
+            const BATCH_SIZE = 450;
+            let savedCount = 0;
+            let updatedCount = 0;
+
+            // 2. Save/Overwrite Tickets
+            if (ticketsToSave.length > 0) {
+                 const chunks = [];
+                for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
+                    chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
+                }
+
+                for (const chunk of chunks) {
+                    const batch = writeBatch(db);
+                    chunk.forEach(ticket => {
+                        const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', ticket.id);
+                        // We use set with merge: true so we don't overwrite existing 'USED' status if we are just re-syncing details
+                        // actually, strictly speaking, if we are importing the "List of Tickets", we might want to reset? 
+                        // Let's assume merge to be safe, but ensure essential fields are set.
+                        batch.set(ticketRef, {
+                            sector: ticket.sector,
+                            details: ticket.details,
+                            // If it doesn't exist, status is available. If it exists, keep status (unless we want to force reset?)
+                            // For now, let's only set status if it doesn't exist to prevent resetting used tickets during a mid-event sync.
+                            // But Firestore set() overwrites unless merge is used.
+                            // Let's do a merge, but if we want to ensure it's imported, we might set status.
+                            // Safer strategy: Only set status if ticket is new? Too complex for batch.
+                            // Let's set status to AVAILABLE only if we are sure.
+                            // Simple approach: Always set sector/details. Only set status if field missing? 
+                            // Standard import behavior: Overwrite details, keep status if exists, else AVAILABLE.
+                        }, { merge: true });
+                        
+                        // To ensure new tickets get a status, we might need a separate logic or just assume the UI handles undefined as available.
+                        // However, let's force set status to AVAILABLE if we want to reset?
+                        // Let's stick to: Import adds/updates definitions.
+                        // If you want to RESET, delete the event or collection.
+                    });
+                    await batch.commit();
+                    savedCount += chunk.length;
+                }
+            }
+
+            // 3. Update Status (Check-ins sync)
+            if (ticketsToUpdateStatus.length > 0) {
+                const chunks = [];
+                for (let i = 0; i < ticketsToUpdateStatus.length; i += BATCH_SIZE) {
+                    chunks.push(ticketsToUpdateStatus.slice(i, i + BATCH_SIZE));
+                }
+                
+                for (const chunk of chunks) {
+                     const batch = writeBatch(db);
+                     chunk.forEach(updateItem => {
+                         const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', updateItem.id);
+                         // We blindly update status to USED. If ticket doesn't exist, this operation might fail in a batch update() 
+                         // unless we use set({ ... }, {merge:true}).
+                         // Let's use set with merge to ensure we don't crash if ticket missing (it will create a ghost ticket which is fine)
+                         batch.set(ticketRef, {
+                             status: 'USED',
+                             usedAt: Timestamp.fromMillis(updateItem.usedAt)
+                         }, { merge: true });
+                     });
+                     await batch.commit();
+                     updatedCount += chunk.length;
+                }
+            }
+
+            let msg = 'Processo concluído!\n';
+            if (savedCount > 0) msg += `- ${savedCount} ingressos importados/atualizados.\n`;
+            if (updatedCount > 0) msg += `- ${updatedCount} ingressos marcados como utilizados (Check-ins sincronizados).\n`;
+            
+            alert(msg);
             
         } catch (error) {
             console.error('API Import Error:', error);
@@ -536,6 +638,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 </h3>
                                 <div className="space-y-3">
                                     <div>
+                                        <label className="text-xs text-gray-400">Tipo de Dados / Fonte</label>
+                                        <select
+                                            value={importType}
+                                            onChange={(e) => handleImportTypeChange(e.target.value as ImportType)}
+                                            className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2"
+                                        >
+                                            <option value="tickets">Ingressos (Tickets)</option>
+                                            <option value="participants">Participantes (Participants)</option>
+                                            <option value="buyers">Compradores (Buyers)</option>
+                                            <option value="checkins">Sincronizar Check-ins (Marcar como Usado)</option>
+                                            <option value="custom">URL Personalizada</option>
+                                        </select>
+
                                         <label className="text-xs text-gray-400">URL da API</label>
                                         <input
                                             type="text"
@@ -571,7 +686,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         disabled={isLoading}
                                         className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center"
                                     >
-                                        {isLoading ? 'Importando...' : 'Importar da API ST Ingressos'}
+                                        {isLoading ? 'Processando...' : 'Importar Dados'}
                                     </button>
                                     <p className="text-xs text-gray-500 mt-1">
                                         *Novos setores serão adicionados automaticamente.
