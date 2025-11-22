@@ -1053,6 +1053,39 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     </button>
                                 </div>
                             </div>
+
+                            {/* Manual Code Entry Block */}
+                            <div className="bg-gray-800 p-5 rounded-lg shadow-lg border border-gray-700">
+                                <h3 className="text-lg font-bold mb-3 flex items-center">
+                                    <TableCellsIcon className="w-5 h-5 mr-2 text-green-400" />
+                                    Adicionar Códigos por Lista (Manual)
+                                </h3>
+                                <p className="text-xs text-gray-400 mb-3">
+                                    Cole os códigos dos ingressos abaixo (um por linha). Eles serão salvos no banco de dados.
+                                </p>
+                                
+                                <div className="space-y-4 max-h-96 overflow-y-auto custom-scrollbar pr-2">
+                                    {sectorNames.map((sector) => (
+                                        <div key={sector}>
+                                            <label className="block text-xs font-bold text-gray-300 mb-1 uppercase">{sector}</label>
+                                            <textarea
+                                                value={ticketCodes[sector] || ''}
+                                                onChange={(e) => handleTicketCodeChange(sector, e.target.value)}
+                                                placeholder={`Cole os códigos do setor ${sector} aqui...`}
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm h-24 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                <button
+                                    onClick={handleSaveTickets}
+                                    disabled={isLoading}
+                                    className="w-full mt-4 bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold disabled:bg-gray-500 text-sm shadow-lg transition-transform transform active:scale-95"
+                                >
+                                    Salvar Lista de Códigos
+                                </button>
+                            </div>
                         </div>
                         
                         {/* Right Column: Import */}
