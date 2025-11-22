@@ -385,10 +385,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                      skipEmptyLines: true,
                  });
 
-                 if (parsed.errors.length > 0) {
-                     console.warn('CSV Parse Warnings:', parsed.errors);
-                 }
-                 
                  const rows = parsed.data as any[];
                  setLoadingMessage(`Processando ${rows.length} linhas da planilha...`);
 
@@ -412,26 +408,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                          });
                      }
                  });
-                 
-                 if (ticketsToSave.length === 0) {
-                     alert('Não foi possível identificar as colunas na planilha.\nCertifique-se que a primeira linha contém cabeçalhos como: "Codigo", "Setor", "Nome".');
-                     setIsLoading(false);
-                     return;
-                 }
 
             } 
-            // --- STANDARD API PROCESSING ---
+            // --- STANDARD API PROCESSING (MANUAL PAGINATION) ---
             else {
-                const urlObj = new URL(apiUrl);
-                if (apiEventId && !urlObj.searchParams.has('event_id')) {
-                    urlObj.searchParams.set('event_id', apiEventId);
-                }
-                urlObj.searchParams.set('per_page', '200');
-                urlObj.searchParams.set('limit', '200');
-                if (!urlObj.searchParams.has('page')) {
-                    urlObj.searchParams.set('page', '1');
-                }
-
                 const headers: HeadersInit = {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
@@ -441,105 +421,132 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
 
                 const seenIds = new Set<string>();
-                let nextUrl: string | null = urlObj.toString();
-                let pageCount = 0;
-                const MAX_PAGES = 400; 
+                const BATCH_LIMIT = 200; // Force large batches
+                let page = 1;
+                let hasMore = true;
+                let totalRecords = 0;
+                
+                // Clean base URL (remove params to re-add them cleanly)
+                let baseUrl = apiUrl;
+                try {
+                    const urlObj = new URL(apiUrl);
+                    baseUrl = urlObj.origin + urlObj.pathname;
+                    // if user put query params in apiUrl (like event_id), we should preserve them if they are not the ones we are managing
+                    // but for pagination safety, let's rebuild key params
+                } catch(e) { /* ignore invalid url here, fetch will catch it */ }
 
-                while (nextUrl && pageCount < MAX_PAGES) {
-                    pageCount++;
-                    setLoadingMessage(`Baixando página ${pageCount} (Total importado: ${allItems.length})...`);
+                while (hasMore) {
+                    setLoadingMessage(`Baixando página ${page} (Itens: ${allItems.length}${totalRecords ? '/' + totalRecords : ''})...`);
                     
-                    if (nextUrl.startsWith('http://') && !nextUrl.startsWith('http://localhost')) {
-                        nextUrl = nextUrl.replace('http://', 'https://');
+                    // Construct URL with strict parameters for this page
+                    const currentUrlObj = new URL(apiUrl); 
+                    // We use the User provided API Url as base, but force overrides
+                    currentUrlObj.searchParams.set('page', String(page));
+                    currentUrlObj.searchParams.set('per_page', String(BATCH_LIMIT));
+                    currentUrlObj.searchParams.set('limit', String(BATCH_LIMIT));
+                    if (apiEventId) currentUrlObj.searchParams.set('event_id', apiEventId);
+
+                    let fetchUrl = currentUrlObj.toString();
+                     if (fetchUrl.startsWith('http://') && !fetchUrl.startsWith('http://localhost')) {
+                        fetchUrl = fetchUrl.replace('http://', 'https://');
                     }
 
-                    await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+                    // Add delay to respect rate limits
+                    await new Promise(resolve => setTimeout(resolve, 200));
 
-                    const response = await fetch(nextUrl, { headers });
-                    
+                    const response = await fetch(fetchUrl, { headers });
                     if (!response.ok) {
-                         if (response.status === 404 && pageCount > 1) break; 
-                         throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
+                        // 404 on page > 1 usually means end of list for some APIs
+                        if (response.status === 404 && page > 1) {
+                            hasMore = false;
+                            break;
+                        }
+                        throw new Error(`Erro HTTP ${response.status} na página ${page}`);
                     }
 
                     const jsonResponse = await response.json();
                     
+                    // Intelligent Data Extraction
                     let pageItems: any[] = [];
-                    let metaRoot: any = jsonResponse; 
+                    let meta: any = null;
 
+                    // Check common patterns
                     if (Array.isArray(jsonResponse)) {
                         pageItems = jsonResponse;
                     } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
                         pageItems = jsonResponse.data;
-                        if (jsonResponse.meta) metaRoot = jsonResponse.meta;
-                        if (jsonResponse.links) metaRoot = { ...metaRoot, ...jsonResponse.links };
-                    } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
-                         pageItems = jsonResponse.tickets;
+                        meta = jsonResponse; // Laravel paginated often has meta at root or inside data
+                        if (jsonResponse.meta) meta = jsonResponse.meta;
                     } else if (jsonResponse.items && Array.isArray(jsonResponse.items)) {
-                         pageItems = jsonResponse.items;
-                    } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
-                        metaRoot = jsonResponse.data;
-                        pageItems = jsonResponse.data.data;
+                        pageItems = jsonResponse.items;
+                        meta = jsonResponse;
+                    } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
+                        pageItems = jsonResponse.tickets;
+                        meta = jsonResponse;
                     } else {
-                        // Fallback search for any array in the object
-                        const possibleKeys = Object.keys(jsonResponse);
-                        for(const key of possibleKeys) {
-                            if (Array.isArray(jsonResponse[key]) && jsonResponse[key].length > 0) {
-                                pageItems = jsonResponse[key];
+                        // Fallback: find first array
+                        const keys = Object.keys(jsonResponse);
+                        for (const k of keys) {
+                            if (Array.isArray(jsonResponse[k])) {
+                                pageItems = jsonResponse[k];
                                 break;
                             }
                         }
                     }
 
-                    if (pageItems.length === 0) break;
+                    if (!pageItems || pageItems.length === 0) {
+                        hasMore = false;
+                        break;
+                    }
 
-                    let newItemsCount = 0;
+                    // Try to find Total / Last Page info to be smarter
+                    if (!totalRecords) {
+                        if (meta?.total) totalRecords = meta.total;
+                        else if (meta?.meta?.total) totalRecords = meta.meta.total;
+                        else if (jsonResponse.total) totalRecords = jsonResponse.total;
+                    }
+                    
+                    let lastPage = 0;
+                    if (meta?.last_page) lastPage = meta.last_page;
+                    else if (jsonResponse.last_page) lastPage = jsonResponse.last_page;
+
+                    // Add items
+                    let newItemsOnPage = 0;
                     pageItems.forEach((item: any) => {
                         const id = item.id || item.code || item.qr_code || item.ticket_code || item.uuid || JSON.stringify(item);
                         if (!seenIds.has(String(id))) {
                             seenIds.add(String(id));
-                            newItemsCount++;
                             allItems.push(item);
+                            newItemsOnPage++;
                         }
                     });
 
-                    // Pagination Logic
-                    let foundNextLink: string | null = null;
-                    if (metaRoot) {
-                        if (metaRoot.next_page_url) foundNextLink = metaRoot.next_page_url;
-                        else if (metaRoot.next) foundNextLink = metaRoot.next;
-                    }
-                    if (!foundNextLink && jsonResponse.next_page_url) foundNextLink = jsonResponse.next_page_url;
-
-                    if (foundNextLink) {
-                        try {
-                            const urlCheck = new URL(foundNextLink);
-                            // FORCE PARAMS TO PERSIST
-                            if (apiEventId) urlCheck.searchParams.set('event_id', apiEventId);
-                            urlCheck.searchParams.set('per_page', '200');
-                            urlCheck.searchParams.set('limit', '200');
-                            
-                            nextUrl = urlCheck.toString();
-                        } catch (e) {
-                             nextUrl = foundNextLink; // Fallback if parse fails
-                        }
+                    // Logic to stop or continue
+                    if (newItemsOnPage === 0 && pageItems.length > 0) {
+                        // We received items, but we had already seen all of them. 
+                        // This implies the API is returning the same page repeatedly (ignoring page param).
+                        console.warn("Detectado loop de paginação (itens duplicados). Parando.");
+                        hasMore = false;
                     } else {
-                        // Speculative pagination: if we got full page (e.g. > 150 items), try next
-                        if (newItemsCount >= 15) { // lowered threshold to catch even small pages if they are full
-                             const currentUrlObj = new URL(nextUrl);
-                             const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
-                             currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
-                             currentUrlObj.searchParams.set('per_page', '200'); // Ensure limit persists
-                             currentUrlObj.searchParams.set('limit', '200');
-                             if (apiEventId) currentUrlObj.searchParams.set('event_id', apiEventId);
-                             
-                             nextUrl = currentUrlObj.toString();
-                        } else {
-                            nextUrl = null;
+                        // Check termination conditions
+                        if (lastPage > 0 && page >= lastPage) {
+                            hasMore = false;
+                        } else if (totalRecords > 0 && allItems.length >= totalRecords) {
+                            hasMore = false;
+                        } else if (pageItems.length < (BATCH_LIMIT / 2) && totalRecords === 0) {
+                             // If we got significantly fewer items than requested and don't know the total, 
+                             // assume it's the last page. (Using /2 as a safety buffer, usually it's < limit)
+                             // However, safest is to continue until 0, but some APIs return partial last page.
+                             // Let's stick to: if pageItems < limit, it MIGHT be last, but let's try next just in case unless empty.
+                             // Actually, standard pagination: if items < per_page, it is the last page.
+                             if (pageItems.length < BATCH_LIMIT) hasMore = false;
                         }
+                        
+                        // Failsafe: Stop at 500 pages (100k items)
+                        if (page >= 500) hasMore = false;
                     }
-                    
-                    if (newItemsCount === 0) nextUrl = null; // Stop if no new items found
+
+                    page++;
                 }
 
                 if (allItems.length === 0) {
@@ -611,7 +618,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let updatedCount = 0;
 
             if (ticketsToSave.length > 0) {
-                setLoadingMessage('Salvando ingressos no banco de dados...');
+                setLoadingMessage(`Salvando ${ticketsToSave.length} ingressos...`);
                  const chunks = [];
                 for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
                     chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
