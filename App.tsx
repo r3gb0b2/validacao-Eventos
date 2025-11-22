@@ -274,18 +274,15 @@ const App: React.FC = () => {
             let resultMessage = '';
             let resultSector = 'API';
             let found = false;
-            let networkErrors = 0;
+            let triedCode = '';
 
             // PREPARE CODES TO TRY
-            // 1. Always try the raw code scanned
             const codesToTry = [ticketId];
             
-            // 2. If it looks like a URL, try to extract ID/Code from it
+            // Extract ID from URL if present
             try {
                 if (ticketId.match(/^https?:\/\//i)) {
                     const urlObj = new URL(ticketId);
-                    
-                    // Try query parameters common for tickets
                     const paramKeys = ['code', 'id', 'uuid', 'ticket', 'ticket_code', 't'];
                     for (const key of paramKeys) {
                         if (urlObj.searchParams.has(key)) {
@@ -293,135 +290,154 @@ const App: React.FC = () => {
                             if (val) codesToTry.push(val);
                         }
                     }
-
-                    // Try the last segment of the path (e.g. /checkins/12345)
                     const pathSegments = urlObj.pathname.split('/').filter(p => p && p.length > 0);
                     if (pathSegments.length > 0) {
                         const lastSegment = pathSegments[pathSegments.length - 1];
-                        // Avoid duplicates
                         if (!codesToTry.includes(lastSegment)) codesToTry.push(lastSegment);
                     }
                 }
-            } catch (e) {
-                console.warn("Error parsing potential URL code:", e);
-            }
+            } catch (e) { console.warn("Error parsing potential URL code:", e); }
 
             const uniqueCodes = [...new Set(codesToTry)];
-            console.log(`[Online Scan] Codes derived:`, uniqueCodes);
+            console.log(`[Online Scan] Strategies starting. Codes:`, uniqueCodes);
 
-            // Loop through configured APIs
+            // STRATEGY DEFINITIONS
+            const strategies = [
+                // 1. Standard POST Body (Most common)
+                {
+                    name: 'POST Body',
+                    fn: async (url: string, code: string, evtId: any, token: string) => {
+                        const body: any = { qr_code: code, code: code, uuid: code, ticket_code: code };
+                        if (evtId) body.event_id = evtId;
+                        return fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify(body)
+                        });
+                    }
+                },
+                // 2. POST Path (e.g. /checkins/{code})
+                {
+                    name: 'POST Path',
+                    fn: async (url: string, code: string, evtId: any, token: string) => {
+                         const cleanUrl = url.replace(/\/$/, '');
+                         const fullUrl = `${cleanUrl}/${code}`;
+                         const body: any = {};
+                         if (evtId) body.event_id = evtId;
+                         return fetch(fullUrl, {
+                             method: 'POST',
+                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
+                             body: JSON.stringify(body)
+                         });
+                    }
+                },
+                // 3. GET Query Params
+                {
+                    name: 'GET Query',
+                    fn: async (url: string, code: string, evtId: any, token: string) => {
+                        const u = new URL(url);
+                        u.searchParams.set('code', code);
+                        u.searchParams.set('qr_code', code);
+                        if (evtId) u.searchParams.set('event_id', String(evtId));
+                        return fetch(u.toString(), {
+                            method: 'GET',
+                            headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` }
+                        });
+                    }
+                },
+                // 4. GET Path (e.g. /tickets/{code})
+                {
+                    name: 'GET Path',
+                    fn: async (url: string, code: string, evtId: any, token: string) => {
+                        const cleanUrl = url.replace(/\/$/, '');
+                        const fullUrl = `${cleanUrl}/${code}`;
+                        const u = new URL(fullUrl);
+                        if (evtId) u.searchParams.set('event_id', String(evtId));
+                        return fetch(u.toString(), {
+                            method: 'GET',
+                            headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` }
+                        });
+                    }
+                }
+            ];
+
+            // MAIN LOOPS
+            // 1. Loop APIs
             for (const api of endpoints) {
                 if (!api.url) continue;
                 
-                // Loop through possible codes (Raw vs Extracted)
+                // 2. Loop Codes
                 for (const codeAttempt of uniqueCodes) {
-                    try {
-                        const payloadEventId = api.customEventId || eventId;
-                        // Force numeric if possible, otherwise string
-                        const finalEventId = /^\d+$/.test(String(payloadEventId)) ? parseInt(String(payloadEventId), 10) : payloadEventId;
+                    
+                    // 3. Loop Strategies
+                    for (const strat of strategies) {
+                        try {
+                            triedCode = codeAttempt;
+                            const payloadEventId = api.customEventId || eventId;
+                            const finalEventId = /^\d+$/.test(String(payloadEventId)) ? parseInt(String(payloadEventId), 10) : payloadEventId;
 
-                        const headers: HeadersInit = { 
-                            'Content-Type': 'application/json', 
-                            'Accept': 'application/json' 
-                        };
-                        if (api.token) headers['Authorization'] = `Bearer ${api.token}`;
+                            const response = await strat.fn(api.url, codeAttempt, finalEventId, api.token);
 
-                        // Prepare Request Body for POST
-                        const body = JSON.stringify({ 
-                            code: codeAttempt, 
-                            qr_code: codeAttempt, 
-                            ticket_code: codeAttempt,
-                            uuid: codeAttempt,
-                            event_id: finalEventId 
-                        });
+                            if (response.status === 404) continue; // Not found, try next strategy/code
 
-                        // Prepare URL for POST
-                        const fetchUrl = new URL(api.url);
-                        if (finalEventId) fetchUrl.searchParams.set('event_id', String(finalEventId));
-
-                        console.log(`[Online Scan] POST Checking ${api.name || api.url} with code: ${codeAttempt}`);
-
-                        // 1. TRY POST FIRST
-                        let response = await fetch(fetchUrl.toString(), {
-                            method: 'POST',
-                            headers,
-                            body 
-                        });
-                        
-                        // 2. IF POST FAILS (404 or 405), TRY GET
-                        if (response.status === 404 || response.status === 405) {
-                            console.log(`[Online Scan] POST failed (${response.status}). Trying GET fallback...`);
+                            const json = await response.json().catch(() => ({}));
                             
-                            // Construct GET URL: append parameters to query string
-                            const getUrl = new URL(api.url);
-                            getUrl.searchParams.set('code', codeAttempt);
-                            if (finalEventId) getUrl.searchParams.set('event_id', String(finalEventId));
-                            
-                            response = await fetch(getUrl.toString(), {
-                                method: 'GET',
-                                headers
-                            });
-                        }
-
-                        // If still 404, try next code or next API
-                        if (response.status === 404) {
-                            continue; 
-                        }
-
-                        // If we get a definitive response (Success or Used or Server Error that isn't 404)
-                        found = true; 
-                        const json = await response.json().catch(() => ({}));
-                        
-                        // Detect sector
-                        if (json.sector) resultSector = typeof json.sector === 'object' ? json.sector.name : json.sector;
-                        else if (json.data && json.data.sector) resultSector = typeof json.data.sector === 'object' ? json.data.sector.name : json.data.sector;
-                        else if (api.name) resultSector = api.name;
-
-                        if (response.ok) {
-                            // VALID (200/201)
-                            if (!isSectorAllowed(resultSector) && resultSector !== 'API' && resultSector !== api.name) {
-                                resultStatus = 'WRONG_SECTOR';
-                                resultMessage = `Setor incorreto! (${resultSector})`;
-                            } else {
-                                resultStatus = 'VALID';
-                                resultMessage = `Acesso Liberado${api.name ? ` (${api.name})` : ''}!`;
+                            // Some APIs return 200 but with success: false
+                            if (response.ok && (json.success === false || json.status === 'error')) {
+                                // This is likely a logic error (e.g. "Already Used" returned as 200 with error msg)
+                                // We treat it as a "Found but failed" case
+                            } else if (!response.ok && response.status !== 422 && response.status !== 409) {
+                                // Server error or other issue, skip to next strategy? 
+                                // Usually if it's 500, we might want to stop, but let's keep trying just in case
+                                continue;
                             }
-                        } else if (response.status === 422 || response.status === 409) {
-                            // USED
-                            resultStatus = 'USED';
-                            const msg = json.message || json.error || 'Ingresso já utilizado';
-                            resultMessage = `${msg}${api.name ? ` (${api.name})` : ''}.`;
-                        } else {
-                            // OTHER ERROR
-                            resultStatus = 'ERROR';
-                            // Try to get error message from API response
-                            const errorMsg = json.message || json.error || response.statusText;
-                            resultMessage = `Erro ${api.name || 'API'}: ${errorMsg}`;
-                        }
-                        
-                        // Found valid response, break inner loop (codes)
-                        break; 
 
-                    } catch (err) {
-                        console.error(`API Error on ${api.url}`, err);
-                        networkErrors++;
+                            // If we got here, we found something (Valid 200, Used 409/422, or Soft Error)
+                            found = true;
+
+                            // Parse Response
+                            if (json.sector) resultSector = typeof json.sector === 'object' ? json.sector.name : json.sector;
+                            else if (json.data && json.data.sector) resultSector = typeof json.data.sector === 'object' ? json.data.sector.name : json.data.sector;
+                            else if (api.name) resultSector = api.name;
+
+                            // Check Status
+                            if (response.ok && json.success !== false) {
+                                // VALID
+                                if (!isSectorAllowed(resultSector) && resultSector !== 'API' && resultSector !== api.name) {
+                                    resultStatus = 'WRONG_SECTOR';
+                                    resultMessage = `Setor incorreto! (${resultSector})`;
+                                } else {
+                                    resultStatus = 'VALID';
+                                    resultMessage = `Acesso Liberado${api.name ? ` (${api.name})` : ''}!`;
+                                }
+                            } else {
+                                // INVALID / USED
+                                const msg = json.message || json.error || 'Ingresso inválido ou já utilizado';
+                                if (msg.toLowerCase().includes('já utilizado') || msg.toLowerCase().includes('used') || response.status === 409 || response.status === 422) {
+                                    resultStatus = 'USED';
+                                    resultMessage = `Ingresso Já Utilizado. ${msg}`;
+                                } else {
+                                    resultStatus = 'ERROR'; // Or Invalid
+                                    resultMessage = msg;
+                                }
+                            }
+                            break; // Break strategies loop
+                        } catch (err) {
+                            console.error(`[Online] Error on ${strat.name}:`, err);
+                        }
                     }
+                    if (found) break; // Break codes loop
                 }
-                // Found valid response, break outer loop (APIs)
-                if (found) break;
+                if (found) break; // Break API loop
             }
 
             if (!found) {
-                 if (networkErrors === (endpoints.length * uniqueCodes.length)) {
-                     showScanResult('ERROR', 'Erro de conexão com a API.');
-                 } else {
-                     // Warn about Event ID if configured incorrectly
-                     const missingEventId = endpoints.some(ep => !ep.customEventId);
-                     const advice = missingEventId ? " Verifique o ID do Evento." : "";
-                     
-                     showScanResult('INVALID', `Ingresso não encontrado.${advice}`);
-                     await logScan(ticketId, 'INVALID', 'Desconhecido');
-                 }
+                 // Warn about Event ID if configured incorrectly
+                 const missingEventId = endpoints.some(ep => !ep.customEventId);
+                 const advice = missingEventId ? " Verifique o ID do Evento." : "";
+                 
+                 showScanResult('INVALID', `Ingresso não encontrado.${advice}`);
+                 await logScan(ticketId, 'INVALID', 'Desconhecido');
                  return;
             }
 
