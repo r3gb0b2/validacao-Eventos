@@ -563,10 +563,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                     />
                                                     <input 
                                                         type="text" 
-                                                        placeholder="ID Evento (Opcional)"
+                                                        placeholder="ID Evento (Numérico)"
                                                         value={ep.customEventId}
                                                         onChange={e => handleEndpointChange(ep.id, 'customEventId', e.target.value)}
-                                                        className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs"
+                                                        className={`w-full bg-gray-800 p-1.5 rounded border text-xs ${!ep.customEventId ? 'border-red-500/50 bg-red-900/10' : 'border-gray-600'}`}
                                                     />
                                                 </div>
                                                 <input 
@@ -583,6 +583,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                     onChange={e => handleEndpointChange(ep.id, 'token', e.target.value)}
                                                     className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs"
                                                 />
+                                                {!ep.customEventId && <p className="text-[10px] text-red-400 mt-1">* ID do Evento é obrigatório para evitar erro 404</p>}
                                             </div>
                                         ))}
 

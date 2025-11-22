@@ -326,7 +326,7 @@ const App: React.FC = () => {
                         };
                         if (api.token) headers['Authorization'] = `Bearer ${api.token}`;
 
-                        // Prepare Request Body
+                        // Prepare Request Body for POST
                         const body = JSON.stringify({ 
                             code: codeAttempt, 
                             qr_code: codeAttempt, 
@@ -335,19 +335,35 @@ const App: React.FC = () => {
                             event_id: finalEventId 
                         });
 
-                        // Prepare URL - Append event_id to query string as fallback
+                        // Prepare URL for POST
                         const fetchUrl = new URL(api.url);
                         if (finalEventId) fetchUrl.searchParams.set('event_id', String(finalEventId));
 
-                        console.log(`[Online Scan] Checking ${api.name || api.url} with code: ${codeAttempt}`);
+                        console.log(`[Online Scan] POST Checking ${api.name || api.url} with code: ${codeAttempt}`);
 
-                        const response = await fetch(fetchUrl.toString(), {
+                        // 1. TRY POST FIRST
+                        let response = await fetch(fetchUrl.toString(), {
                             method: 'POST',
                             headers,
                             body 
                         });
+                        
+                        // 2. IF POST FAILS (404 or 405), TRY GET
+                        if (response.status === 404 || response.status === 405) {
+                            console.log(`[Online Scan] POST failed (${response.status}). Trying GET fallback...`);
+                            
+                            // Construct GET URL: append parameters to query string
+                            const getUrl = new URL(api.url);
+                            getUrl.searchParams.set('code', codeAttempt);
+                            if (finalEventId) getUrl.searchParams.set('event_id', String(finalEventId));
+                            
+                            response = await fetch(getUrl.toString(), {
+                                method: 'GET',
+                                headers
+                            });
+                        }
 
-                        // If 404, try next code or next API
+                        // If still 404, try next code or next API
                         if (response.status === 404) {
                             continue; 
                         }
@@ -373,11 +389,14 @@ const App: React.FC = () => {
                         } else if (response.status === 422 || response.status === 409) {
                             // USED
                             resultStatus = 'USED';
-                            resultMessage = `Ingresso já utilizado${api.name ? ` (${api.name})` : ''}.`;
+                            const msg = json.message || json.error || 'Ingresso já utilizado';
+                            resultMessage = `${msg}${api.name ? ` (${api.name})` : ''}.`;
                         } else {
                             // OTHER ERROR
                             resultStatus = 'ERROR';
-                            resultMessage = `Erro API${api.name ? ` (${api.name})` : ''}: ${response.status}`;
+                            // Try to get error message from API response
+                            const errorMsg = json.message || json.error || response.statusText;
+                            resultMessage = `Erro ${api.name || 'API'}: ${errorMsg}`;
                         }
                         
                         // Found valid response, break inner loop (codes)
@@ -396,7 +415,11 @@ const App: React.FC = () => {
                  if (networkErrors === (endpoints.length * uniqueCodes.length)) {
                      showScanResult('ERROR', 'Erro de conexão com a API.');
                  } else {
-                     showScanResult('INVALID', `Ingresso não encontrado (API).`);
+                     // Warn about Event ID if configured incorrectly
+                     const missingEventId = endpoints.some(ep => !ep.customEventId);
+                     const advice = missingEventId ? " Verifique o ID do Evento." : "";
+                     
+                     showScanResult('INVALID', `Ingresso não encontrado.${advice}`);
                      await logScan(ticketId, 'INVALID', 'Desconhecido');
                  }
                  return;
