@@ -217,7 +217,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const analyticsData: AnalyticsData = useMemo(() => {
-        const validScans = scanHistory.filter(s => s.status === 'VALID');
+        // Safeguard: Filter valid scans with valid timestamps
+        const validScans = scanHistory.filter(s => s.status === 'VALID' && s.timestamp && !isNaN(Number(s.timestamp)));
         if (validScans.length === 0) {
             return {
                 timeBuckets: [],
@@ -238,6 +239,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         for (const scan of validScans) {
             const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
             const date = new Date(bucketStart);
+            // Check if date is valid
+            if (isNaN(date.getTime())) continue;
+
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
@@ -576,8 +580,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
                         const timestampStr = item.created_at || item.checked_in_at || item.timestamp;
                         if (code) {
-                            const usedAt = timestampStr ? new Date(timestampStr).getTime() : Date.now();
-                            ticketsToUpdateStatus.push({ id: String(code), usedAt });
+                            // FIX FOR SAFARI: Replace space with T for ISO format
+                            const usedAt = timestampStr 
+                                ? new Date(String(timestampStr).replace(' ', 'T')).getTime() 
+                                : Date.now();
+                            
+                            if (!isNaN(usedAt)) {
+                                ticketsToUpdateStatus.push({ id: String(code), usedAt });
+                            }
                         }
                     });
                 } else {

@@ -20,7 +20,14 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        const validScans = (scanHistory || []).filter(s => s && s.status === 'VALID');
+        // Safeguard: Filter out valid scans with invalid timestamps which crash Safari
+        const validScans = (scanHistory || []).filter(s => 
+            s && 
+            s.status === 'VALID' && 
+            s.timestamp && 
+            !isNaN(Number(s.timestamp))
+        );
+
         if (validScans.length === 0) {
             return {
                 timeBuckets: [],
@@ -41,6 +48,10 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         for (const scan of validScans) {
             const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
             const date = new Date(bucketStart);
+            
+            // Skip invalid dates to prevent crash
+            if (isNaN(date.getTime())) continue;
+
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
@@ -87,7 +98,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
 
     // Helper for safe date formatting
     const safeFormatTime = (timestamp: number | null) => {
-        if (!timestamp) return '--:--';
+        if (!timestamp || isNaN(timestamp)) return '--:--';
         try {
             return new Date(timestamp).toLocaleTimeString('pt-BR');
         } catch (e) { return '--:--'; }
