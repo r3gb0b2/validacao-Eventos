@@ -1,13 +1,13 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, ValidationConfig, ValidationMode } from '../types';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
 import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, onSnapshot } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, CogIcon } from './Icons';
+import { Firestore, writeBatch, doc, setDoc } from 'firebase/firestore';
+import { CloudDownloadIcon, TableCellsIcon, CogIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -24,6 +24,15 @@ interface AdminViewProps {
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
 type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
+type ValidationMode = 'OFFLINE' | 'ONLINE';
+
+interface ApiEndpoint {
+    id: string;
+    name: string;
+    url: string;
+    token: string;
+    customEventId: string;
+}
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
@@ -32,72 +41,100 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState('');
     const [isSavingSectors, setIsSavingSectors] = useState(false);
-    const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-    // Event Management State
-    const [newEventName, setNewEventName] = useState('');
-    const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
-
-    // Import State
+    // API Import State
     const [importType, setImportType] = useState<ImportType>('tickets');
-    const [importUrl, setImportUrl] = useState('https://public-api.stingressos.com.br/tickets');
-    const [importToken, setImportToken] = useState('');
-    const [importEventId, setImportEventId] = useState('');
+    const [apiUrl, setApiUrl] = useState('https://public-api.stingressos.com.br/tickets');
+    const [apiToken, setApiToken] = useState('');
+    const [apiEventId, setApiEventId] = useState('');
 
-    // Validation Config State
+    // Validation Mode State
     const [validationMode, setValidationMode] = useState<ValidationMode>('OFFLINE');
-    const [onlineUrls, setOnlineUrls] = useState<string[]>(['']);
-    const [onlineToken, setOnlineToken] = useState('');
-    const [onlineEventId, setOnlineEventId] = useState('');
-    const [showOnlineToken, setShowOnlineToken] = useState(false);
+    const [apiEndpoints, setApiEndpoints] = useState<ApiEndpoint[]>([
+        { id: '1', name: 'Principal', url: 'https://public-api.stingressos.com.br/checkins', token: '', customEventId: '' }
+    ]);
+
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         setEditableSectorNames(sectorNames);
     }, [sectorNames]);
 
     useEffect(() => {
-        setRenameEventName(selectedEvent?.name ?? '');
-    }, [selectedEvent]);
+        // Load validation settings if available
+        if (selectedEvent && db) {
+             import('firebase/firestore').then(({ getDoc, doc }) => {
+                 getDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main')).then(snap => {
+                     if (snap.exists()) {
+                         const data = snap.data();
+                         if (data.validation) {
+                             setValidationMode(data.validation.mode || 'OFFLINE');
+                             
+                             if (data.validation.endpoints && Array.isArray(data.validation.endpoints) && data.validation.endpoints.length > 0) {
+                                 setApiEndpoints(data.validation.endpoints);
+                             } else if (data.validation.url) {
+                                 // Migrate legacy single URL to array
+                                 setApiEndpoints([{
+                                     id: Date.now().toString(),
+                                     name: 'API Principal',
+                                     url: data.validation.url,
+                                     token: data.validation.token || '',
+                                     customEventId: ''
+                                 }]);
+                             }
+                         }
+                     }
+                 });
+             });
+        }
+    }, [selectedEvent, db]);
     
     useEffect(() => {
         if (!selectedEvent) {
             setActiveTab('events');
-        } else {
-            // Load config
-             const unsub = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'config'), (snap) => {
-                if (snap.exists()) {
-                    const data = snap.data() as ValidationConfig;
-                    setValidationMode(data.mode || 'OFFLINE');
-                    setOnlineUrls(data.onlineUrls?.length ? data.onlineUrls : ['']);
-                    setOnlineToken(data.onlineToken || '');
-                    setOnlineEventId(data.onlineEventId || '');
-                }
-            });
-            return () => unsub();
         }
-    }, [selectedEvent, db]);
+    }, [selectedEvent]);
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
-        setImportToken(''); 
-        setImportEventId('');
+        setApiToken(''); // Reset token usually
+        setApiEventId('');
         
         switch (type) {
-            case 'tickets': setImportUrl('https://public-api.stingressos.com.br/tickets'); break;
-            case 'participants': setImportUrl('https://public-api.stingressos.com.br/participants'); break;
-            case 'buyers': setImportUrl('https://public-api.stingressos.com.br/buyers'); break;
-            case 'checkins': setImportUrl('https://public-api.stingressos.com.br/checkins'); break;
-            case 'google_sheets': setImportUrl(''); break;
-            default: setImportUrl('');
+            case 'tickets':
+                setApiUrl('https://public-api.stingressos.com.br/tickets');
+                break;
+            case 'participants':
+                setApiUrl('https://public-api.stingressos.com.br/participants');
+                break;
+            case 'buyers':
+                setApiUrl('https://public-api.stingressos.com.br/buyers');
+                break;
+            case 'checkins':
+                setApiUrl('https://public-api.stingressos.com.br/checkins');
+                break;
+            case 'google_sheets':
+                setApiUrl(''); // User must paste link
+                break;
+            default:
+                setApiUrl('');
         }
     };
 
+    // ... analytics code omitted for brevity, unchanged ...
     const analyticsData: AnalyticsData = useMemo(() => {
         const validScans = scanHistory.filter(s => s.status === 'VALID');
         if (validScans.length === 0) {
-            return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
+            return {
+                timeBuckets: [],
+                firstAccess: null,
+                lastAccess: null,
+                peak: { time: '-', count: 0 },
+            };
         }
+
         validScans.sort((a, b) => a.timestamp - b.timestamp);
+
         const firstAccess = validScans[0].timestamp;
         const lastAccess = validScans[validScans.length - 1].timestamp;
 
@@ -108,6 +145,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
             const date = new Date(bucketStart);
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+            
             if (!buckets.has(key)) {
                 const initialCounts = sectorNames.reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
                 buckets.set(key, initialCounts);
@@ -117,10 +155,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
 
         let peak = { time: '-', count: 0 };
+
         const timeBuckets = Array.from(buckets.entries())
             .map(([time, counts]) => {
                 const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-                if (total > peak.count) peak = { time, count: total };
+                if (total > peak.count) {
+                    peak = { time, count: total };
+                }
                 return { time, counts, total };
             })
             .sort((a, b) => a.time.localeCompare(b.time));
@@ -179,15 +220,121 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setEditableSectorNames(editableSectorNames.filter((_, index) => index !== indexToRemove));
     };
     
-    const handleTicketCodeChange = (sector: string, codes: string) => {
-        setTicketCodes(prev => ({ ...prev, [sector]: codes }));
+    // Helper to process CSV Data (reused for File Upload and Google Sheets)
+    const processCsvData = async (csvData: any[]) => {
+        const newSectors = new Set<string>();
+        const ticketsToSave: Ticket[] = [];
+        
+        csvData.forEach((row) => {
+            const normalizedRow: {[key: string]: string} = {};
+            Object.keys(row).forEach(k => {
+                normalizedRow[k.toLowerCase().trim()] = row[k];
+            });
+
+            const code = normalizedRow['code'] || normalizedRow['código'] || normalizedRow['codigo'] || normalizedRow['id'] || normalizedRow['qr'] || normalizedRow['qrcode'] || normalizedRow['ticket'];
+            let sector = normalizedRow['sector'] || normalizedRow['setor'] || normalizedRow['categoria'] || normalizedRow['category'] || 'Geral';
+            const ownerName = normalizedRow['name'] || normalizedRow['nome'] || normalizedRow['cliente'] || normalizedRow['owner'] || '';
+            
+            if (code) {
+                newSectors.add(sector);
+                ticketsToSave.push({
+                    id: String(code).trim(),
+                    sector: String(sector).trim(),
+                    status: 'AVAILABLE',
+                    details: { ownerName: String(ownerName).trim() }
+                });
+            }
+        });
+        return { newSectors, ticketsToSave };
     };
 
-    // --- IMPORT LOGIC (RETAINED) ---
+    const saveImportedData = async (newSectors: Set<string>, ticketsToSave: Ticket[], ticketsToUpdateStatus: any[] = []) => {
+        if (!selectedEvent) return;
+        
+        // Update Sectors
+        if (ticketsToSave.length > 0) {
+            const currentSectorsSet = new Set(sectorNames);
+            let sectorsUpdated = false;
+            newSectors.forEach(s => {
+                if (!currentSectorsSet.has(s)) {
+                    currentSectorsSet.add(s);
+                    sectorsUpdated = true;
+                }
+            });
+
+            if (sectorsUpdated) {
+                const updatedSectorList = Array.from(currentSectorsSet);
+                await onUpdateSectorNames(updatedSectorList);
+                setEditableSectorNames(updatedSectorList);
+            }
+        }
+
+        const BATCH_SIZE = 450;
+        let savedCount = 0;
+
+        // Save Tickets
+        if (ticketsToSave.length > 0) {
+            setLoadingMessage('Salvando ingressos no banco de dados...');
+            const chunks = [];
+            for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
+                chunks.push(ticketsToSave.slice(i, i + BATCH_SIZE));
+            }
+
+            for (const chunk of chunks) {
+                const batch = writeBatch(db);
+                chunk.forEach(ticket => {
+                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', ticket.id);
+                    batch.set(ticketRef, {
+                        sector: ticket.sector,
+                        details: ticket.details,
+                    }, { merge: true });
+                });
+                await batch.commit();
+                savedCount += chunk.length;
+            }
+        }
+        
+        return savedCount;
+    };
+
+    const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        
+        setIsLoading(true);
+        setLoadingMessage('Lendo arquivo...');
+
+        Papa.parse(file, {
+            header: true,
+            skipEmptyLines: true,
+            complete: async (results) => {
+                 try {
+                    const { newSectors, ticketsToSave } = await processCsvData(results.data);
+                    if (ticketsToSave.length === 0) {
+                        alert('Nenhum ingresso identificado no arquivo. Verifique os cabeçalhos (Code, Sector, Name).');
+                    } else {
+                        const count = await saveImportedData(newSectors, ticketsToSave);
+                        alert(`${count} ingressos importados do arquivo com sucesso!`);
+                    }
+                 } catch (err) {
+                     console.error(err);
+                     alert('Erro ao processar arquivo.');
+                 } finally {
+                     setIsLoading(false);
+                     setLoadingMessage('');
+                     if (fileInputRef.current) fileInputRef.current.value = '';
+                 }
+            },
+            error: (err) => {
+                alert('Erro ao ler CSV: ' + err.message);
+                setIsLoading(false);
+            }
+        });
+    };
+
     const handleImportFromApi = async () => {
         if (!selectedEvent) return;
-        if (!importUrl.trim()) { alert('A URL/Link é obrigatória.'); return; }
-
+        
         setIsLoading(true);
         setLoadingMessage('Iniciando...');
         
@@ -197,335 +344,327 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ticketsToSave: Ticket[] = [];
             const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
 
+            // --- GOOGLE SHEETS ---
             if (importType === 'google_sheets') {
+                 if (!apiUrl.trim()) { throw new Error("Link da planilha é obrigatório"); }
                  setLoadingMessage('Baixando planilha...');
-                 let fetchUrl = importUrl;
+                 
+                 let fetchUrl = apiUrl;
                  if (fetchUrl.includes('docs.google.com/spreadsheets') && !fetchUrl.includes('output=csv')) {
-                     if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
+                     if (fetchUrl.includes('/edit')) {
+                         fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
+                     }
                  }
+
                  const response = await fetch(fetchUrl);
-                 if (!response.ok) throw new Error('Falha ao baixar planilha.');
+                 if (!response.ok) throw new Error('Falha ao baixar planilha. Verifique se o link é público.');
                  const csvText = await response.text();
                  const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-                 const rows = parsed.data as any[];
-                 setLoadingMessage(`Processando ${rows.length} linhas...`);
-
-                 rows.forEach((row) => {
-                     const normalizedRow: {[key: string]: string} = {};
-                     Object.keys(row).forEach(k => { normalizedRow[k.toLowerCase().trim()] = row[k]; });
-                     const code = normalizedRow['code'] || normalizedRow['código'] || normalizedRow['codigo'] || normalizedRow['id'] || normalizedRow['qr'] || normalizedRow['qrcode'];
-                     let sector = normalizedRow['sector'] || normalizedRow['setor'] || normalizedRow['categoria'] || 'Geral';
-                     const ownerName = normalizedRow['name'] || normalizedRow['nome'] || normalizedRow['cliente'] || '';
-                     if (code) {
-                         newSectors.add(sector);
-                         ticketsToSave.push({ id: String(code).trim(), sector: String(sector).trim(), status: 'AVAILABLE', details: { ownerName: String(ownerName).trim() } });
-                     }
-                 });
-            } else {
-                // ... Existing API Logic (Simplified for brevity, assuming it was preserved from previous prompt or context)
-                // For this specific request about Google Sheets, I am keeping the Google Sheets specific part detailed above
-                // and ensuring standard API logic is robust
-                 const urlObj = new URL(importUrl);
-                 if (importEventId && !urlObj.searchParams.has('event_id')) urlObj.searchParams.set('event_id', importEventId);
-                 urlObj.searchParams.set('per_page', '200');
-                 urlObj.searchParams.set('limit', '200');
-                 if (!urlObj.searchParams.has('page')) urlObj.searchParams.set('page', '1');
-
-                 const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-                 if (importToken.trim()) headers['Authorization'] = `Bearer ${importToken.trim()}`;
-
-                 let nextUrl: string | null = urlObj.toString();
-                 let pageCount = 0;
-                 const seenIds = new Set<string>();
-
-                 while (nextUrl && pageCount < 200) { // Cap at 200 pages safety
-                     pageCount++;
-                     setLoadingMessage(`Baixando pág ${pageCount} (${allItems.length} itens)...`);
-                     if (nextUrl.startsWith('http://') && !nextUrl.startsWith('http://localhost')) nextUrl = nextUrl.replace('http://', 'https://');
-                     
-                     const response = await fetch(nextUrl, { headers });
-                     if (!response.ok) break;
-                     const json = await response.json();
-                     
-                     // Extractor
-                     let pageItems: any[] = [];
-                     let meta: any = json;
-                     if (Array.isArray(json)) pageItems = json;
-                     else if (json.data && Array.isArray(json.data)) { pageItems = json.data; meta = json; }
-                     else if (json.tickets) pageItems = json.tickets;
-                     
-                     if (pageItems.length === 0) break;
-                     
-                     pageItems.forEach((item: any) => {
-                         const id = item.id || item.code || item.qr_code;
-                         if (id && !seenIds.has(String(id))) {
-                             seenIds.add(String(id));
-                             allItems.push(item);
-                         }
-                     });
-
-                     // Pagination
-                     const hasNext = meta.next_page_url || (meta.links && meta.links.next);
-                     if (hasNext) {
-                         const tempUrl = new URL(hasNext);
-                         if (importEventId) tempUrl.searchParams.set('event_id', importEventId);
-                         tempUrl.searchParams.set('per_page', '200');
-                         nextUrl = tempUrl.toString();
-                     } else if (pageItems.length >= 15) {
-                         // Speculative pagination
-                         const cur = new URL(nextUrl);
-                         const p = parseInt(cur.searchParams.get('page') || String(pageCount));
-                         cur.searchParams.set('page', String(p + 1));
-                         nextUrl = cur.toString();
-                     } else {
-                         nextUrl = null;
-                     }
-                 }
                  
-                 // Process API Items
-                 allItems.forEach((item: any) => {
-                    const code = item.code || item.qr_code || item.ticket_code || item.id;
-                    let sector = item.sector?.name || item.sector || item.section || 'Geral';
-                    const name = item.owner_name || item.name || item.participant_name || '';
-                    if (code) {
-                        newSectors.add(String(sector));
-                        ticketsToSave.push({ id: String(code), sector: String(sector), status: 'AVAILABLE', details: { ownerName: name } });
+                 const { newSectors: ns, ticketsToSave: ts } = await processCsvData(parsed.data);
+                 if (ts.length === 0) throw new Error("Nenhum dado válido encontrado na planilha.");
+                 
+                 const count = await saveImportedData(ns, ts);
+                 alert(`Importação concluída! ${count} ingressos salvos.`);
+                 setIsLoading(false);
+                 return;
+            } 
+            
+            // --- STANDARD API IMPORTS ---
+            const urlObj = new URL(apiUrl);
+            if (apiEventId && !urlObj.searchParams.has('event_id')) urlObj.searchParams.set('event_id', apiEventId);
+            urlObj.searchParams.set('per_page', '500');
+            
+            let nextUrl: string | null = urlObj.toString();
+            let pageCount = 0;
+            const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+            if (apiToken.trim()) headers['Authorization'] = `Bearer ${apiToken.trim()}`;
+            const seenIds = new Set<string>();
+
+            while (nextUrl && pageCount < 5000) {
+                pageCount++;
+                setLoadingMessage(`Baixando pág ${pageCount} (Itens: ${allItems.length})...`);
+                
+                if (nextUrl.startsWith('http://')) nextUrl = nextUrl.replace('http://', 'https://');
+                const res = await fetch(nextUrl, { headers });
+                if (!res.ok) break;
+                const json = await res.json();
+                
+                let items: any[] = [];
+                if (Array.isArray(json)) items = json;
+                else if (json.data && Array.isArray(json.data)) items = json.data;
+                else if (json.tickets) items = json.tickets;
+                
+                if (items.length === 0) break;
+                
+                let newCount = 0;
+                items.forEach(item => {
+                    const id = item.id || item.code || item.ticket_code;
+                    if (id && !seenIds.has(String(id))) {
+                        seenIds.add(String(id));
+                        allItems.push(item);
+                        newCount++;
                     }
-                 });
-            }
+                });
+                if (newCount === 0 && allItems.length > 0) break;
 
-            // Save
-            if (ticketsToSave.length > 0) {
-                setLoadingMessage('Salvando...');
-                // Update sectors
-                const currentSectors = new Set(sectorNames);
-                let updated = false;
-                newSectors.forEach(s => { if (!currentSectors.has(s)) { currentSectors.add(s); updated = true; }});
-                if (updated) await onUpdateSectorNames(Array.from(currentSectors));
-
-                // Batch save
-                const BATCH = 450;
-                for (let i = 0; i < ticketsToSave.length; i += BATCH) {
-                    const batch = writeBatch(db);
-                    ticketsToSave.slice(i, i+BATCH).forEach(t => {
-                        batch.set(doc(db, 'events', selectedEvent!.id, 'tickets', t.id), { sector: t.sector, details: t.details }, { merge: true });
-                    });
-                    await batch.commit();
+                nextUrl = json.next_page_url || (json.links?.next) || (json.meta?.next_page_url);
+                if (nextUrl) {
+                     const u = new URL(nextUrl);
+                     if (apiEventId) u.searchParams.set('event_id', apiEventId);
+                     u.searchParams.set('per_page', '500');
+                     nextUrl = u.toString();
                 }
-                alert(`${ticketsToSave.length} registros importados!`);
-            } else {
-                alert('Nenhum registro encontrado.');
             }
+            
+            if (allItems.length === 0) throw new Error("Nenhum dado retornado pela API.");
+
+            allItems.forEach(item => {
+                 const code = item.code || item.qr_code || item.ticket_code || item.id;
+                 if (!code) return;
+                 
+                 if (importType === 'checkins' || apiUrl.includes('checkins')) {
+                     const ts = item.created_at || item.checked_in_at;
+                     ticketsToUpdateStatus.push({ id: String(code), usedAt: ts ? new Date(ts).getTime() : Date.now() });
+                 } else {
+                     let sector = item.sector || item.sector_name || item.category || 'Geral';
+                     if (typeof sector === 'object') sector = sector.name;
+                     const name = item.owner_name || item.name || '';
+                     newSectors.add(String(sector));
+                     ticketsToSave.push({ id: String(code), sector: String(sector), status: 'AVAILABLE', details: { ownerName: String(name) } });
+                 }
+            });
+
+            const count = await saveImportedData(newSectors, ticketsToSave, ticketsToUpdateStatus);
+            alert(`Sucesso! ${count} registros processados.`);
 
         } catch (error) {
-            console.error(error);
-            alert('Erro na importação.');
+            console.error('Import Error:', error);
+            alert(`Falha na importação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
         } finally {
             setIsLoading(false);
             setLoadingMessage('');
         }
     };
+    
+    // --- Multi-Endpoint Validation Config Helpers ---
+    const handleAddEndpoint = () => {
+        setApiEndpoints([...apiEndpoints, { id: Date.now().toString(), name: '', url: '', token: '', customEventId: '' }]);
+    };
 
-    const handleSaveConfig = async () => {
+    const handleRemoveEndpoint = (id: string) => {
+        setApiEndpoints(apiEndpoints.filter(ep => ep.id !== id));
+    };
+
+    const handleEndpointChange = (id: string, field: keyof ApiEndpoint, value: string) => {
+        setApiEndpoints(apiEndpoints.map(ep => ep.id === id ? { ...ep, [field]: value } : ep));
+    };
+
+    const handleSaveValidationSettings = async () => {
         if (!selectedEvent) return;
-        const validUrls = onlineUrls.filter(u => u.trim() !== '');
-        if (validationMode !== 'OFFLINE' && validUrls.length === 0) {
-             alert('Adicione pelo menos uma URL para o modo Online.');
-             return;
-        }
-        setIsLoading(true);
+        setIsSavingSectors(true);
         try {
-            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'config'), {
-                mode: validationMode,
-                onlineUrls: validUrls,
-                onlineToken,
-                onlineEventId
-            });
-            alert('Configurações salvas!');
+            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), {
+                validation: {
+                    mode: validationMode,
+                    endpoints: apiEndpoints
+                }
+            }, { merge: true });
+            alert('Configurações de validação salvas!');
         } catch (e) {
+            console.error(e);
             alert('Erro ao salvar configurações.');
         } finally {
-            setIsLoading(false);
+            setIsSavingSectors(false);
         }
     };
 
-    const handleSaveTickets = async () => {
-        if (!selectedEvent) return;
-        setIsLoading(true);
-        try {
-            const batch = writeBatch(db);
-            for (const sector in ticketCodes) {
-                if (ticketCodes[sector].trim()) {
-                    ticketCodes[sector].split('\n').map(c => c.trim()).filter(Boolean).forEach(code => {
-                        batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { 
-                            sector, status: 'AVAILABLE', usedAt: null, details: {}
-                        });
-                    });
-                }
-            }
-            await batch.commit();
-            alert('Ingressos salvos!');
-            setTicketCodes({});
-        } catch (error) {
-            alert('Erro ao salvar ingressos.');
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    const handleDownloadReport = () => {
-        if (!selectedEvent) return;
-        setIsGeneratingPdf(true);
-        try {
-            generateEventReport(selectedEvent.name, allTickets, scanHistory, sectorNames);
-        } catch (error) { alert("Erro ao gerar PDF."); } finally { setIsGeneratingPdf(false); }
-    };
+    // Helper for rendering
+    const NoEventSelectedMessage = () => <div className="p-8 text-center text-gray-400">Selecione um evento.</div>;
 
-    // Events CRUD handlers... (retained but omitted for brevity if not changed)
-    const handleCreateEvent = async () => { /*...*/ }; 
-    const handleRenameEvent = async () => { /*...*/ };
-    const handleToggleEventVisibility = async (id: string, val: boolean) => { /*...*/ };
-    const handleDeleteEvent = async (id: string, name: string) => { /*...*/ };
-
-    const NoEventSelectedMessage = () => (
-        <div className="text-center text-gray-400 py-10 bg-gray-800 rounded-lg">
-            <p>Selecione um evento.</p>
-        </div>
-    );
-  
     const renderContent = () => {
         if (!selectedEvent && activeTab !== 'events') return <NoEventSelectedMessage />;
         
         switch (activeTab) {
-            case 'stats': return (
-                    <div className="space-y-6">
-                        <div className="flex justify-end">
-                             <button onClick={handleDownloadReport} disabled={isGeneratingPdf} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg">
-                                {isGeneratingPdf ? 'Gerando...' : 'Baixar Relatório PDF'}
-                            </button>
-                        </div>
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><Stats allTickets={allTickets} sectorNames={sectorNames} /><PieChart data={pieChartData} title="Distribuição"/></div>
-                        <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
-                    </div>
-                );
-            case 'settings': return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-6">
-                            {/* SECTOR SETTINGS */}
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <h3 className="text-lg font-semibold mb-3">Configurar Setores</h3>
-                                 <div className="space-y-2 mb-4">
-                                    {editableSectorNames.map((name, index) => (
-                                        <div key={index} className="flex items-center space-x-2">
-                                        <input type="text" value={name} onChange={(e) => handleSectorNameChange(index, e.target.value)} className="flex-grow bg-gray-700 p-2 rounded border border-gray-600" />
-                                        <button onClick={() => handleRemoveSector(index)} className="bg-red-600 px-3 rounded text-white font-bold">&times;</button>
-                                        </div>
-                                    ))}
-                                </div>
-                                <button onClick={handleAddSector} className="w-full bg-gray-600 py-2 rounded mb-2">Adicionar Setor</button>
-                                <button onClick={handleSaveSectorNames} className="w-full bg-orange-600 py-2 rounded font-bold">Salvar Setores</button>
-                            </div>
-
-                            {/* VALIDATION MODE CONFIG */}
-                            <div className="bg-gray-800 p-4 rounded-lg border border-blue-500/50">
-                                <h3 className="text-lg font-semibold mb-3 flex items-center text-blue-400">
-                                    <CogIcon className="w-5 h-5 mr-2" />
-                                    Modo de Validação
-                                </h3>
-                                <div className="space-y-3">
-                                    <div className="flex space-x-2 bg-gray-700 p-1 rounded">
-                                        {(['OFFLINE', 'ONLINE_API', 'ONLINE_SHEETS'] as const).map(m => (
-                                            <button 
-                                                key={m} 
-                                                onClick={() => setValidationMode(m)}
-                                                className={`flex-1 py-2 text-xs font-bold rounded ${validationMode === m ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                                            >
-                                                {m === 'OFFLINE' ? 'Offline (DB)' : m === 'ONLINE_API' ? 'API Online' : 'Planilha Online'}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    
-                                    {validationMode !== 'OFFLINE' && (
-                                        <div className="bg-gray-700/50 p-3 rounded space-y-3">
-                                            <div>
-                                                <label className="text-xs text-gray-400">
-                                                    {validationMode === 'ONLINE_SHEETS' ? 'Link Público CSV (Google Sheets)' : 'URLs da API (Check-ins)'}
-                                                </label>
-                                                {onlineUrls.map((url, i) => (
-                                                    <div key={i} className="flex mb-1">
-                                                        <input 
-                                                            type="text" 
-                                                            value={url} 
-                                                            onChange={(e) => {const u = [...onlineUrls]; u[i] = e.target.value; setOnlineUrls(u);}}
-                                                            placeholder={validationMode === 'ONLINE_SHEETS' ? 'https://docs.google.com/.../pub?output=csv' : 'https://api.site.com/v1'}
-                                                            className="flex-grow bg-gray-900 border border-gray-600 p-2 rounded text-sm"
-                                                        />
-                                                        <button onClick={() => {const u = [...onlineUrls]; u.splice(i, 1); setOnlineUrls(u);}} className="ml-1 px-2 bg-red-600 rounded text-white">&times;</button>
-                                                    </div>
-                                                ))}
-                                                <button onClick={() => setOnlineUrls([...onlineUrls, ''])} className="text-xs text-blue-300 underline">+ Adicionar URL</button>
-                                            </div>
-
-                                            {validationMode === 'ONLINE_API' && (
-                                                <div className="grid grid-cols-2 gap-2">
-                                                    <div className="relative">
-                                                        <label className="text-xs text-gray-400">Token (Senha)</label>
-                                                        <input type={showOnlineToken ? "text" : "password"} value={onlineToken} onChange={(e) => setOnlineToken(e.target.value)} className="w-full bg-gray-900 border border-gray-600 p-2 rounded text-sm" />
-                                                        <button onClick={() => setShowOnlineToken(!showOnlineToken)} className="absolute right-2 top-6 text-gray-400">{showOnlineToken ? <EyeSlashIcon className="w-4 h-4"/> : <EyeIcon className="w-4 h-4"/>}</button>
-                                                    </div>
-                                                    <div>
-                                                        <label className="text-xs text-gray-400">ID Evento</label>
-                                                        <input type="text" value={onlineEventId} onChange={(e) => setOnlineEventId(e.target.value)} className="w-full bg-gray-900 border border-gray-600 p-2 rounded text-sm" />
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    <button onClick={handleSaveConfig} disabled={isLoading} className="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold">Salvar Configuração</button>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div className="space-y-6">
-                             {/* IMPORT SECTION */}
-                            <div className="bg-gray-800 p-4 rounded-lg border border-orange-500/30">
-                                <h3 className="text-lg font-semibold mb-3 text-orange-400 flex items-center">
-                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
-                                    Importar Dados (Modo Offline)
-                                </h3>
-                                <div className="space-y-3">
-                                    <select value={importType} onChange={(e) => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2">
-                                        <option value="tickets">API Tickets</option>
-                                        <option value="google_sheets">Google Sheets (CSV)</option>
-                                        <option value="custom">API Custom</option>
-                                    </select>
-                                    <input type="text" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} placeholder="URL" className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
-                                    <button onClick={handleImportFromApi} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500">
-                                        {isLoading ? loadingMessage : 'Importar para Banco de Dados'}
-                                    </button>
-                                </div>
-                            </div>
-                            {/* MANUAL ADD */}
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <h3 className="text-lg font-semibold mb-3">Adicionar Manualmente</h3>
-                                {sectorNames.map((sector) => (
-                                    <textarea key={sector} value={ticketCodes[sector] || ''} onChange={(e) => handleTicketCodeChange(sector, e.target.value)} placeholder={`Códigos ${sector}`} rows={2} className="w-full bg-gray-700 p-2 mb-2 rounded border border-gray-600" />
-                                ))}
-                                <button onClick={handleSaveTickets} disabled={isLoading} className="w-full bg-blue-600 py-2 rounded font-bold">Salvar</button>
-                            </div>
-                        </div>
-                    </div>
-                );
+            case 'stats': return <Stats allTickets={allTickets} sectorNames={sectorNames} />; 
             case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
             case 'events': return (
-                <div className="grid grid-cols-1 gap-6">
-                    <div className="bg-gray-800 p-4 rounded-lg"><input value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} placeholder="Nome do Evento" className="bg-gray-700 p-2 rounded mr-2 text-white"/> <button onClick={() => { /* Logic to add event */ }} className="bg-orange-600 px-4 py-2 rounded font-bold">Criar</button></div>
-                    <div className="bg-gray-800 p-4 rounded-lg space-y-2">
-                        {events.map(e => <div key={e.id} className="p-2 bg-gray-700 rounded text-white flex justify-between"><span>{e.name}</span> <button onClick={()=> {/* Select */}} className="text-xs bg-blue-600 px-2 rounded">Selecionar</button></div>)}
+                <div className="bg-gray-800 p-4 rounded">
+                    <h3 className="text-lg font-bold mb-4">Gerenciar Eventos</h3>
+                    <div className="space-y-4">
+                        {events.map(e => (
+                            <div key={e.id} className="flex justify-between bg-gray-700 p-2 rounded">
+                                <span>{e.name}</span>
+                                <span className="text-xs text-gray-400">{e.isHidden ? '(Oculto)' : ''}</span>
+                            </div>
+                        ))}
                     </div>
                 </div>
             );
+            case 'settings':
+                if (!selectedEvent) return <NoEventSelectedMessage />;
+                return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {/* LEFT COLUMN: Sectors & Validation Mode */}
+                        <div className="space-y-6">
+                            <div className="bg-gray-800 p-4 rounded-lg">
+                                <h3 className="text-lg font-semibold mb-3">Configurar Setores</h3>
+                                <div className="space-y-2 mb-4">
+                                    {editableSectorNames.map((name, index) => (
+                                        <div key={index} className="flex gap-2">
+                                            <input className="flex-1 bg-gray-700 p-2 rounded border border-gray-600" value={name} onChange={e => handleSectorNameChange(index, e.target.value)} />
+                                            <button onClick={() => handleRemoveSector(index)} className="bg-red-600 px-3 rounded text-white">&times;</button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={handleAddSector} className="flex-1 bg-gray-600 p-2 rounded hover:bg-gray-500">Add Setor</button>
+                                    <button onClick={handleSaveSectorNames} className="flex-1 bg-orange-600 p-2 rounded hover:bg-orange-500 font-bold">Salvar</button>
+                                </div>
+                            </div>
+
+                            <div className="bg-gray-800 p-4 rounded-lg border border-blue-500/30">
+                                <h3 className="text-lg font-semibold mb-3 text-blue-400 flex items-center">
+                                    <CogIcon className="w-5 h-5 mr-2" />
+                                    Modo de Operação
+                                </h3>
+                                <div className="flex bg-gray-700 rounded p-1 mb-4">
+                                    <button 
+                                        onClick={() => setValidationMode('OFFLINE')}
+                                        className={`flex-1 py-2 rounded transition-colors ${validationMode === 'OFFLINE' ? 'bg-blue-600 text-white font-bold' : 'text-gray-400 hover:text-white'}`}
+                                    >
+                                        OFFLINE (Local)
+                                    </button>
+                                    <button 
+                                        onClick={() => setValidationMode('ONLINE')}
+                                        className={`flex-1 py-2 rounded transition-colors ${validationMode === 'ONLINE' ? 'bg-green-600 text-white font-bold' : 'text-gray-400 hover:text-white'}`}
+                                    >
+                                        ONLINE (API)
+                                    </button>
+                                </div>
+                                
+                                {validationMode === 'ONLINE' && (
+                                    <div className="space-y-3 animate-fade-in">
+                                        <p className="text-xs text-gray-300 mb-2">Configure abaixo as APIs onde o sistema buscará os ingressos. Ele tentará na ordem da lista até encontrar.</p>
+                                        
+                                        {apiEndpoints.map((ep, idx) => (
+                                            <div key={ep.id} className="p-3 bg-gray-700/50 border border-gray-600 rounded relative">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="text-xs font-bold text-blue-300">API #{idx + 1}</span>
+                                                    <button onClick={() => handleRemoveEndpoint(ep.id)} className="text-xs text-red-400 hover:text-red-300">Remover</button>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                                     <input 
+                                                        type="text" 
+                                                        placeholder="Nome (ex: Sympla)"
+                                                        value={ep.name}
+                                                        onChange={e => handleEndpointChange(ep.id, 'name', e.target.value)}
+                                                        className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs"
+                                                    />
+                                                    <input 
+                                                        type="text" 
+                                                        placeholder="ID Evento (Numérico)"
+                                                        value={ep.customEventId}
+                                                        onChange={e => handleEndpointChange(ep.id, 'customEventId', e.target.value)}
+                                                        className={`w-full bg-gray-800 p-1.5 rounded border text-xs ${!ep.customEventId ? 'border-red-500/50 bg-red-900/10' : 'border-gray-600'}`}
+                                                    />
+                                                </div>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="URL (https://...)"
+                                                    value={ep.url}
+                                                    onChange={e => handleEndpointChange(ep.id, 'url', e.target.value)}
+                                                    className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs mb-2"
+                                                />
+                                                <input 
+                                                    type="password" 
+                                                    placeholder="Token (Bearer)"
+                                                    value={ep.token}
+                                                    onChange={e => handleEndpointChange(ep.id, 'token', e.target.value)}
+                                                    className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs"
+                                                />
+                                                {!ep.customEventId && <p className="text-[10px] text-red-400 mt-1">* ID do Evento é obrigatório para evitar erro 404</p>}
+                                            </div>
+                                        ))}
+
+                                        <button 
+                                            onClick={handleAddEndpoint}
+                                            className="w-full py-2 border border-dashed border-gray-500 text-gray-400 text-sm rounded hover:border-gray-400 hover:text-white"
+                                        >
+                                            + Adicionar Outra API
+                                        </button>
+                                    </div>
+                                )}
+                                
+                                <button 
+                                    onClick={handleSaveValidationSettings}
+                                    className="w-full mt-3 bg-blue-700 hover:bg-blue-600 py-2 rounded font-bold text-sm"
+                                >
+                                    Salvar Configuração de Validação
+                                </button>
+                            </div>
+                        </div>
+                        
+                        {/* RIGHT COLUMN: Imports */}
+                        <div className="space-y-6">
+                             <div className="bg-gray-800 p-4 rounded-lg border border-orange-500/30">
+                                <h3 className="text-lg font-semibold mb-3 text-orange-400 flex items-center">
+                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                                    Importar Dados
+                                </h3>
+                                
+                                <div className="mb-4">
+                                    <label className="text-xs text-gray-400 block mb-1">Método de Importação</label>
+                                    <select value={importType} onChange={e => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 mb-2">
+                                        <option value="tickets">API (Tickets)</option>
+                                        <option value="checkins">API (Checkins)</option>
+                                        <option value="google_sheets">Google Sheets (Link)</option>
+                                        <option value="custom">Upload CSV Local</option>
+                                    </select>
+                                    
+                                    {importType === 'custom' ? (
+                                        <div className="text-center p-4 border-2 border-dashed border-gray-600 rounded-lg bg-gray-700/30">
+                                            <input 
+                                                type="file" 
+                                                accept=".csv" 
+                                                ref={fileInputRef} 
+                                                style={{display: 'none'}} 
+                                                onChange={handleFileUpload} 
+                                            />
+                                            <button 
+                                                onClick={() => fileInputRef.current?.click()}
+                                                className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold flex items-center justify-center mx-auto"
+                                            >
+                                                <TableCellsIcon className="w-5 h-5 mr-2"/>
+                                                Selecionar Arquivo CSV
+                                            </button>
+                                            <p className="text-xs text-gray-400 mt-2">Colunas: code, sector, name</p>
+                                        </div>
+                                    ) : (
+                                        <>
+                                           <input 
+                                                type="text" 
+                                                value={apiUrl} 
+                                                onChange={e => setApiUrl(e.target.value)} 
+                                                placeholder={importType === 'google_sheets' ? "Cole o link público do CSV aqui" : "URL da API"}
+                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 mb-2 text-sm"
+                                           />
+                                           {importType !== 'google_sheets' && (
+                                               <div className="flex gap-2 mb-2">
+                                                    <input type="password" value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder="Token (opcional)" className="flex-1 bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
+                                                    <input type="text" value={apiEventId} onChange={e => setApiEventId(e.target.value)} placeholder="ID Evento (opc)" className="w-24 bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
+                                               </div>
+                                           )}
+                                           <button onClick={handleImportFromApi} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:opacity-50">
+                                               {isLoading ? loadingMessage : 'Iniciar Importação'}
+                                           </button>
+                                        </>
+                                    )}
+                                </div>
+                             </div>
+                        </div>
+                    </div>
+                );
             default: return null;
         }
     };
@@ -533,8 +672,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     return (
         <div className="w-full max-w-6xl mx-auto">
             <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-2">
-                {['stats', 'settings', 'history', 'events'].map(t => (
-                    <button key={t} onClick={() => setActiveTab(t as any)} className={`px-4 py-2 rounded font-bold capitalize ${activeTab === t ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>{t}</button>
+                {['stats', 'settings', 'history', 'events'].map(tab => (
+                    <button key={tab} onClick={() => setActiveTab(tab as any)} className={`px-4 py-2 rounded font-bold capitalize ${activeTab === tab ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>
+                        {tab === 'stats' ? 'Dashboard' : tab === 'settings' ? 'Configurações' : tab === 'history' ? 'Histórico' : 'Eventos'}
+                    </button>
                 ))}
             </div>
             {renderContent()}
