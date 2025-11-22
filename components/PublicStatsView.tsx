@@ -85,6 +85,14 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         })).filter(item => item.value > 0);
     }, [allTickets, sectorNames, isLoading]);
 
+    // Helper for safe date formatting
+    const safeFormatTime = (timestamp: number | null) => {
+        if (!timestamp) return '--:--';
+        try {
+            return new Date(timestamp).toLocaleTimeString('pt-BR');
+        } catch (e) { return '--:--'; }
+    };
+
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8">
             <div className="w-full max-w-6xl mx-auto space-y-6">
@@ -145,13 +153,13 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
                                     <p className="text-2xl font-bold text-green-400">
-                                        {analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}
+                                        {safeFormatTime(analyticsData.firstAccess)}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
                                     <p className="text-2xl font-bold text-red-400">
-                                        {analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}
+                                        {safeFormatTime(analyticsData.lastAccess)}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">

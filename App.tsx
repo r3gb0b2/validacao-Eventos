@@ -34,6 +34,7 @@ const App: React.FC = () => {
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); // New state to track if data is ready
+    const [isCheckingUrl, setIsCheckingUrl] = useState(true); // New state to prevent flashing login screen
     
     // New state for Sector Selection Flow
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
@@ -89,6 +90,7 @@ const App: React.FC = () => {
     useEffect(() => {
         const checkUrlParams = async () => {
             if (!db) return;
+            
             const params = new URLSearchParams(window.location.search);
             const mode = params.get('mode');
             const eventIdParam = params.get('eventId');
@@ -111,6 +113,9 @@ const App: React.FC = () => {
                     console.error("Error fetching event from URL", e);
                 }
             }
+            
+            // Allow the app to render the view
+            setIsCheckingUrl(false);
         };
 
         if (db && firebaseStatus === 'success') {
@@ -549,8 +554,8 @@ const App: React.FC = () => {
         }
     }, [events, selectedEvent]);
 
-    if (!db || firebaseStatus === 'loading') {
-        return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white text-2xl">Conectando ao banco de dados...</div>;
+    if (!db || firebaseStatus === 'loading' || isCheckingUrl) {
+        return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white text-2xl animate-pulse">Carregando...</div>;
     }
 
     if (firebaseStatus === 'error') {
