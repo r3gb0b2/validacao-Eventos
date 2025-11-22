@@ -268,28 +268,41 @@ const App: React.FC = () => {
             
             const endpoints = validationConfig.endpoints.length > 0 
                 ? validationConfig.endpoints 
-                : [{ url: '', token: '' }]; // Should not happen if config is right, but safeguards loop
+                : [{ url: '', token: '' }]; 
 
             let resultStatus: ScanStatus | null = null;
             let resultMessage = '';
             let resultSector = 'API';
             let found = false;
+            let networkErrors = 0;
 
             // Loop through configured APIs
             for (const api of endpoints) {
                 if (!api.url) continue;
                 
                 try {
-                    // Use custom ID if present in API config, else local ID
                     const payloadEventId = api.customEventId || eventId;
+                    // Try to parse to int if possible as many APIs require int for IDs, but fallback to original string.
+                    const finalEventId = /^\d+$/.test(String(payloadEventId)) ? parseInt(String(payloadEventId), 10) : payloadEventId;
 
                     const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
                     if (api.token) headers['Authorization'] = `Bearer ${api.token}`;
 
+                    // Send strict and loose parameters to satisfy different API requirements (Laravel, Node, etc)
+                    const body = JSON.stringify({ 
+                        code: ticketId, 
+                        qr_code: ticketId, 
+                        ticket_code: ticketId,
+                        uuid: ticketId,
+                        event_id: finalEventId 
+                    });
+
+                    console.log(`[Online Scan] Checking ${api.name || api.url}...`, { event_id: finalEventId, code: ticketId });
+
                     const response = await fetch(api.url, {
                         method: 'POST',
                         headers,
-                        body: JSON.stringify({ code: ticketId, event_id: payloadEventId }) 
+                        body 
                     });
 
                     // If 404, it means not found on THIS api. Continue to next.
@@ -301,9 +314,9 @@ const App: React.FC = () => {
                     found = true; 
                     const json = await response.json().catch(() => ({}));
                     
-                    // Detect sector
-                    if (json.sector) resultSector = json.sector;
-                    else if (json.data && json.data.sector) resultSector = json.data.sector;
+                    // Detect sector - handle nested data structures common in APIs
+                    if (json.sector) resultSector = typeof json.sector === 'object' ? json.sector.name : json.sector;
+                    else if (json.data && json.data.sector) resultSector = typeof json.data.sector === 'object' ? json.data.sector.name : json.data.sector;
                     else if (api.name) resultSector = api.name; // Fallback to identifying via API name
 
                     if (response.ok) {
@@ -330,15 +343,19 @@ const App: React.FC = () => {
 
                 } catch (err) {
                     console.error(`API Error on ${api.url}`, err);
-                    // If network error on one API, try next? 
-                    // Yes, continue loop in case redundancy or other platform works.
+                    networkErrors++;
+                    // Continue loop in case redundancy or other platform works.
                 }
             }
 
             if (!found) {
                  // If we looped through all and found nothing (or all were 404)
-                 showScanResult('INVALID', `Ingresso não encontrado (API).`);
-                 await logScan(ticketId, 'INVALID', 'Desconhecido');
+                 if (networkErrors === endpoints.length) {
+                     showScanResult('ERROR', 'Erro de conexão com a API.');
+                 } else {
+                     showScanResult('INVALID', `Ingresso não encontrado (API).`);
+                     await logScan(ticketId, 'INVALID', 'Desconhecido');
+                 }
                  return;
             }
 
