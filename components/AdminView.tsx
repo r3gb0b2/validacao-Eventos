@@ -6,8 +6,8 @@ import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon } from './Icons';
+import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
+import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -24,6 +24,14 @@ interface AdminViewProps {
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
 type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
+
+interface ImportPreset {
+    id?: string;
+    name: string;
+    url: string;
+    token: string;
+    eventId: string;
+}
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
@@ -43,6 +51,77 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiUrl, setApiUrl] = useState('https://public-api.stingressos.com.br/tickets');
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
+    const [showImportToken, setShowImportToken] = useState(false);
+
+    // Presets State
+    const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
+    const [selectedPresetId, setSelectedPresetId] = useState<string>('');
+
+    // Online Mode State (Multi-API)
+    const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
+    const [onlineApiEndpoints, setOnlineApiEndpoints] = useState<{ url: string, token: string, eventId: string }[]>([{ url: '', token: '', eventId: '' }]);
+    const [onlineSheetUrl, setOnlineSheetUrl] = useState('');
+    const [visibleTokens, setVisibleTokens] = useState<{ [key: number]: boolean }>({});
+
+
+    // Load validation settings (Online Mode)
+    useEffect(() => {
+        if (!selectedEvent) return;
+        const loadSettings = async () => {
+            const docRef = doc(db, 'events', selectedEvent.id, 'settings', 'validation');
+            const snap = await getDoc(docRef);
+            if (snap.exists()) {
+                const data = snap.data();
+                if (data.mode) setValidationMode(data.mode);
+                if (data.apiEndpoints && Array.isArray(data.apiEndpoints)) setOnlineApiEndpoints(data.apiEndpoints);
+                // Migrate old single endpoint to array if needed
+                else if (data.apiUrl) setOnlineApiEndpoints([{ url: data.apiUrl, token: data.apiToken || '', eventId: data.apiEventId || '' }]);
+                
+                if (data.sheetUrl) setOnlineSheetUrl(data.sheetUrl);
+            }
+        };
+        loadSettings();
+    }, [db, selectedEvent]);
+    
+    // Load import presets
+    useEffect(() => {
+        const loadPresets = async () => {
+            try {
+                const docRef = doc(db, 'settings', 'import_presets');
+                const snap = await getDoc(docRef);
+                if (snap.exists() && snap.data().presets) {
+                    setImportPresets(snap.data().presets);
+                }
+            } catch (e) {
+                console.error("Failed to load presets", e);
+            }
+        };
+        loadPresets();
+    }, [db]);
+
+
+    // Load saved import credentials (offline import) when event is selected
+    useEffect(() => {
+        if (!selectedEvent) return;
+        const loadImportSettings = async () => {
+            try {
+                // Reset first to avoid showing previous event's data
+                setApiToken('');
+                setApiEventId('');
+
+                const docRef = doc(db, 'events', selectedEvent.id, 'settings', 'import');
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data();
+                    if (data.token) setApiToken(data.token);
+                    if (data.eventId) setApiEventId(data.eventId);
+                }
+            } catch (error) {
+                console.error("Failed to load import settings:", error);
+            }
+        };
+        loadImportSettings();
+    }, [db, selectedEvent]);
 
     useEffect(() => {
         setEditableSectorNames(sectorNames);
@@ -60,8 +139,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
-        setApiToken(''); // Reset token usually
-        setApiEventId('');
+        // Do NOT clear token/eventId automatically here, user might want to reuse them.
         
         switch (type) {
             case 'tickets':
@@ -77,10 +155,63 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 setApiUrl('https://public-api.stingressos.com.br/checkins');
                 break;
             case 'google_sheets':
-                setApiUrl(''); // User must paste link
+                setApiUrl(''); 
                 break;
             default:
                 setApiUrl('');
+        }
+    };
+    
+    const handlePresetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const presetId = e.target.value;
+        setSelectedPresetId(presetId);
+        
+        if (presetId === '') return; // "Select..." option
+        
+        const preset = importPresets.find(p => p.name === presetId); // using name as ID essentially for simplicity
+        if (preset) {
+            setApiUrl(preset.url);
+            setApiToken(preset.token);
+            setApiEventId(preset.eventId);
+        }
+    };
+
+    const handleSavePreset = async () => {
+        const name = prompt("Nome para salvar esta configuração (ex: Evento X - ST):");
+        if (!name) return;
+
+        const newPreset: ImportPreset = {
+            name,
+            url: apiUrl,
+            token: apiToken,
+            eventId: apiEventId
+        };
+
+        const updatedPresets = [...importPresets.filter(p => p.name !== name), newPreset]; // Overwrite if name exists
+        setImportPresets(updatedPresets);
+        
+        try {
+             await setDoc(doc(db, 'settings', 'import_presets'), { presets: updatedPresets }, { merge: true });
+             alert("Configuração salva na lista!");
+             setSelectedPresetId(name);
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao salvar preset.");
+        }
+    };
+
+    const handleDeletePreset = async () => {
+        if (!selectedPresetId) return;
+        if (!confirm(`Excluir a configuração "${selectedPresetId}"?`)) return;
+
+        const updatedPresets = importPresets.filter(p => p.name !== selectedPresetId);
+        setImportPresets(updatedPresets);
+        setSelectedPresetId('');
+        
+        try {
+             await setDoc(doc(db, 'settings', 'import_presets'), { presets: updatedPresets }, { merge: true });
+        } catch (e) {
+            console.error(e);
         }
     };
 
@@ -126,7 +257,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
                 return { time, counts, total };
             })
-            .sort((a, b) => a.time.localeCompare(b.time)); // Sort buckets chronologically
+            .sort((a, b) => a.time.localeCompare(b.time));
 
         return { timeBuckets, firstAccess, lastAccess, peak };
     }, [scanHistory, sectorNames]);
@@ -158,16 +289,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             alert('Nomes dos setores salvos com sucesso!');
         } catch (error) {
             console.error("Failed to save sector names:", error);
-            let message = 'Falha ao salvar nomes dos setores. Verifique sua conexão e tente novamente.';
-            if (error && typeof error === 'object' && 'code' in error) {
-                const firebaseError = error as { code: string };
-                if (firebaseError.code === 'permission-denied') {
-                    message = 'Erro: Permissão negada. Verifique se as regras de segurança do Firestore foram publicadas corretamente no console do Firebase.';
-                } else {
-                    message = `Falha ao salvar. Código do erro: ${firebaseError.code}. Verifique o console para mais detalhes.`;
-                }
-            }
-            alert(message);
+            alert("Falha ao salvar nomes dos setores.");
         } finally {
             setIsSavingSectors(false);
         }
@@ -201,6 +323,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setTicketCodes(prev => ({ ...prev, [sector]: codes }));
     };
 
+    // Function to save import credentials manually
+    const handleSaveImportCredentials = async () => {
+        if (!selectedEvent) return;
+        try {
+             await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'), {
+                token: apiToken,
+                eventId: apiEventId,
+                lastUpdated: Timestamp.now()
+            }, { merge: true });
+            alert("Credenciais de acesso (Token e ID) salvas para este evento!");
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao salvar credenciais.");
+        }
+    };
+
     const handleImportFromApi = async () => {
         if (!selectedEvent) return;
         if (!apiUrl.trim()) {
@@ -217,15 +355,21 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ticketsToSave: Ticket[] = [];
             const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
 
+            // Save credentials for future use
+            if (importType !== 'google_sheets' && apiToken) {
+                 await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'), {
+                    token: apiToken,
+                    eventId: apiEventId,
+                    lastUpdated: Timestamp.now()
+                }, { merge: true });
+            }
+
             // --- GOOGLE SHEETS / CSV PROCESSING ---
             if (importType === 'google_sheets') {
                  setLoadingMessage('Baixando e processando planilha...');
                  
-                 // Smart fix for common Google Sheet link mistake
                  let fetchUrl = apiUrl;
                  if (fetchUrl.includes('docs.google.com/spreadsheets') && !fetchUrl.includes('output=csv')) {
-                     // Try to convert Edit link to Export link
-                     // Replace /edit... with /export?format=csv
                      if (fetchUrl.includes('/edit')) {
                          fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                      }
@@ -249,19 +393,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                  setLoadingMessage(`Processando ${rows.length} linhas da planilha...`);
 
                  rows.forEach((row) => {
-                     // Normalize keys to lowercase for easier matching
                      const normalizedRow: {[key: string]: string} = {};
                      Object.keys(row).forEach(k => {
                          normalizedRow[k.toLowerCase().trim()] = row[k];
                      });
 
-                     // Try to find Code
                      const code = normalizedRow['code'] || normalizedRow['código'] || normalizedRow['codigo'] || normalizedRow['id'] || normalizedRow['qr'] || normalizedRow['qrcode'] || normalizedRow['ticket'];
-                     
-                     // Try to find Sector
                      let sector = normalizedRow['sector'] || normalizedRow['setor'] || normalizedRow['categoria'] || normalizedRow['category'] || 'Geral';
-                     
-                     // Try to find Name
                      const ownerName = normalizedRow['name'] || normalizedRow['nome'] || normalizedRow['cliente'] || normalizedRow['owner'] || '';
                      
                      if (code) {
@@ -284,19 +422,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             } 
             // --- STANDARD API PROCESSING ---
             else {
-                // SETUP INITIAL URL
                 const urlObj = new URL(apiUrl);
-                
-                // Add ID if provided
                 if (apiEventId && !urlObj.searchParams.has('event_id')) {
                     urlObj.searchParams.set('event_id', apiEventId);
                 }
-                
-                // Request large batches.
-                urlObj.searchParams.set('per_page', '500');
-                urlObj.searchParams.set('limit', '500');
-                
-                // Ensure we start at page 1
+                urlObj.searchParams.set('per_page', '200');
+                urlObj.searchParams.set('limit', '200');
                 if (!urlObj.searchParams.has('page')) {
                     urlObj.searchParams.set('page', '1');
                 }
@@ -312,32 +443,27 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const seenIds = new Set<string>();
                 let nextUrl: string | null = urlObj.toString();
                 let pageCount = 0;
-                const MAX_PAGES = 5000;
+                const MAX_PAGES = 200; 
 
-                // --- PAGINATION LOOP ---
                 while (nextUrl && pageCount < MAX_PAGES) {
                     pageCount++;
-                    const msg = `Baixando página ${pageCount} (Total importado: ${allItems.length})...`;
-                    setLoadingMessage(msg);
+                    setLoadingMessage(`Baixando página ${pageCount} (Total importado: ${allItems.length})...`);
                     
-                    // Force HTTPS
                     if (nextUrl.startsWith('http://') && !nextUrl.startsWith('http://localhost')) {
                         nextUrl = nextUrl.replace('http://', 'https://');
                     }
 
-                    // Small delay
-                    await new Promise(resolve => setTimeout(resolve, 50));
+                    await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
 
                     const response = await fetch(nextUrl, { headers });
                     
                     if (!response.ok) {
-                        if (response.status === 404 && pageCount > 1) break;
-                        throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
+                         if (response.status === 404 && pageCount > 1) break; 
+                         throw new Error(`Erro na requisição (Página ${pageCount}): ${response.status} ${response.statusText}`);
                     }
 
                     const jsonResponse = await response.json();
                     
-                    // Determine structure
                     let pageItems: any[] = [];
                     let metaRoot: any = jsonResponse; 
 
@@ -348,31 +474,36 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         if (jsonResponse.meta) metaRoot = jsonResponse.meta;
                         if (jsonResponse.links) metaRoot = { ...metaRoot, ...jsonResponse.links };
                     } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
-                        pageItems = jsonResponse.tickets;
+                         pageItems = jsonResponse.tickets;
+                    } else if (jsonResponse.items && Array.isArray(jsonResponse.items)) {
+                         pageItems = jsonResponse.items;
                     } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
                         metaRoot = jsonResponse.data;
                         pageItems = jsonResponse.data.data;
+                    } else {
+                        // Fallback search for any array in the object
+                        const possibleKeys = Object.keys(jsonResponse);
+                        for(const key of possibleKeys) {
+                            if (Array.isArray(jsonResponse[key]) && jsonResponse[key].length > 0) {
+                                pageItems = jsonResponse[key];
+                                break;
+                            }
+                        }
                     }
 
                     if (pageItems.length === 0) break;
 
-                    // --- DUPLICATE CHECK ---
                     let newItemsCount = 0;
                     pageItems.forEach((item: any) => {
                         const id = item.id || item.code || item.qr_code || item.ticket_code || item.uuid || JSON.stringify(item);
                         if (!seenIds.has(String(id))) {
                             seenIds.add(String(id));
                             newItemsCount++;
+                            allItems.push(item);
                         }
                     });
 
-                    if (newItemsCount === 0 && allItems.length > 0) {
-                        break;
-                    }
-
-                    allItems.push(...pageItems);
-                    
-                    // --- NEXT PAGE DETERMINATION ---
+                    // Pagination Logic
                     let foundNextLink: string | null = null;
                     if (metaRoot) {
                         if (metaRoot.next_page_url) foundNextLink = metaRoot.next_page_url;
@@ -389,33 +520,30 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 urlCheck.searchParams.set('event_id', apiEventId);
                                 changed = true;
                             }
-                            if (!urlCheck.searchParams.has('per_page') && !urlCheck.searchParams.has('limit')) {
-                                urlCheck.searchParams.set('per_page', '500');
-                                changed = true;
-                            }
                             if (changed) nextUrl = urlCheck.toString();
-                        } catch (e) {
-                            console.warn('Could not parse nextUrl params', e);
-                        }
+                        } catch (e) {}
                     } else {
-                        const currentUrlObj = new URL(nextUrl);
-                        const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
-                        if (pageItems.length > 0) {
-                            currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
-                            nextUrl = currentUrlObj.toString();
+                        // Speculative pagination: if we got full page (e.g. 200 items), try next
+                        if (newItemsCount >= 150) { // Threshold close to limit
+                             const currentUrlObj = new URL(nextUrl);
+                             const currentPageNum = parseInt(currentUrlObj.searchParams.get('page') || String(pageCount));
+                             currentUrlObj.searchParams.set('page', String(currentPageNum + 1));
+                             nextUrl = currentUrlObj.toString();
                         } else {
                             nextUrl = null;
                         }
                     }
+                    
+                    if (newItemsCount === 0) nextUrl = null; // Stop if no new items found
                 }
 
                 if (allItems.length === 0) {
-                    alert('Nenhum registro encontrado na resposta da API.');
+                    alert('Nenhum registro encontrado. Verifique o ID do Evento e o Token.');
                     setIsLoading(false);
                     return;
                 }
 
-                // Process standard items
+                // Process Items
                 if (importType === 'checkins' || apiUrl.includes('checkins')) {
                     allItems.forEach((item: any) => {
                         const code = item.ticket_code || item.ticket_id || item.code || item.qr_code;
@@ -452,11 +580,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     };
                     allItems.forEach(processItem);
                 }
-            } // END ELSE (Standard API)
+            }
 
-            // --- BATCH OPERATIONS (Common) ---
-
-            // 1. Update Sector Names
+            // --- SAVE TO FIRESTORE ---
+            
             if (ticketsToSave.length > 0) {
                 const currentSectorsSet = new Set(sectorNames);
                 let sectorsUpdated = false;
@@ -478,7 +605,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let savedCount = 0;
             let updatedCount = 0;
 
-            // 2. Save Tickets
             if (ticketsToSave.length > 0) {
                 setLoadingMessage('Salvando ingressos no banco de dados...');
                  const chunks = [];
@@ -500,7 +626,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             }
 
-            // 3. Update Status
             if (ticketsToUpdateStatus.length > 0) {
                 setLoadingMessage('Sincronizando check-ins...');
                 const chunks = [];
@@ -570,16 +695,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setTicketCodes({});
         } catch (error) {
             console.error("Erro ao salvar ingressos: ", error);
-            let message = 'Falha ao salvar ingressos. Verifique sua conexão e tente novamente.';
-             if (error && typeof error === 'object' && 'code' in error) {
-                const firebaseError = error as { code: string };
-                if (firebaseError.code === 'permission-denied') {
-                    message = 'Erro: Permissão negada. Verifique as regras de segurança do Firestore.';
-                } else {
-                    message = `Falha ao salvar. Código do erro: ${firebaseError.code}.`;
-                }
-            }
-            alert(message);
+            alert('Falha ao salvar ingressos.');
         } finally {
             setIsLoading(false);
         }
@@ -598,274 +714,472 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     };
 
+    // Event Handlers
     const handleCreateEvent = async () => {
-        if (!newEventName.trim()) {
-            alert('O nome do evento não pode estar em branco.');
-            return;
-        }
+        if (!newEventName.trim()) return;
         setIsLoading(true);
         try {
-            const eventRef = await addDoc(collection(db, 'events'), {
-                name: newEventName.trim(),
-                isHidden: false,
-            });
-            await setDoc(doc(db, 'events', eventRef.id, 'settings', 'main'), {
-                sectorNames: ['Pista', 'VIP']
-            });
-            alert(`Evento "${newEventName.trim()}" criado com sucesso!`);
+            const eventRef = await addDoc(collection(db, 'events'), { name: newEventName.trim(), isHidden: false });
+            await setDoc(doc(db, 'events', eventRef.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
+            alert(`Evento "${newEventName.trim()}" criado!`);
             setNewEventName('');
-        } catch (error) {
-            console.error("Error creating event:", error);
-            alert("Falha ao criar evento.");
-        } finally {
-            setIsLoading(false);
-        }
+        } catch (error) { alert("Falha ao criar evento."); } finally { setIsLoading(false); }
     };
 
     const handleRenameEvent = async () => {
-        if (!selectedEvent) return;
-        if (!renameEventName.trim()) {
-            alert('O nome do evento não pode estar em branco.');
-            return;
-        }
-        if (renameEventName.trim() === selectedEvent.name) return;
-
+        if (!selectedEvent || !renameEventName.trim()) return;
         setIsLoading(true);
         try {
-            await updateDoc(doc(db, 'events', selectedEvent.id), {
-                name: renameEventName.trim()
-            });
-            alert(`Evento renomeado para "${renameEventName.trim()}" com sucesso!`);
-        } catch (error) {
-            console.error("Error renaming event:", error);
-            alert("Falha ao renomear evento.");
-        } finally {
-            setIsLoading(false);
-        }
+            await updateDoc(doc(db, 'events', selectedEvent.id), { name: renameEventName.trim() });
+            alert("Evento renomeado!");
+        } catch (error) { alert("Falha ao renomear."); } finally { setIsLoading(false); }
     };
     
     const handleToggleEventVisibility = async (eventId: string, isHidden: boolean) => {
         setIsLoading(true);
-        try {
-            await updateDoc(doc(db, 'events', eventId), { isHidden: !isHidden });
-        } catch (error) {
-            console.error("Error toggling event visibility:", error);
-            alert("Falha ao alterar a visibilidade do evento.");
-        } finally {
-            setIsLoading(false);
-        }
+        try { await updateDoc(doc(db, 'events', eventId), { isHidden: !isHidden }); } 
+        catch (error) { alert("Falha ao alterar visibilidade."); } finally { setIsLoading(false); }
     };
 
     const handleDeleteEvent = async (eventId: string, eventName: string) => {
-        if (window.confirm(`Tem certeza que deseja apagar o evento "${eventName}"? Esta ação é irreversível e removerá todos os dados associados.`)) {
+        if (confirm(`Apagar "${eventName}"?`)) {
             setIsLoading(true);
-            try {
-                await deleteDoc(doc(db, 'events', eventId));
-                alert(`Evento "${eventName}" apagado com sucesso.`);
-            } catch (error) {
-                console.error("Error deleting event:", error);
-                alert("Falha ao apagar evento.");
-            } finally {
-                setIsLoading(false);
-            }
+            try { await deleteDoc(doc(db, 'events', eventId)); alert("Evento apagado."); } 
+            catch (error) { alert("Falha ao apagar."); } finally { setIsLoading(false); }
         }
+    };
+
+    // Online Config Handlers
+    const handleSaveValidationConfig = async () => {
+        if (!selectedEvent) return;
+        try {
+            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'validation'), {
+                mode: validationMode,
+                apiEndpoints: onlineApiEndpoints,
+                sheetUrl: onlineSheetUrl
+            }, { merge: true });
+            alert('Configurações de Modo de Operação salvas!');
+        } catch (error) {
+            alert('Erro ao salvar configurações.');
+        }
+    };
+
+    const handleAddEndpoint = () => {
+        setOnlineApiEndpoints([...onlineApiEndpoints, { url: '', token: '', eventId: '' }]);
+    };
+
+    const handleRemoveEndpoint = (index: number) => {
+        const newEndpoints = [...onlineApiEndpoints];
+        newEndpoints.splice(index, 1);
+        setOnlineApiEndpoints(newEndpoints);
+    };
+
+    const handleEndpointChange = (index: number, field: 'url' | 'token' | 'eventId', value: string) => {
+        const newEndpoints = [...onlineApiEndpoints];
+        newEndpoints[index][field] = value;
+        setOnlineApiEndpoints(newEndpoints);
+    };
+    
+    const toggleTokenVisibility = (index: number) => {
+        setVisibleTokens(prev => ({ ...prev, [index]: !prev[index] }));
+    };
+
+    const handleDownloadTemplate = () => {
+        const csvContent = "codigo,setor,nome\n123456,VIP,Joao Silva\n654321,Pista,Maria Oliveira";
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'modelo_ingressos.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     };
 
     const NoEventSelectedMessage = () => (
         <div className="text-center text-gray-400 py-10 bg-gray-800 rounded-lg">
             <p>Por favor, selecione um evento primeiro.</p>
-            <p className="text-sm">Você pode criar um novo evento na aba "Gerenciar Eventos".</p>
         </div>
     );
   
     const renderContent = () => {
-        if (!selectedEvent && activeTab !== 'events') {
-            return <NoEventSelectedMessage />;
-        }
+        if (!selectedEvent && activeTab !== 'events') return <NoEventSelectedMessage />;
         
         switch (activeTab) {
             case 'stats':
                 if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
-                    <div className="space-y-6">
-                        <div className="flex justify-end">
+                    <div className="space-y-6 animate-fade-in">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-2xl font-bold text-white">Dashboard do Evento</h2>
                              <button 
                                 onClick={handleDownloadReport} 
                                 disabled={isGeneratingPdf} 
-                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed"
+                                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg transition-colors flex items-center shadow-lg disabled:opacity-50"
                             >
-                                {isGeneratingPdf ? 'Gerando...' : 'Baixar Relatório em PDF'}
+                                <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                                {isGeneratingPdf ? 'Gerando PDF...' : 'Baixar Relatório PDF'}
                             </button>
                         </div>
+
+                        {/* Main Stats Component (KPIs + Table) */}
+                        <Stats allTickets={allTickets} sectorNames={sectorNames} />
+
+                        {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <Stats allTickets={allTickets} sectorNames={sectorNames} />
-                            <PieChart data={pieChartData} title="Distribuição de Entradas por Setor"/>
+                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                <PieChart data={pieChartData} title="Distribuição por Setor"/>
+                            </div>
+                            <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
+                            </div>
                         </div>
+
+                        {/* Temporal Analysis Cards */}
                         <div>
                             <h3 className="text-xl font-bold text-white mb-4">Análise Temporal</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                                <div className="bg-gray-700 p-4 rounded-lg text-center">
-                                    <p className="text-sm text-gray-400">Primeiro Acesso</p>
-                                    <p className="text-2xl font-bold text-green-300">
-                                        {analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : 'N/A'}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm hover:border-green-500 transition-colors">
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
+                                    <p className="text-2xl font-bold text-green-400">
+                                        {analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}
                                     </p>
                                 </div>
-                                <div className="bg-gray-700 p-4 rounded-lg text-center">
-                                    <p className="text-sm text-gray-400">Último Acesso</p>
-                                    <p className="text-2xl font-bold text-red-300">
-                                        {analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : 'N/A'}
+                                <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm hover:border-red-500 transition-colors">
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
+                                    <p className="text-2xl font-bold text-red-400">
+                                        {analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}
                                     </p>
                                 </div>
-                                <div className="bg-gray-700 p-4 rounded-lg text-center">
-                                    <p className="text-sm text-gray-400">Horário de Pico ({analyticsData.peak.time})</p>
+                                <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm hover:border-orange-500 transition-colors">
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({analyticsData.peak.time})</p>
                                     <p className="text-2xl font-bold text-orange-400">
-                                        {analyticsData.peak.count} <span className="text-base font-normal">entradas</span>
+                                        {analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
                                     </p>
                                 </div>
                             </div>
-                            <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
                         </div>
                     </div>
                 );
             case 'settings':
                  if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-gray-800 p-4 rounded-lg">
-                            <h3 className="text-lg font-semibold mb-3">Configurar Setores</h3>
-                             <div className="space-y-3 mb-4">
-                                {editableSectorNames.map((name, index) => (
-                                    <div key={index} className="flex items-center space-x-2">
-                                    <input
-                                        type="text"
-                                        value={name}
-                                        onChange={(e) => handleSectorNameChange(index, e.target.value)}
-                                        placeholder={`Nome do Setor ${index + 1}`}
-                                        className="flex-grow bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                                    />
-                                    <button
-                                        onClick={() => handleRemoveSector(index)}
-                                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded disabled:bg-gray-500"
-                                        disabled={editableSectorNames.length <= 1}
-                                        aria-label={`Remover Setor ${name}`}
-                                    >
-                                        &times;
-                                    </button>
-                                    </div>
-                                ))}
-                            </div>
-                            <button onClick={handleAddSector} className="w-full bg-gray-600 hover:bg-gray-700 py-2 rounded font-bold mb-3">
-                                Adicionar Novo Setor
-                            </button>
-                            <button
-                                onClick={handleSaveSectorNames}
-                                disabled={isSavingSectors || isLoading}
-                                className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500"
-                            >
-                                {isSavingSectors ? 'Salvando...' : 'Salvar Nomes dos Setores'}
-                            </button>
-                        </div>
-                        
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* Left Column */}
                         <div className="space-y-6">
-                            <div className="bg-gray-800 p-4 rounded-lg border border-orange-500/30">
-                                <h3 className="text-lg font-semibold mb-3 text-orange-400 flex items-center">
-                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
-                                    Importar Dados (API ou Planilha)
+                             {/* Operation Mode */}
+                             <div className="bg-gray-800 p-5 rounded-lg border border-orange-500/30 shadow-lg">
+                                <h3 className="text-lg font-bold mb-4 text-orange-400 flex items-center">
+                                    <CogIcon className="w-5 h-5 mr-2" />
+                                    Modo de Operação (Validação)
                                 </h3>
                                 <div className="space-y-3">
+                                    <div className="flex flex-col space-y-2">
+                                        <label className="flex items-center p-3 bg-gray-700 rounded cursor-pointer hover:bg-gray-600 transition">
+                                            <input 
+                                                type="radio" 
+                                                name="validationMode" 
+                                                value="OFFLINE" 
+                                                checked={validationMode === 'OFFLINE'}
+                                                onChange={() => setValidationMode('OFFLINE')}
+                                                className="mr-3 h-4 w-4 text-orange-600"
+                                            />
+                                            <div>
+                                                <span className="font-bold text-white">Offline (Banco de Dados Local)</span>
+                                                <p className="text-xs text-gray-400">Requer importação prévia. Funciona sem internet.</p>
+                                            </div>
+                                        </label>
+
+                                        <label className="flex items-center p-3 bg-gray-700 rounded cursor-pointer hover:bg-gray-600 transition">
+                                            <input 
+                                                type="radio" 
+                                                name="validationMode" 
+                                                value="ONLINE_API" 
+                                                checked={validationMode === 'ONLINE_API'}
+                                                onChange={() => setValidationMode('ONLINE_API')}
+                                                className="mr-3 h-4 w-4 text-orange-600"
+                                            />
+                                             <div>
+                                                <span className="font-bold text-white">Online (API em Tempo Real)</span>
+                                                <p className="text-xs text-gray-400">Valida direto na API Externa. Requer internet.</p>
+                                            </div>
+                                        </label>
+                                        
+                                         <label className="flex items-center p-3 bg-gray-700 rounded cursor-pointer hover:bg-gray-600 transition">
+                                            <input 
+                                                type="radio" 
+                                                name="validationMode" 
+                                                value="ONLINE_SHEETS" 
+                                                checked={validationMode === 'ONLINE_SHEETS'}
+                                                onChange={() => setValidationMode('ONLINE_SHEETS')}
+                                                className="mr-3 h-4 w-4 text-orange-600"
+                                            />
+                                             <div>
+                                                <span className="font-bold text-white">Online (Google Sheets)</span>
+                                                <p className="text-xs text-gray-400">Valida direto na planilha. Requer internet.</p>
+                                            </div>
+                                        </label>
+                                    </div>
+
+                                    {/* Config for Online API */}
+                                    {validationMode === 'ONLINE_API' && (
+                                        <div className="mt-4 pl-4 border-l-2 border-orange-500/50">
+                                            <h4 className="text-sm font-bold text-white mb-2">Endpoints da API</h4>
+                                            {onlineApiEndpoints.map((endpoint, idx) => (
+                                                <div key={idx} className="bg-gray-900/50 p-3 rounded mb-2 space-y-2 relative">
+                                                    <button onClick={() => handleRemoveEndpoint(idx)} className="absolute top-2 right-2 text-gray-500 hover:text-red-400">
+                                                        &times;
+                                                    </button>
+                                                    <input
+                                                        type="text"
+                                                        value={endpoint.url}
+                                                        onChange={(e) => handleEndpointChange(idx, 'url', e.target.value)}
+                                                        placeholder="URL da API (https://...)"
+                                                        className="w-full bg-gray-700 p-2 rounded text-sm"
+                                                    />
+                                                    <div className="relative">
+                                                        <input
+                                                            type={visibleTokens[idx] ? "text" : "password"}
+                                                            value={endpoint.token}
+                                                            onChange={(e) => handleEndpointChange(idx, 'token', e.target.value)}
+                                                            placeholder="Token (Bearer)"
+                                                            className="w-full bg-gray-700 p-2 rounded text-sm pr-10"
+                                                        />
+                                                        <button 
+                                                            onClick={() => toggleTokenVisibility(idx)}
+                                                            className="absolute right-2 top-2 text-gray-400 hover:text-white"
+                                                        >
+                                                            {visibleTokens[idx] ? <EyeSlashIcon className="w-4 h-4"/> : <EyeIcon className="w-4 h-4"/>}
+                                                        </button>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        value={endpoint.eventId}
+                                                        onChange={(e) => handleEndpointChange(idx, 'eventId', e.target.value)}
+                                                        placeholder="ID do Evento (Obrigatório)"
+                                                        className={`w-full bg-gray-700 p-2 rounded text-sm ${!endpoint.eventId ? 'border border-red-500/50' : ''}`}
+                                                    />
+                                                    {!endpoint.eventId && <p className="text-[10px] text-red-400">ID do evento é necessário para validação online.</p>}
+                                                </div>
+                                            ))}
+                                            <button onClick={handleAddEndpoint} className="text-xs text-orange-400 hover:underline">+ Adicionar outro endpoint</button>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Config for Online Sheets */}
+                                    {validationMode === 'ONLINE_SHEETS' && (
+                                        <div className="mt-4 pl-4 border-l-2 border-orange-500/50">
+                                            <label className="text-xs text-gray-400 block mb-1">Link CSV da Planilha</label>
+                                            <input
+                                                type="text"
+                                                value={onlineSheetUrl}
+                                                onChange={(e) => setOnlineSheetUrl(e.target.value)}
+                                                placeholder="https://docs.google.com/spreadsheets/.../pub?output=csv"
+                                                className="w-full bg-gray-700 p-2 rounded text-sm mb-2"
+                                            />
+                                             <button onClick={handleDownloadTemplate} className="text-xs text-blue-400 hover:underline flex items-center mb-2">
+                                                <CloudDownloadIcon className="w-3 h-3 mr-1" />
+                                                Baixar Modelo de Planilha (.csv)
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    <button 
+                                        onClick={handleSaveValidationConfig}
+                                        className="w-full bg-green-600 hover:bg-green-700 py-2 rounded font-bold mt-2"
+                                    >
+                                        Salvar Configuração de Modo
+                                    </button>
+                                </div>
+                             </div>
+                             
+                             {/* Sector Names */}
+                            <div className="bg-gray-800 p-5 rounded-lg shadow-lg">
+                                <h3 className="text-lg font-bold mb-3">Nomes dos Setores</h3>
+                                 <div className="space-y-3 mb-4">
+                                    {editableSectorNames.map((name, index) => (
+                                        <div key={index} className="flex items-center space-x-2">
+                                        <input
+                                            type="text"
+                                            value={name}
+                                            onChange={(e) => handleSectorNameChange(index, e.target.value)}
+                                            className="flex-grow bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                        />
+                                        <button
+                                            onClick={() => handleRemoveSector(index)}
+                                            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded disabled:bg-gray-500"
+                                            disabled={editableSectorNames.length <= 1}
+                                        >
+                                            &times;
+                                        </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex space-x-2">
+                                    <button onClick={handleAddSector} className="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded font-bold text-sm">
+                                        + Setor
+                                    </button>
+                                    <button
+                                        onClick={handleSaveSectorNames}
+                                        disabled={isSavingSectors || isLoading}
+                                        className="flex-1 bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 text-sm"
+                                    >
+                                        Salvar
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Right Column: Import */}
+                        <div className="space-y-6">
+                             {/* CSV Upload Local (New) */}
+                            <div className="bg-gray-800 p-5 rounded-lg border border-gray-700">
+                                <h3 className="text-lg font-bold mb-3 flex items-center">
+                                    <TableCellsIcon className="w-5 h-5 mr-2 text-blue-400" />
+                                    Upload Arquivo CSV
+                                </h3>
+                                <p className="text-xs text-gray-400 mb-2">Selecione um arquivo .csv do seu computador para importar ingressos.</p>
+                                <input 
+                                    type="file" 
+                                    accept=".csv"
+                                    onChange={(e) => {
+                                        if (e.target.files && e.target.files[0]) {
+                                            // Read file
+                                            const reader = new FileReader();
+                                            reader.onload = async (event) => {
+                                                const text = event.target?.result;
+                                                if (typeof text === 'string') {
+                                                    // Simulate API url setting but treat as local content
+                                                    const blob = new Blob([text], { type: 'text/csv' });
+                                                    const url = URL.createObjectURL(blob);
+                                                    setImportType('google_sheets'); // Reuse CSV parser
+                                                    setApiUrl(url);
+                                                }
+                                            };
+                                            reader.readAsText(e.target.files[0]);
+                                        }
+                                    }}
+                                    className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gray-700 file:text-white hover:file:bg-gray-600"
+                                />
+                            </div>
+
+                            <div className="bg-gray-800 p-5 rounded-lg border border-orange-500/30 shadow-lg">
+                                <h3 className="text-lg font-bold mb-3 text-orange-400 flex items-center">
+                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                                    Importar Dados (Modo Offline)
+                                </h3>
+                                <div className="space-y-3">
+                                    <div className="flex justify-between items-end">
+                                        <div className="w-full mr-2">
+                                            <label className="text-xs text-gray-400">Carregar Configuração Salva</label>
+                                            <div className="flex space-x-1">
+                                                <select 
+                                                    value={selectedPresetId} 
+                                                    onChange={handlePresetChange}
+                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                                >
+                                                    <option value="">Selecione...</option>
+                                                    {importPresets.map((p, i) => <option key={i} value={p.name}>{p.name}</option>)}
+                                                </select>
+                                                <button onClick={handleDeletePreset} disabled={!selectedPresetId} className="bg-red-600 px-2 rounded disabled:opacity-50"><TrashIcon className="w-4 h-4"/></button>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div>
-                                        <label className="text-xs text-gray-400">Fonte de Dados</label>
+                                        <label className="text-xs text-gray-400">Tipo de Importação</label>
                                         <select
                                             value={importType}
                                             onChange={(e) => handleImportTypeChange(e.target.value as ImportType)}
                                             className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2"
                                         >
-                                            <option value="tickets">API ST Ingressos (Tickets)</option>
-                                            <option value="participants">API ST Ingressos (Participants)</option>
-                                            <option value="buyers">API ST Ingressos (Buyers)</option>
-                                            <option value="checkins">API ST Ingressos (Sincronizar Check-ins)</option>
-                                            <option value="google_sheets">Planilha do Google (CSV Publicado)</option>
-                                            <option value="custom">API Genérica (Custom)</option>
+                                            <option value="tickets">Ingressos (API Padrão)</option>
+                                            <option value="participants">Participantes (API)</option>
+                                            <option value="buyers">Compradores (API)</option>
+                                            <option value="checkins">Sincronizar Check-ins (API)</option>
+                                            <option value="google_sheets">Google Sheets (Link CSV)</option>
                                         </select>
                                         
                                         {importType === 'google_sheets' && (
                                             <div className="bg-blue-900/40 p-3 rounded mb-2 border border-blue-500/30">
-                                                <p className="text-xs text-blue-200 mb-1 font-bold flex items-center">
-                                                    <TableCellsIcon className="w-4 h-4 mr-1" />
-                                                    Como configurar:
-                                                </p>
+                                                 <button onClick={handleDownloadTemplate} className="text-xs text-blue-300 hover:underline flex items-center float-right">
+                                                    <CloudDownloadIcon className="w-3 h-3 mr-1" /> Modelo
+                                                </button>
+                                                <p className="text-xs text-blue-200 mb-1 font-bold">Como usar Google Sheets:</p>
                                                 <ol className="text-xs text-gray-300 list-decimal list-inside space-y-1">
-                                                    <li>No Google Sheets, clique em <strong>Arquivo</strong> {'>'} <strong>Compartilhar</strong>.</li>
-                                                    <li>Selecione <strong>Publicar na Web</strong>.</li>
-                                                    <li>Escolha a aba e selecione formato <strong>CSV</strong>.</li>
-                                                    <li>Copie o link gerado e cole abaixo.</li>
-                                                    <li>A planilha deve ter colunas como: <em>Codigo, Setor, Nome</em>.</li>
+                                                    <li>Arquivo {'>'} Compartilhar {'>'} Publicar na Web.</li>
+                                                    <li>Formato: <strong>CSV</strong>. Copie o link.</li>
                                                 </ol>
                                             </div>
                                         )}
 
                                         <label className="text-xs text-gray-400">
-                                            {importType === 'google_sheets' ? 'Link Público do CSV (Google Sheets)' : 'URL da API'}
+                                            {importType === 'google_sheets' ? 'Link Público do CSV' : 'URL da API'}
                                         </label>
                                         <input
                                             type="text"
                                             value={apiUrl}
                                             onChange={(e) => setApiUrl(e.target.value)}
-                                            placeholder={importType === 'google_sheets' ? 'https://docs.google.com/spreadsheets/d/e/.../pub?output=csv' : 'https://api...'}
+                                            placeholder="https://..."
                                             className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
                                         />
                                     </div>
                                     
                                     {importType !== 'google_sheets' && (
                                         <div className="grid grid-cols-2 gap-2">
-                                            <div>
-                                                <label className="text-xs text-gray-400">API Token (Opcional)</label>
+                                            <div className="relative">
+                                                <label className="text-xs text-gray-400">Token (Bearer)</label>
                                                 <input
-                                                    type="password"
+                                                    type={showImportToken ? "text" : "password"}
                                                     value={apiToken}
                                                     onChange={(e) => setApiToken(e.target.value)}
-                                                    placeholder="Bearer Token"
-                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
+                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm pr-8"
                                                 />
+                                                 <button 
+                                                    onClick={() => setShowImportToken(!showImportToken)}
+                                                    className="absolute right-2 top-8 text-gray-400 hover:text-white"
+                                                >
+                                                    {showImportToken ? <EyeSlashIcon className="w-3 h-3"/> : <EyeIcon className="w-3 h-3"/>}
+                                                </button>
                                             </div>
                                             <div>
-                                                <label className="text-xs text-gray-400">ID Evento Externo (Opcional)</label>
+                                                <label className="text-xs text-gray-400">ID Evento (Numérico)</label>
                                                 <input
                                                     type="text"
                                                     value={apiEventId}
                                                     onChange={(e) => setApiEventId(e.target.value)}
-                                                    placeholder="Ex: 123"
                                                     className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm"
                                                 />
                                             </div>
                                         </div>
                                     )}
-
-                                    <button
-                                        onClick={handleImportFromApi}
-                                        disabled={isLoading}
-                                        className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center"
-                                    >
-                                        {isLoading ? (loadingMessage || 'Processando...') : 'Importar Dados'}
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <h3 className="text-lg font-semibold mb-3">Gerenciar Ingressos Manualmente</h3>
-                                <div className="space-y-3">
-                                    {sectorNames.map((sector) => (
-                                        <textarea
-                                        key={sector}
-                                        value={ticketCodes[sector] || ''}
-                                        onChange={(e) => handleTicketCodeChange(sector, e.target.value)}
-                                        placeholder={`Cole os códigos do setor "${sector}" aqui (um por linha)`}
-                                        rows={3}
-                                        className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                                        />
-                                    ))}
-                                    <button onClick={handleSaveTickets} disabled={isLoading || isSavingSectors} className="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold disabled:bg-gray-500">{isLoading ? 'Salvando...' : 'Salvar Ingressos no Banco de Dados'}</button>
-                                    {!isOnline && <p className="text-xs text-yellow-400 text-center mt-2">Você está offline. Os ingressos serão salvos quando a conexão for restaurada.</p>}
+                                    
+                                    <div className="flex space-x-2 pt-2">
+                                         <button
+                                            onClick={handleImportFromApi}
+                                            disabled={isLoading}
+                                            className="flex-grow bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center text-sm"
+                                        >
+                                            {isLoading ? (loadingMessage || 'Processando...') : 'Importar Agora'}
+                                        </button>
+                                        {importType !== 'google_sheets' && (
+                                            <button
+                                                onClick={handleSavePreset}
+                                                className="px-3 bg-gray-600 hover:bg-gray-500 rounded text-xs font-bold"
+                                                title="Salvar na Lista"
+                                            >
+                                                Salvar Lista
+                                            </button>
+                                        )}
+                                    </div>
+                                    {importType !== 'google_sheets' && (
+                                        <div className="text-center mt-1">
+                                             <button onClick={handleSaveImportCredentials} className="text-xs text-gray-500 hover:text-gray-300 underline">
+                                                Salvar apenas credenciais (Token/ID) como padrão
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -876,42 +1190,42 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
             case 'events':
                 return (
-                     <div className="space-y-6">
+                     <div className="space-y-6 animate-fade-in">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <h3 className="text-lg font-semibold mb-3">Criar Novo Evento</h3>
+                            <div className="bg-gray-800 p-5 rounded-lg shadow-lg">
+                                <h3 className="text-lg font-bold mb-3">Criar Novo Evento</h3>
                                 <div className="space-y-3">
-                                    <input type="text" value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="Nome do Evento" className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
-                                    <button onClick={handleCreateEvent} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500">Criar Evento</button>
+                                    <input type="text" value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="Nome do Evento" className="w-full bg-gray-700 p-3 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
+                                    <button onClick={handleCreateEvent} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-3 rounded font-bold disabled:bg-gray-500">Criar Evento</button>
                                 </div>
                             </div>
                             
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <h3 className="text-lg font-semibold mb-3">Lista de Eventos</h3>
-                                <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                            <div className="bg-gray-800 p-5 rounded-lg shadow-lg">
+                                <h3 className="text-lg font-bold mb-3">Lista de Eventos</h3>
+                                <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
                                     {events.map(event => (
-                                        <div key={event.id} className="flex items-center justify-between bg-gray-700 p-2 rounded">
-                                            <span className={`${event.isHidden ? 'text-gray-500 italic' : 'text-white'}`}>{event.name}</span>
+                                        <div key={event.id} className="flex items-center justify-between bg-gray-700 p-3 rounded hover:bg-gray-600 transition-colors">
+                                            <span className={`font-medium ${event.isHidden ? 'text-gray-500 italic' : 'text-white'}`}>{event.name}</span>
                                             <div className="flex space-x-2">
-                                                <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden || false)} className="text-xs px-2 py-1 bg-gray-600 hover:bg-gray-500 rounded">
+                                                <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden || false)} className="text-xs px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded border border-gray-500">
                                                     {event.isHidden ? 'Mostrar' : 'Ocultar'}
                                                 </button>
-                                                <button onClick={() => handleDeleteEvent(event.id, event.name)} className="text-xs px-2 py-1 bg-red-600 hover:bg-red-500 rounded">
+                                                <button onClick={() => handleDeleteEvent(event.id, event.name)} className="text-xs px-3 py-1 bg-red-600 hover:bg-red-500 rounded">
                                                     Apagar
                                                 </button>
                                             </div>
                                         </div>
                                     ))}
-                                    {events.length === 0 && <p className="text-gray-500 text-sm text-center">Nenhum evento criado.</p>}
+                                    {events.length === 0 && <p className="text-gray-500 text-sm text-center py-4">Nenhum evento criado.</p>}
                                 </div>
                             </div>
 
                              {selectedEvent && (
-                                <div className="bg-gray-800 p-4 rounded-lg md:col-span-2">
-                                    <h3 className="text-lg font-semibold mb-3">Renomear Evento Selecionado</h3>
+                                <div className="bg-gray-800 p-5 rounded-lg md:col-span-2 border border-gray-700">
+                                    <h3 className="text-lg font-bold mb-3">Editar Evento: <span className="text-orange-400">{selectedEvent.name}</span></h3>
                                     <div className="flex space-x-2">
-                                        <input type="text" value={renameEventName} onChange={(e) => setRenameEventName(e.target.value)} className="flex-grow bg-gray-700 p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
-                                        <button onClick={handleRenameEvent} disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded font-bold disabled:bg-gray-500">Renomear</button>
+                                        <input type="text" value={renameEventName} onChange={(e) => setRenameEventName(e.target.value)} className="flex-grow bg-gray-700 p-3 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-500" />
+                                        <button onClick={handleRenameEvent} disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded font-bold disabled:bg-gray-500">Renomear</button>
                                     </div>
                                 </div>
                             )}
@@ -923,13 +1237,21 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     };
 
+    // Helper component for icons not in scope if needed, but assuming CogIcon etc are imported
+    const CogIcon = ({ className }: { className?: string }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+    );
+
     return (
-        <div className="w-full max-w-6xl mx-auto">
-            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-2">
-                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'stats' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Dashboard e Stats</button>
-                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'settings' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Configurações e Importação</button>
-                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'history' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Histórico Completo</button>
-                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded font-bold whitespace-nowrap ${activeTab === 'events' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Gerenciar Eventos</button>
+        <div className="w-full max-w-6xl mx-auto pb-10">
+            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-2 custom-scrollbar border border-gray-700">
+                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'stats' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Dashboard</button>
+                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'settings' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Configurações</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'history' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Histórico</button>
+                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'events' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Eventos</button>
             </div>
             {renderContent()}
         </div>
