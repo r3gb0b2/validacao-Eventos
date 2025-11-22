@@ -32,6 +32,11 @@ const App: React.FC = () => {
     const [view, setView] = useState<'scanner' | 'admin'>('scanner');
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
+    
+    // New state for Sector Selection Flow
+    const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
+    const [lockedSector, setLockedSector] = useState<string | null>(null);
+
     const cooldownRef = useRef<boolean>(false);
 
     // const playSuccessSound = useSound('/sounds/success.mp3');
@@ -71,13 +76,20 @@ const App: React.FC = () => {
                 localStorage.removeItem('selectedEventId');
             }
 
+            // Restore session only if not already selected (avoids overwriting sector selection flow)
             const lastEventId = localStorage.getItem('selectedEventId');
             if (lastEventId && !selectedEvent) {
                 const event = eventsData.find(e => e.id === lastEventId);
                 if (event) {
-                    setSelectedEvent(event);
-                } else {
-                    localStorage.removeItem('selectedEventId');
+                   // We don't auto-select here to allow the user to see the event selector if they refresh,
+                   // OR we could restore. Let's not restore automatically to force sector selection for safety 
+                   // unless we want to persist that too. For now, let's keep it simple.
+                   // Actually, existing logic restores it. Let's stick to existing logic but maybe
+                   // force sector selection if it was a refresh? 
+                   // Let's allow the user to select the event again to choose the sector properly.
+                   // Commenting out auto-restore for better UX on sector selection flow or handle it:
+                   // setSelectedEvent(event); 
+                   // setIsSectorSelectionStep(true); 
                 }
             }
         }, (error) => {
@@ -170,12 +182,27 @@ const App: React.FC = () => {
 
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
+        setIsSectorSelectionStep(true);
+        setLockedSector(null);
         localStorage.setItem('selectedEventId', event.id);
+    };
+
+    const handleConfirmSectorSelection = (sector: string | null) => {
+        if (sector) {
+            setSelectedSector(sector);
+            setLockedSector(sector);
+        } else {
+            setSelectedSector('All');
+            setLockedSector(null);
+        }
+        setIsSectorSelectionStep(false);
     };
 
     const handleSwitchEvent = () => {
         setSelectedEvent(null);
-        setView('scanner'); // Reset to scanner view when switching
+        setView('scanner');
+        setLockedSector(null);
+        setIsSectorSelectionStep(false);
         localStorage.removeItem('selectedEventId');
     };
 
@@ -223,6 +250,7 @@ const App: React.FC = () => {
             return;
         }
 
+        // Logic check: if we have a selected/locked sector, ensure the ticket matches
         if (selectedSector !== 'All' && ticket.sector !== selectedSector) {
             const message = `Setor incorreto! Ingresso para ${ticket.sector}, validação em ${selectedSector}.`;
             showScanResult('WRONG_SECTOR', message);
@@ -266,7 +294,9 @@ const App: React.FC = () => {
             if (events.length > 0 && !selectedEvent) {
                 const visibleEvents = events.filter(e => !e.isHidden);
                 if (visibleEvents.length > 0) {
-                    handleSelectEvent(visibleEvents[0]);
+                    // We select it but skip sector selection step for admin view
+                    setSelectedEvent(visibleEvents[0]);
+                    setIsSectorSelectionStep(false);
                 }
             }
             setView('admin');
@@ -287,7 +317,53 @@ const App: React.FC = () => {
         return <EventSelector events={events} onSelectEvent={handleSelectEvent} onAccessAdmin={handleAdminAccessFromSelector} />;
     }
 
+    // Sector Selection Screen
+    if (selectedEvent && view === 'scanner' && isSectorSelectionStep) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
+                    <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
+                    <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
+                    
+                    <button 
+                        onClick={() => handleConfirmSectorSelection(null)}
+                        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-transform transform hover:scale-105"
+                    >
+                        Validar Todos os Setores (Geral)
+                    </button>
+
+                    <div className="border-t border-gray-600 my-4 relative">
+                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE UM SETOR</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                        {sectorNames.map(sector => (
+                            <button
+                                key={sector}
+                                onClick={() => handleConfirmSectorSelection(sector)}
+                                className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-4 rounded-lg border border-gray-600 hover:border-orange-400 transition-colors"
+                            >
+                                {sector}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="mt-8 text-center">
+                        <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
+                            Voltar para seleção de eventos
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     const TABS: SectorFilter[] = ['All', ...sectorNames];
+    
+    // Filter history if a sector is locked so the user only sees relevant scans
+    const displayHistory = lockedSector 
+        ? scanHistory.filter(s => s.ticketSector === lockedSector)
+        : scanHistory;
 
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
@@ -297,9 +373,20 @@ const App: React.FC = () => {
                     {selectedEvent ? (
                         <div>
                             <h1 className="text-3xl font-bold text-orange-500">{selectedEvent.name}</h1>
-                            <button onClick={handleSwitchEvent} className="text-sm text-orange-400 hover:underline">
-                               Trocar Evento
-                            </button>
+                            {lockedSector ? (
+                                <div className="flex items-center space-x-2">
+                                    <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30">
+                                        Validando: {lockedSector}
+                                    </span>
+                                    <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline">
+                                        Alterar
+                                    </button>
+                                </div>
+                            ) : (
+                                <button onClick={handleSwitchEvent} className="text-sm text-orange-400 hover:underline">
+                                    Trocar Evento
+                                </button>
+                            )}
                         </div>
                     ) : (
                         <div>
@@ -331,19 +418,22 @@ const App: React.FC = () => {
                     {view === 'scanner' && selectedEvent ? (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
-                                <div className="bg-gray-800 p-2 rounded-lg overflow-hidden">
-                                    <div className="flex space-x-2 overflow-x-auto pb-1">
-                                        {TABS.map(sector => (
-                                            <button 
-                                                key={sector}
-                                                onClick={() => setSelectedSector(sector)}
-                                                className={`flex-shrink-0 py-2 px-3 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${selectedSector === sector ? 'bg-orange-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
-                                            >
-                                                {sector === 'All' ? 'Todos os Setores' : sector}
-                                            </button>
-                                        ))}
+                                {/* Only show sector tabs if NO specific sector is locked */}
+                                {!lockedSector && (
+                                    <div className="bg-gray-800 p-2 rounded-lg overflow-hidden">
+                                        <div className="flex space-x-2 overflow-x-auto pb-1">
+                                            {TABS.map(sector => (
+                                                <button 
+                                                    key={sector}
+                                                    onClick={() => setSelectedSector(sector)}
+                                                    className={`flex-shrink-0 py-2 px-3 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${selectedSector === sector ? 'bg-orange-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                                                >
+                                                    {sector === 'All' ? 'Todos os Setores' : sector}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
+                                )}
                                 <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-lg overflow-hidden border-4 border-gray-700">
                                     {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} />}
                                     <Scanner onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
@@ -351,7 +441,11 @@ const App: React.FC = () => {
                             </div>
 
                              <div className="space-y-6">
-                                 <TicketList tickets={scanHistory} sectorNames={sectorNames} />
+                                 <TicketList 
+                                    tickets={displayHistory} 
+                                    sectorNames={sectorNames} 
+                                    hideTabs={!!lockedSector}
+                                 />
                              </div>
                         </div>
                     ) : (

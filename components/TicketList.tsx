@@ -6,14 +6,17 @@ interface TicketListProps {
   tickets: DisplayableScanLog[];
   // FIX: Changed type from `[string, string]` to `string[]` to support a variable number of sectors.
   sectorNames: string[];
+  hideTabs?: boolean;
 }
 
-const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames }) => {
+const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs = false }) => {
     const [activeTab, setActiveTab] = useState<Sector | 'All'>('All');
     
-    const filteredTickets = tickets.filter(ticket => 
-        activeTab === 'All' || ticket.ticketSector === activeTab
-    );
+    // If hideTabs is true, we ignore the local activeTab filter (or the parent passes filtered data anyway)
+    // but typically if tabs are hidden, we assume 'All' (which shows everything passed in `tickets`).
+    const filteredTickets = hideTabs 
+        ? tickets 
+        : tickets.filter(ticket => activeTab === 'All' || ticket.ticketSector === activeTab);
 
   if (!tickets.length) {
     return (
@@ -53,23 +56,25 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames }) => {
     <div className="w-full bg-gray-800/80 backdrop-blur-sm p-4 rounded-lg border border-gray-700 shadow-lg">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 gap-2">
         <h3 className="text-lg font-semibold text-white">Histórico de Validações</h3>
-        <div className="w-full md:w-auto overflow-x-auto pb-1">
-            <div className="flex space-x-1 bg-gray-700 p-1 rounded-lg min-w-max">
-                {(['All', ...sectorNames] as (Sector | 'All')[]).map(tab => (
-                    <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className={`px-3 py-1 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${
-                            activeTab === tab
-                            ? 'bg-orange-600 text-white'
-                            : 'text-gray-300 hover:bg-gray-600'
-                        }`}
-                    >
-                        {tab === 'All' ? 'Todos' : tab}
-                    </button>
-                ))}
+        {!hideTabs && (
+            <div className="w-full md:w-auto overflow-x-auto pb-1">
+                <div className="flex space-x-1 bg-gray-700 p-1 rounded-lg min-w-max">
+                    {(['All', ...sectorNames] as (Sector | 'All')[]).map(tab => (
+                        <button
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            className={`px-3 py-1 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${
+                                activeTab === tab
+                                ? 'bg-orange-600 text-white'
+                                : 'text-gray-300 hover:bg-gray-600'
+                            }`}
+                        >
+                            {tab === 'All' ? 'Todos' : tab}
+                        </button>
+                    ))}
+                </div>
             </div>
-        </div>
+        )}
       </div>
       <ul className="divide-y divide-gray-700 h-96 overflow-y-auto">
         {filteredTickets.map((ticket) => (
