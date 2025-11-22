@@ -6,7 +6,7 @@ import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, writeBatch, doc, setDoc } from 'firebase/firestore';
+import { Firestore, writeBatch, doc, setDoc, addDoc, collection, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { CloudDownloadIcon, TableCellsIcon, CogIcon, EyeIcon, EyeSlashIcon } from './Icons';
 import Papa from 'papaparse';
 
@@ -37,10 +37,12 @@ interface ApiEndpoint {
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
-    const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState('');
     const [isSavingSectors, setIsSavingSectors] = useState(false);
+    
+    // Event Creation State
+    const [newEventName, setNewEventName] = useState('');
 
     // API Import State
     const [importType, setImportType] = useState<ImportType>('tickets');
@@ -124,7 +126,35 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     };
 
-    // ... analytics code omitted for brevity, unchanged ...
+    // --- Event Management Functions ---
+    const handleCreateEvent = async () => {
+        if (!newEventName.trim()) return alert('Nome do evento é obrigatório');
+        try {
+            await addDoc(collection(db, 'events'), {
+                name: newEventName,
+                createdAt: serverTimestamp(),
+                isHidden: false
+            });
+            setNewEventName('');
+            alert('Evento criado com sucesso!');
+        } catch (e) {
+            console.error(e);
+            alert('Erro ao criar evento');
+        }
+    };
+
+    const handleToggleEventVisibility = async (event: Event) => {
+        try {
+            await updateDoc(doc(db, 'events', event.id), {
+                isHidden: !event.isHidden
+            });
+        } catch (e) {
+            console.error(e);
+            alert('Erro ao atualizar evento');
+        }
+    };
+
+    // --- Analytics Data ---
     const analyticsData: AnalyticsData = useMemo(() => {
         const validScans = scanHistory.filter(s => s.status === 'VALID');
         if (validScans.length === 0) {
@@ -251,11 +281,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         return { newSectors, ticketsToSave };
     };
 
-    const saveImportedData = async (newSectors: Set<string>, ticketsToSave: Ticket[], ticketsToUpdateStatus: any[] = []) => {
+    const saveImportedData = async (newSectors: Set<string>, ticketsToSave: Ticket[]) => {
         if (!selectedEvent) return;
         
         // Update Sectors
-        if (ticketsToSave.length > 0) {
+        if (newSectors.size > 0) {
             const currentSectorsSet = new Set(sectorNames);
             let sectorsUpdated = false;
             newSectors.forEach(s => {
@@ -287,189 +317,211 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const batch = writeBatch(db);
                 chunk.forEach(ticket => {
                     const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', ticket.id);
-                    batch.set(ticketRef, {
-                        sector: ticket.sector,
-                        details: ticket.details,
-                    }, { merge: true });
+                    batch.set(ticketRef, ticket);
                 });
                 await batch.commit();
                 savedCount += chunk.length;
+                setLoadingMessage(`Salvando... ${savedCount}/${ticketsToSave.length}`);
             }
         }
-        
-        return savedCount;
     };
 
-    const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    // --- IMPORT API LOGIC ---
+    const handleImportApi = async () => {
+        if (!selectedEvent) return;
+        setIsLoading(true);
+        setLoadingMessage('Iniciando conexão com a API...');
+
+        try {
+            let allItems: any[] = [];
+            let page = 1;
+            let hasNextPage = true;
+            
+            // Construct Initial URL
+            const baseUrlObj = new URL(apiUrl);
+            if (apiEventId) baseUrlObj.searchParams.set('event_id', apiEventId);
+            baseUrlObj.searchParams.set('per_page', '500'); // Force high limit
+            
+            let currentUrl = baseUrlObj.toString();
+
+            while (hasNextPage) {
+                setLoadingMessage(`Baixando página ${page}... (Total: ${allItems.length})`);
+                
+                const response = await fetch(currentUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${apiToken}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Erro na API: ${response.status} - ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                let pageItems: any[] = [];
+                // Detect structure
+                if (Array.isArray(data)) {
+                    pageItems = data;
+                    hasNextPage = false;
+                } else if (data.data && Array.isArray(data.data)) {
+                    pageItems = data.data;
+                } else {
+                     // Try to find any array
+                     Object.values(data).forEach(val => {
+                         if (Array.isArray(val) && val.length > 0) pageItems = val;
+                     });
+                }
+
+                if (pageItems.length === 0) {
+                    hasNextPage = false;
+                    break;
+                }
+                
+                // Duplicate Check to prevent infinite loops
+                const firstItem = pageItems[0];
+                const isDuplicate = allItems.some(i => 
+                    (i.id && i.id === firstItem.id) || 
+                    (i.code && i.code === firstItem.code) ||
+                    (i.ticket_code && i.ticket_code === firstItem.ticket_code)
+                );
+
+                if (isDuplicate && page > 1) {
+                    console.warn("Duplicate page detected. Stopping pagination.");
+                    hasNextPage = false;
+                    break;
+                }
+
+                allItems = [...allItems, ...pageItems];
+
+                // Determine Next URL
+                if (data.next_page_url) {
+                    let nextLink = data.next_page_url;
+                    
+                    // FIX: Force HTTPS
+                    if (nextLink.startsWith('http:')) nextLink = nextLink.replace('http:', 'https:');
+                    
+                    const nextUrlObj = new URL(nextLink);
+                    
+                    // FIX: Re-inject Params if lost
+                    if (apiEventId && !nextUrlObj.searchParams.has('event_id')) {
+                        nextUrlObj.searchParams.set('event_id', apiEventId);
+                    }
+                    if (!nextUrlObj.searchParams.has('per_page')) {
+                        nextUrlObj.searchParams.set('per_page', '500');
+                    }
+                    
+                    currentUrl = nextUrlObj.toString();
+                    page++;
+                } else if (data.last_page && page < data.last_page) {
+                    // Manual fallback
+                    page++;
+                    baseUrlObj.searchParams.set('page', page.toString());
+                    currentUrl = baseUrlObj.toString();
+                } else {
+                    hasNextPage = false;
+                }
+            }
+
+            setLoadingMessage(`Processando ${allItems.length} itens...`);
+            
+            const newSectors = new Set<string>();
+            const ticketsToSave: Ticket[] = [];
+
+            allItems.forEach(item => {
+                let code, sector, ownerName, status = 'AVAILABLE';
+                
+                // Normalize item data based on endpoint type
+                if (importType === 'tickets') {
+                    code = item.code || item.qr_code;
+                    sector = item.sector?.name || item.sector || 'Geral';
+                    ownerName = item.participant?.name || item.owner_name || 'Participante';
+                    // Some APIs return used status
+                    if (item.is_used || item.status === 'used') status = 'USED';
+                } else if (importType === 'participants') {
+                     code = item.ticket_code || item.code;
+                     sector = item.sector || 'Geral';
+                     ownerName = item.name;
+                } else if (importType === 'buyers') {
+                     // Buyers often have nested tickets
+                     if (item.tickets && Array.isArray(item.tickets)) {
+                         item.tickets.forEach((t: any) => {
+                             newSectors.add(t.sector || 'Geral');
+                             ticketsToSave.push({
+                                 id: String(t.code || t.qr_code).trim(),
+                                 sector: String(t.sector || 'Geral').trim(),
+                                 status: 'AVAILABLE',
+                                 details: { ownerName: item.name }
+                             });
+                         });
+                         return; // Skip adding the buyer itself
+                     }
+                }
+
+                if (code) {
+                    newSectors.add(String(sector));
+                    ticketsToSave.push({
+                        id: String(code).trim(),
+                        sector: String(sector).trim(),
+                        status: status as any,
+                        details: { ownerName: String(ownerName) }
+                    });
+                }
+            });
+
+            await saveImportedData(newSectors, ticketsToSave);
+            
+            setLoadingMessage('');
+            alert(`Importação concluída! ${ticketsToSave.length} ingressos importados.`);
+
+        } catch (error: any) {
+            console.error("Erro importação:", error);
+            alert(`Erro: ${error.message}`);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-        
-        setIsLoading(true);
-        setLoadingMessage('Lendo arquivo...');
 
         Papa.parse(file, {
             header: true,
-            skipEmptyLines: true,
             complete: async (results) => {
-                 try {
-                    const { newSectors, ticketsToSave } = await processCsvData(results.data);
-                    if (ticketsToSave.length === 0) {
-                        alert('Nenhum ingresso identificado no arquivo. Verifique os cabeçalhos (Code, Sector, Name).');
-                    } else {
-                        const count = await saveImportedData(newSectors, ticketsToSave);
-                        alert(`${count} ingressos importados do arquivo com sucesso!`);
-                    }
-                 } catch (err) {
-                     console.error(err);
-                     alert('Erro ao processar arquivo.');
-                 } finally {
-                     setIsLoading(false);
-                     setLoadingMessage('');
-                     if (fileInputRef.current) fileInputRef.current.value = '';
-                 }
+                const { newSectors, ticketsToSave } = await processCsvData(results.data);
+                await saveImportedData(newSectors, ticketsToSave);
+                alert(`Arquivo CSV processado! ${ticketsToSave.length} ingressos importados.`);
+            },
+            error: (error) => {
+                alert(`Erro ao ler CSV: ${error.message}`);
+            }
+        });
+    };
+    
+    const handleGoogleSheetsImport = () => {
+        if (!apiUrl) return alert('Cole o link CSV do Google Sheets.');
+        setIsLoading(true);
+        Papa.parse(apiUrl, {
+            download: true,
+            header: true,
+            complete: async (results) => {
+                const { newSectors, ticketsToSave } = await processCsvData(results.data);
+                await saveImportedData(newSectors, ticketsToSave);
+                alert(`Planilha importada! ${ticketsToSave.length} ingressos salvos.`);
+                setIsLoading(false);
             },
             error: (err) => {
-                alert('Erro ao ler CSV: ' + err.message);
+                alert('Erro ao baixar planilha. Verifique se está publicada como CSV na Web.');
                 setIsLoading(false);
             }
         });
     };
-
-    const handleImportFromApi = async () => {
-        if (!selectedEvent) return;
-        
-        setIsLoading(true);
-        setLoadingMessage('Iniciando...');
-        
-        try {
-            const allItems: any[] = [];
-            const newSectors = new Set<string>();
-            const ticketsToSave: Ticket[] = [];
-            const ticketsToUpdateStatus: { id: string, usedAt: number }[] = [];
-
-            // --- GOOGLE SHEETS ---
-            if (importType === 'google_sheets') {
-                 if (!apiUrl.trim()) { throw new Error("Link da planilha é obrigatório"); }
-                 setLoadingMessage('Baixando planilha...');
-                 
-                 let fetchUrl = apiUrl;
-                 if (fetchUrl.includes('docs.google.com/spreadsheets') && !fetchUrl.includes('output=csv')) {
-                     if (fetchUrl.includes('/edit')) {
-                         fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
-                     }
-                 }
-
-                 const response = await fetch(fetchUrl);
-                 if (!response.ok) throw new Error('Falha ao baixar planilha. Verifique se o link é público.');
-                 const csvText = await response.text();
-                 const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-                 
-                 const { newSectors: ns, ticketsToSave: ts } = await processCsvData(parsed.data);
-                 if (ts.length === 0) throw new Error("Nenhum dado válido encontrado na planilha.");
-                 
-                 const count = await saveImportedData(ns, ts);
-                 alert(`Importação concluída! ${count} ingressos salvos.`);
-                 setIsLoading(false);
-                 return;
-            } 
-            
-            // --- STANDARD API IMPORTS ---
-            const urlObj = new URL(apiUrl);
-            if (apiEventId && !urlObj.searchParams.has('event_id')) urlObj.searchParams.set('event_id', apiEventId);
-            urlObj.searchParams.set('per_page', '500');
-            
-            let nextUrl: string | null = urlObj.toString();
-            let pageCount = 0;
-            const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-            if (apiToken.trim()) headers['Authorization'] = `Bearer ${apiToken.trim()}`;
-            const seenIds = new Set<string>();
-
-            while (nextUrl && pageCount < 5000) {
-                pageCount++;
-                setLoadingMessage(`Baixando pág ${pageCount} (Itens: ${allItems.length})...`);
-                
-                if (nextUrl.startsWith('http://')) nextUrl = nextUrl.replace('http://', 'https://');
-                const res = await fetch(nextUrl, { headers });
-                if (!res.ok) break;
-                const json = await res.json();
-                
-                let items: any[] = [];
-                if (Array.isArray(json)) items = json;
-                else if (json.data && Array.isArray(json.data)) items = json.data;
-                else if (json.tickets) items = json.tickets;
-                
-                if (items.length === 0) break;
-                
-                let newCount = 0;
-                items.forEach(item => {
-                    const id = item.id || item.code || item.ticket_code;
-                    if (id && !seenIds.has(String(id))) {
-                        seenIds.add(String(id));
-                        allItems.push(item);
-                        newCount++;
-                    }
-                });
-                if (newCount === 0 && allItems.length > 0) break;
-
-                nextUrl = json.next_page_url || (json.links?.next) || (json.meta?.next_page_url);
-                if (nextUrl) {
-                     const u = new URL(nextUrl);
-                     if (apiEventId) u.searchParams.set('event_id', apiEventId);
-                     u.searchParams.set('per_page', '500');
-                     nextUrl = u.toString();
-                }
-            }
-            
-            if (allItems.length === 0) throw new Error("Nenhum dado retornado pela API.");
-
-            allItems.forEach(item => {
-                 const code = item.code || item.qr_code || item.ticket_code || item.id;
-                 if (!code) return;
-                 
-                 if (importType === 'checkins' || apiUrl.includes('checkins')) {
-                     const ts = item.created_at || item.checked_in_at;
-                     ticketsToUpdateStatus.push({ id: String(code), usedAt: ts ? new Date(ts).getTime() : Date.now() });
-                 } else {
-                     let sector = item.sector || item.sector_name || item.category || 'Geral';
-                     if (typeof sector === 'object') sector = sector.name;
-                     const name = item.owner_name || item.name || '';
-                     newSectors.add(String(sector));
-                     ticketsToSave.push({ id: String(code), sector: String(sector), status: 'AVAILABLE', details: { ownerName: String(name) } });
-                 }
-            });
-
-            const count = await saveImportedData(newSectors, ticketsToSave, ticketsToUpdateStatus);
-            alert(`Sucesso! ${count} registros processados.`);
-
-        } catch (error) {
-            console.error('Import Error:', error);
-            alert(`Falha na importação: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
-        } finally {
-            setIsLoading(false);
-            setLoadingMessage('');
-        }
-    };
     
-    // --- Multi-Endpoint Validation Config Helpers ---
-    const handleAddEndpoint = () => {
-        setApiEndpoints([...apiEndpoints, { id: Date.now().toString(), name: '', url: '', token: '', customEventId: '' }]);
-    };
-
-    const handleRemoveEndpoint = (id: string) => {
-        setApiEndpoints(apiEndpoints.filter(ep => ep.id !== id));
-    };
-
-    const handleEndpointChange = (id: string, field: keyof ApiEndpoint, value: string) => {
-        setApiEndpoints(apiEndpoints.map(ep => ep.id === id ? { ...ep, [field]: value } : ep));
-    };
-    
-    const toggleTokenVisibility = (id: string) => {
-        setVisibleTokens(prev => ({ ...prev, [id]: !prev[id] }));
-    };
-
-    const handleSaveValidationSettings = async () => {
+    // --- VALIDATION CONFIG SAVE ---
+    const handleSaveValidationConfig = async () => {
         if (!selectedEvent) return;
-        setIsSavingSectors(true);
         try {
             await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), {
                 validation: {
@@ -481,221 +533,374 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         } catch (e) {
             console.error(e);
             alert('Erro ao salvar configurações.');
-        } finally {
-            setIsSavingSectors(false);
         }
     };
 
-    // Helper for rendering
-    const NoEventSelectedMessage = () => <div className="p-8 text-center text-gray-400">Selecione um evento.</div>;
+    // Add/Remove Endpoint Handlers
+    const handleAddEndpoint = () => {
+        setApiEndpoints([...apiEndpoints, { id: Date.now().toString(), name: '', url: '', token: '', customEventId: '' }]);
+    };
+    
+    const handleRemoveEndpoint = (id: string) => {
+        setApiEndpoints(apiEndpoints.filter(ep => ep.id !== id));
+    };
+    
+    const handleEndpointChange = (id: string, field: keyof ApiEndpoint, value: string) => {
+        setApiEndpoints(apiEndpoints.map(ep => ep.id === id ? { ...ep, [field]: value } : ep));
+    };
 
-    const renderContent = () => {
-        if (!selectedEvent && activeTab !== 'events') return <NoEventSelectedMessage />;
-        
-        switch (activeTab) {
-            case 'stats': return <Stats allTickets={allTickets} sectorNames={sectorNames} />; 
-            case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
-            case 'events': return (
-                <div className="bg-gray-800 p-4 rounded">
-                    <h3 className="text-lg font-bold mb-4">Gerenciar Eventos</h3>
-                    <div className="space-y-4">
-                        {events.map(e => (
-                            <div key={e.id} className="flex justify-between bg-gray-700 p-2 rounded">
-                                <span>{e.name}</span>
-                                <span className="text-xs text-gray-400">{e.isHidden ? '(Oculto)' : ''}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            );
-            case 'settings':
-                if (!selectedEvent) return <NoEventSelectedMessage />;
-                return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* LEFT COLUMN: Sectors & Validation Mode */}
-                        <div className="space-y-6">
-                            <div className="bg-gray-800 p-4 rounded-lg">
-                                <h3 className="text-lg font-semibold mb-3">Configurar Setores</h3>
-                                <div className="space-y-2 mb-4">
-                                    {editableSectorNames.map((name, index) => (
-                                        <div key={index} className="flex gap-2">
-                                            <input className="flex-1 bg-gray-700 p-2 rounded border border-gray-600" value={name} onChange={e => handleSectorNameChange(index, e.target.value)} />
-                                            <button onClick={() => handleRemoveSector(index)} className="bg-red-600 px-3 rounded text-white">&times;</button>
-                                        </div>
-                                    ))}
-                                </div>
-                                <div className="flex gap-2">
-                                    <button onClick={handleAddSector} className="flex-1 bg-gray-600 p-2 rounded hover:bg-gray-500">Add Setor</button>
-                                    <button onClick={handleSaveSectorNames} className="flex-1 bg-orange-600 p-2 rounded hover:bg-orange-500 font-bold">Salvar</button>
-                                </div>
-                            </div>
-
-                            <div className="bg-gray-800 p-4 rounded-lg border border-blue-500/30">
-                                <h3 className="text-lg font-semibold mb-3 text-blue-400 flex items-center">
-                                    <CogIcon className="w-5 h-5 mr-2" />
-                                    Modo de Operação
-                                </h3>
-                                <div className="flex bg-gray-700 rounded p-1 mb-4">
-                                    <button 
-                                        onClick={() => setValidationMode('OFFLINE')}
-                                        className={`flex-1 py-2 rounded transition-colors ${validationMode === 'OFFLINE' ? 'bg-blue-600 text-white font-bold' : 'text-gray-400 hover:text-white'}`}
-                                    >
-                                        OFFLINE (Local)
-                                    </button>
-                                    <button 
-                                        onClick={() => setValidationMode('ONLINE')}
-                                        className={`flex-1 py-2 rounded transition-colors ${validationMode === 'ONLINE' ? 'bg-green-600 text-white font-bold' : 'text-gray-400 hover:text-white'}`}
-                                    >
-                                        ONLINE (API)
-                                    </button>
-                                </div>
-                                
-                                {validationMode === 'ONLINE' && (
-                                    <div className="space-y-3 animate-fade-in">
-                                        <p className="text-xs text-gray-300 mb-2">Configure abaixo as APIs onde o sistema buscará os ingressos. Ele tentará na ordem da lista até encontrar.</p>
-                                        
-                                        {apiEndpoints.map((ep, idx) => (
-                                            <div key={ep.id} className="p-3 bg-gray-700/50 border border-gray-600 rounded relative">
-                                                <div className="flex justify-between items-center mb-2">
-                                                    <span className="text-xs font-bold text-blue-300">API #{idx + 1}</span>
-                                                    <button onClick={() => handleRemoveEndpoint(ep.id)} className="text-xs text-red-400 hover:text-red-300">Remover</button>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-2 mb-2">
-                                                     <input 
-                                                        type="text" 
-                                                        placeholder="Nome (ex: Sympla)"
-                                                        value={ep.name}
-                                                        onChange={e => handleEndpointChange(ep.id, 'name', e.target.value)}
-                                                        className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs"
-                                                    />
-                                                    <input 
-                                                        type="text" 
-                                                        placeholder="ID Evento (Numérico)"
-                                                        value={ep.customEventId}
-                                                        onChange={e => handleEndpointChange(ep.id, 'customEventId', e.target.value)}
-                                                        className={`w-full bg-gray-800 p-1.5 rounded border text-xs ${!ep.customEventId ? 'border-red-500/50 bg-red-900/10' : 'border-gray-600'}`}
-                                                    />
-                                                </div>
-                                                <input 
-                                                    type="text" 
-                                                    placeholder="URL (https://...)"
-                                                    value={ep.url}
-                                                    onChange={e => handleEndpointChange(ep.id, 'url', e.target.value)}
-                                                    className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs mb-2"
-                                                />
-                                                <div className="relative">
-                                                    <input 
-                                                        type={visibleTokens[ep.id] ? 'text' : 'password'}
-                                                        placeholder="Token (Bearer)"
-                                                        value={ep.token}
-                                                        onChange={e => handleEndpointChange(ep.id, 'token', e.target.value)}
-                                                        className="w-full bg-gray-800 p-1.5 rounded border border-gray-600 text-xs pr-8"
-                                                    />
-                                                    <button 
-                                                        onClick={() => toggleTokenVisibility(ep.id)}
-                                                        className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white focus:outline-none"
-                                                        tabIndex={-1}
-                                                        title={visibleTokens[ep.id] ? "Ocultar senha" : "Mostrar senha"}
-                                                    >
-                                                        {visibleTokens[ep.id] ? <EyeSlashIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
-                                                    </button>
-                                                </div>
-                                                {!ep.customEventId && <p className="text-[10px] text-red-400 mt-1">* ID do Evento é obrigatório para evitar erro 404</p>}
-                                            </div>
-                                        ))}
-
-                                        <button 
-                                            onClick={handleAddEndpoint}
-                                            className="w-full py-2 border border-dashed border-gray-500 text-gray-400 text-sm rounded hover:border-gray-400 hover:text-white"
-                                        >
-                                            + Adicionar Outra API
-                                        </button>
-                                    </div>
-                                )}
-                                
-                                <button 
-                                    onClick={handleSaveValidationSettings}
-                                    className="w-full mt-3 bg-blue-700 hover:bg-blue-600 py-2 rounded font-bold text-sm"
-                                >
-                                    Salvar Configuração de Validação
-                                </button>
-                            </div>
-                        </div>
-                        
-                        {/* RIGHT COLUMN: Imports */}
-                        <div className="space-y-6">
-                             <div className="bg-gray-800 p-4 rounded-lg border border-orange-500/30">
-                                <h3 className="text-lg font-semibold mb-3 text-orange-400 flex items-center">
-                                    <CloudDownloadIcon className="w-5 h-5 mr-2" />
-                                    Importar Dados
-                                </h3>
-                                
-                                <div className="mb-4">
-                                    <label className="text-xs text-gray-400 block mb-1">Método de Importação</label>
-                                    <select value={importType} onChange={e => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 mb-2">
-                                        <option value="tickets">API (Tickets)</option>
-                                        <option value="checkins">API (Checkins)</option>
-                                        <option value="google_sheets">Google Sheets (Link)</option>
-                                        <option value="custom">Upload CSV Local</option>
-                                    </select>
-                                    
-                                    {importType === 'custom' ? (
-                                        <div className="text-center p-4 border-2 border-dashed border-gray-600 rounded-lg bg-gray-700/30">
-                                            <input 
-                                                type="file" 
-                                                accept=".csv" 
-                                                ref={fileInputRef} 
-                                                style={{display: 'none'}} 
-                                                onChange={handleFileUpload} 
-                                            />
-                                            <button 
-                                                onClick={() => fileInputRef.current?.click()}
-                                                className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold flex items-center justify-center mx-auto"
-                                            >
-                                                <TableCellsIcon className="w-5 h-5 mr-2"/>
-                                                Selecionar Arquivo CSV
-                                            </button>
-                                            <p className="text-xs text-gray-400 mt-2">Colunas: code, sector, name</p>
-                                        </div>
-                                    ) : (
-                                        <>
-                                           <input 
-                                                type="text" 
-                                                value={apiUrl} 
-                                                onChange={e => setApiUrl(e.target.value)} 
-                                                placeholder={importType === 'google_sheets' ? "Cole o link público do CSV aqui" : "URL da API"}
-                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 mb-2 text-sm"
-                                           />
-                                           {importType !== 'google_sheets' && (
-                                               <div className="flex gap-2 mb-2">
-                                                    <input type="password" value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder="Token (opcional)" className="flex-1 bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
-                                                    <input type="text" value={apiEventId} onChange={e => setApiEventId(e.target.value)} placeholder="ID Evento (opc)" className="w-24 bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
-                                               </div>
-                                           )}
-                                           <button onClick={handleImportFromApi} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:opacity-50">
-                                               {isLoading ? loadingMessage : 'Iniciar Importação'}
-                                           </button>
-                                        </>
-                                    )}
-                                </div>
-                             </div>
-                        </div>
-                    </div>
-                );
-            default: return null;
-        }
+    const toggleTokenVisibility = (id: string) => {
+        setVisibleTokens(prev => ({ ...prev, [id]: !prev[id] }));
     };
 
     return (
-        <div className="w-full max-w-6xl mx-auto">
-            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-2">
-                {['stats', 'settings', 'history', 'events'].map(tab => (
-                    <button key={tab} onClick={() => setActiveTab(tab as any)} className={`px-4 py-2 rounded font-bold capitalize ${activeTab === tab ? 'bg-orange-600 text-white' : 'text-gray-400 hover:bg-gray-700'}`}>
-                        {tab === 'stats' ? 'Dashboard' : tab === 'settings' ? 'Configurações' : tab === 'history' ? 'Histórico' : 'Eventos'}
-                    </button>
-                ))}
+        <div className="w-full bg-gray-800 p-6 rounded-lg shadow-xl">
+            <h2 className="text-2xl font-bold text-orange-500 mb-6">Painel Administrativo</h2>
+            
+            <div className="flex space-x-2 mb-6 overflow-x-auto pb-2">
+                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'stats' ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>Estatísticas</button>
+                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>Configurar Ingressos</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'history' ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>Histórico Completo</button>
+                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-lg transition-colors ${activeTab === 'events' ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>Gerenciar Eventos</button>
             </div>
-            {renderContent()}
+            
+            {activeTab === 'stats' && selectedEvent && (
+                <div className="space-y-6 animate-fade-in">
+                    <Stats allTickets={allTickets} sectorNames={sectorNames} />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <PieChart data={pieChartData} title="Distribuição de Entradas por Setor" />
+                        <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
+                    </div>
+                    <div className="flex justify-center mt-6">
+                        <button 
+                            onClick={() => generateEventReport(selectedEvent.name, allTickets, scanHistory, sectorNames)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg flex items-center shadow-lg transition-transform transform hover:scale-105"
+                        >
+                            <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                            Baixar Relatório Completo (PDF)
+                        </button>
+                    </div>
+                </div>
+            )}
+            
+            {activeTab === 'settings' && selectedEvent && (
+                 <div className="space-y-8 animate-fade-in text-white">
+                    
+                    {/* --- VALIDATION MODE --- */}
+                    <div className="bg-gray-700 p-6 rounded-lg border border-gray-600">
+                        <h3 className="text-xl font-bold text-white mb-4 flex items-center">
+                            <CogIcon className="w-6 h-6 mr-2 text-orange-400"/>
+                            Modo de Operação
+                        </h3>
+                        
+                        <div className="flex items-center space-x-4 mb-6">
+                            <label className="flex items-center cursor-pointer">
+                                <input 
+                                    type="radio" 
+                                    name="validationMode"
+                                    value="OFFLINE"
+                                    checked={validationMode === 'OFFLINE'}
+                                    onChange={() => setValidationMode('OFFLINE')}
+                                    className="form-radio text-orange-600 h-5 w-5"
+                                />
+                                <span className="ml-2 text-lg">Offline (Banco de Dados Local)</span>
+                            </label>
+                            <label className="flex items-center cursor-pointer">
+                                <input 
+                                    type="radio" 
+                                    name="validationMode"
+                                    value="ONLINE"
+                                    checked={validationMode === 'ONLINE'}
+                                    onChange={() => setValidationMode('ONLINE')}
+                                    className="form-radio text-orange-600 h-5 w-5"
+                                />
+                                <span className="ml-2 text-lg">Online (API em Tempo Real)</span>
+                            </label>
+                        </div>
+
+                        {validationMode === 'ONLINE' && (
+                            <div className="space-y-4 pl-4 border-l-2 border-orange-500 bg-gray-800/50 p-4 rounded-r-lg">
+                                <div className="flex justify-between items-center mb-2">
+                                    <h4 className="font-semibold text-orange-300">Conexões de API (Endpoints)</h4>
+                                    <button 
+                                        onClick={handleAddEndpoint}
+                                        className="text-xs bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded"
+                                    >
+                                        + Adicionar API
+                                    </button>
+                                </div>
+                                
+                                {apiEndpoints.map((ep, index) => (
+                                    <div key={ep.id} className="bg-gray-900 p-4 rounded border border-gray-700 relative">
+                                        {apiEndpoints.length > 1 && (
+                                            <button onClick={() => handleRemoveEndpoint(ep.id)} className="absolute top-2 right-2 text-red-400 hover:text-red-300 text-xs">Remover</button>
+                                        )}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                             <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Nome (ex: ST Ingressos)</label>
+                                                <input 
+                                                    type="text" 
+                                                    value={ep.name}
+                                                    onChange={(e) => handleEndpointChange(ep.id, 'name', e.target.value)}
+                                                    className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white"
+                                                    placeholder="Nome da Integração"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">URL de Validação (Endpoint)</label>
+                                                <input 
+                                                    type="text" 
+                                                    value={ep.url}
+                                                    onChange={(e) => handleEndpointChange(ep.id, 'url', e.target.value)}
+                                                    className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white font-mono"
+                                                    placeholder="https://api.exemplo.com/checkins"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1">Token de Acesso</label>
+                                                <div className="relative">
+                                                    <input 
+                                                        type={visibleTokens[ep.id] ? "text" : "password"}
+                                                        value={ep.token}
+                                                        onChange={(e) => handleEndpointChange(ep.id, 'token', e.target.value)}
+                                                        className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white pr-10"
+                                                        placeholder="Token Bearer"
+                                                    />
+                                                    <button 
+                                                        type="button"
+                                                        onClick={() => toggleTokenVisibility(ep.id)}
+                                                        className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+                                                    >
+                                                        {visibleTokens[ep.id] ? <EyeSlashIcon className="w-5 h-5"/> : <EyeIcon className="w-5 h-5"/>}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-gray-400 mb-1 flex items-center">
+                                                    ID do Evento (Numérico) 
+                                                    {!ep.customEventId && <span className="ml-2 text-red-400 text-[10px] font-bold animate-pulse">OBRIGATÓRIO</span>}
+                                                </label>
+                                                <input 
+                                                    type="number" 
+                                                    value={ep.customEventId || ''}
+                                                    onChange={(e) => handleEndpointChange(ep.id, 'customEventId', e.target.value)}
+                                                    className={`w-full bg-gray-800 border rounded p-2 text-sm text-white ${!ep.customEventId ? 'border-red-500' : 'border-gray-600'}`}
+                                                    placeholder="Ex: 155"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="mt-4 text-right">
+                            <button onClick={handleSaveValidationConfig} className="bg-orange-600 hover:bg-orange-500 text-white px-4 py-2 rounded font-bold">Salvar Configuração</button>
+                        </div>
+                    </div>
+
+                    <div className="border-t border-gray-600 my-8"></div>
+
+                    {/* --- IMPORT DATA SECTION --- */}
+                    <h3 className="text-xl font-bold mb-4">Importar Dados (Base Local)</h3>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <button 
+                            onClick={() => handleImportTypeChange('tickets')}
+                            className={`p-4 rounded border ${importType === 'tickets' ? 'border-orange-500 bg-orange-900/20 text-orange-400' : 'border-gray-600 bg-gray-700'}`}
+                        >
+                            Ingressos (/tickets)
+                        </button>
+                        <button 
+                            onClick={() => handleImportTypeChange('participants')}
+                             className={`p-4 rounded border ${importType === 'participants' ? 'border-orange-500 bg-orange-900/20 text-orange-400' : 'border-gray-600 bg-gray-700'}`}
+                        >
+                            Participantes (/participants)
+                        </button>
+                        <button 
+                            onClick={() => handleImportTypeChange('buyers')}
+                             className={`p-4 rounded border ${importType === 'buyers' ? 'border-orange-500 bg-orange-900/20 text-orange-400' : 'border-gray-600 bg-gray-700'}`}
+                        >
+                            Compradores (/buyers)
+                        </button>
+                        <button 
+                            onClick={() => handleImportTypeChange('checkins')}
+                             className={`p-4 rounded border ${importType === 'checkins' ? 'border-orange-500 bg-orange-900/20 text-orange-400' : 'border-gray-600 bg-gray-700'}`}
+                        >
+                            Histórico Check-ins
+                        </button>
+                         <button 
+                            onClick={() => handleImportTypeChange('google_sheets')}
+                             className={`p-4 rounded border ${importType === 'google_sheets' ? 'border-green-500 bg-green-900/20 text-green-400' : 'border-gray-600 bg-gray-700'}`}
+                        >
+                           <TableCellsIcon className="w-5 h-5 inline mr-2"/>
+                            Google Sheets / CSV
+                        </button>
+                    </div>
+
+                    {importType === 'google_sheets' ? (
+                        <div className="bg-gray-700 p-4 rounded-lg">
+                             <p className="text-sm text-gray-300 mb-2">
+                                1. No Google Sheets: Arquivo {'>'} Compartilhar {'>'} Publicar na Web {'>'} Formato CSV.<br/>
+                                2. Cole o link gerado abaixo.
+                            </p>
+                            <input 
+                                type="text" 
+                                className="w-full p-2 rounded bg-gray-800 border border-gray-600 text-white mb-2"
+                                placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
+                                value={apiUrl}
+                                onChange={(e) => setApiUrl(e.target.value)}
+                            />
+                             <div className="flex space-x-2">
+                                <button 
+                                    onClick={handleGoogleSheetsImport}
+                                    disabled={isLoading}
+                                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded font-bold flex items-center disabled:opacity-50"
+                                >
+                                    {isLoading ? 'Importando...' : 'Importar Planilha'}
+                                </button>
+                                <span className="text-gray-400 self-center">OU</span>
+                                <input 
+                                    type="file" 
+                                    accept=".csv"
+                                    ref={fileInputRef}
+                                    className="hidden"
+                                    onChange={handleFileUpload}
+                                />
+                                <button 
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded font-bold"
+                                >
+                                    Upload Arquivo CSV
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">URL da API</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full p-2 rounded bg-gray-800 border border-gray-600 text-white"
+                                    value={apiUrl}
+                                    onChange={(e) => setApiUrl(e.target.value)}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">Token (Bearer)</label>
+                                    <input 
+                                        type="password" 
+                                        className="w-full p-2 rounded bg-gray-800 border border-gray-600 text-white"
+                                        value={apiToken}
+                                        onChange={(e) => setApiToken(e.target.value)}
+                                        placeholder="Cole seu token aqui"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">ID Evento (Filtro)</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full p-2 rounded bg-gray-800 border border-gray-600 text-white"
+                                        value={apiEventId}
+                                        onChange={(e) => setApiEventId(e.target.value)}
+                                        placeholder="Opcional (ex: 155)"
+                                    />
+                                </div>
+                            </div>
+                            <button 
+                                onClick={handleImportApi}
+                                disabled={isLoading}
+                                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded disabled:opacity-50 flex justify-center items-center"
+                            >
+                                <CloudDownloadIcon className="w-5 h-5 mr-2" />
+                                {isLoading ? (loadingMessage || 'Importando...') : 'Importar da API'}
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="border-t border-gray-600 my-8"></div>
+                    
+                    {/* --- SECTOR MANAGEMENT --- */}
+                    <h3 className="text-xl font-bold mb-4">Gerenciar Setores</h3>
+                    <div className="space-y-3">
+                        {editableSectorNames.map((name, index) => (
+                            <div key={index} className="flex items-center space-x-2">
+                                <input
+                                    type="text"
+                                    value={name}
+                                    onChange={(e) => handleSectorNameChange(index, e.target.value)}
+                                    className="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-orange-500"
+                                />
+                                <button 
+                                    onClick={() => handleRemoveSector(index)}
+                                    className="text-red-400 hover:text-red-300 px-2"
+                                >
+                                    X
+                                </button>
+                            </div>
+                        ))}
+                        <div className="flex space-x-3 mt-4">
+                            <button onClick={handleAddSector} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white">
+                                + Adicionar Setor
+                            </button>
+                            <button 
+                                onClick={handleSaveSectorNames} 
+                                disabled={isSavingSectors}
+                                className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-white font-bold disabled:opacity-50"
+                            >
+                                {isSavingSectors ? 'Salvando...' : 'Salvar Alterações'}
+                            </button>
+                        </div>
+                    </div>
+                 </div>
+            )}
+
+            {activeTab === 'history' && selectedEvent && (
+                 <div className="space-y-4 animate-fade-in">
+                     <h3 className="text-xl font-bold text-white">Histórico Completo</h3>
+                     <TicketList tickets={scanHistory} sectorNames={sectorNames} />
+                 </div>
+            )}
+
+            {activeTab === 'events' && (
+                <div className="space-y-6 animate-fade-in">
+                    <h3 className="text-xl font-bold text-white">Meus Eventos</h3>
+                    
+                    <div className="bg-gray-700 p-4 rounded-lg flex space-x-2">
+                        <input 
+                            type="text" 
+                            placeholder="Nome do novo evento"
+                            className="flex-1 bg-gray-800 border border-gray-600 rounded px-3 text-white"
+                            value={newEventName}
+                            onChange={(e) => setNewEventName(e.target.value)}
+                        />
+                        <button 
+                            onClick={handleCreateEvent}
+                            className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded font-bold"
+                        >
+                            Criar
+                        </button>
+                    </div>
+
+                    <div className="space-y-2">
+                        {events.map(event => (
+                            <div key={event.id} className="bg-gray-700 p-4 rounded flex justify-between items-center">
+                                <span className={`font-bold text-lg ${event.isHidden ? 'text-gray-500 line-through' : 'text-white'}`}>{event.name}</span>
+                                <div className="flex items-center space-x-3">
+                                    <span className="text-xs text-gray-400">{event.id}</span>
+                                    <button 
+                                        onClick={() => handleToggleEventVisibility(event)}
+                                        className="text-sm underline text-orange-300 hover:text-orange-200"
+                                    >
+                                        {event.isHidden ? 'Mostrar' : 'Ocultar'}
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                        {events.length === 0 && <p className="text-gray-400 text-center">Nenhum evento criado.</p>}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
