@@ -205,14 +205,21 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setLoadingMessage('Iniciando conexão...');
         
         try {
-            // Build Initial URL
-            let nextUrl: string | null = apiUrl;
+            // Build Initial URL with forced pagination size
             const urlObj = new URL(apiUrl);
             
+            // Add ID if provided
             if (apiEventId) {
-                urlObj.searchParams.append('event_id', apiEventId);
-                nextUrl = urlObj.toString();
+                urlObj.searchParams.set('event_id', apiEventId);
             }
+            
+            // Force a large per_page to minimize requests and avoid default 15 limits
+            // Using 300 is usually safe for most APIs
+            if (!urlObj.searchParams.has('per_page') && !urlObj.searchParams.has('limit')) {
+                urlObj.searchParams.set('per_page', '300');
+            }
+
+            let nextUrl: string | null = urlObj.toString();
 
             const headers: HeadersInit = {
                 'Content-Type': 'application/json',
@@ -228,7 +235,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             // --- PAGINATION LOOP ---
             while (nextUrl) {
                 pageCount++;
-                setLoadingMessage(`Baixando página ${pageCount}...`);
+                setLoadingMessage(`Baixando página ${pageCount} (Total: ${allItems.length})...`);
 
                 const response = await fetch(nextUrl, { headers });
                 
@@ -251,14 +258,28 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     pageItems = [jsonResponse.data];
                 }
 
-                allItems.push(...pageItems);
+                if (pageItems.length > 0) {
+                    allItems.push(...pageItems);
+                } else {
+                     // Empty page usually means we are done, even if next_page_url exists
+                     break; 
+                }
 
                 // Determine Next URL for Pagination
-                // Checks for 'next_page_url' (Laravel standard) or 'links.next' (JSON API standard)
-                if (jsonResponse.next_page_url) {
-                    nextUrl = jsonResponse.next_page_url;
-                } else if (jsonResponse.links && jsonResponse.links.next) {
-                    nextUrl = jsonResponse.links.next;
+                const rawNextUrl = jsonResponse.next_page_url || (jsonResponse.links && jsonResponse.links.next);
+                
+                if (rawNextUrl) {
+                    // CRITICAL: Re-attach params (like event_id and per_page) if the API drops them in the next_link
+                    const nextUrlObj = new URL(rawNextUrl);
+                    
+                    if (apiEventId && !nextUrlObj.searchParams.has('event_id')) {
+                        nextUrlObj.searchParams.set('event_id', apiEventId);
+                    }
+                    if (!nextUrlObj.searchParams.has('per_page') && !nextUrlObj.searchParams.has('limit')) {
+                        nextUrlObj.searchParams.set('per_page', '300');
+                    }
+                    
+                    nextUrl = nextUrlObj.toString();
                 } else {
                     nextUrl = null; // No more pages
                 }
