@@ -214,10 +214,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
             
             // Force a large per_page to minimize requests and avoid default 15 limits
-            // Using 300 is usually safe for most APIs
-            if (!urlObj.searchParams.has('per_page') && !urlObj.searchParams.has('limit')) {
-                urlObj.searchParams.set('per_page', '300');
-            }
+            // We set both 'per_page' and 'limit' to cover different API standards
+            urlObj.searchParams.set('per_page', '1000');
+            urlObj.searchParams.set('limit', '1000');
 
             let nextUrl: string | null = urlObj.toString();
 
@@ -231,11 +230,18 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
             const allItems: any[] = [];
             let pageCount = 0;
+            let totalFetched = 0;
 
             // --- PAGINATION LOOP ---
             while (nextUrl) {
                 pageCount++;
-                setLoadingMessage(`Baixando página ${pageCount} (Total: ${allItems.length})...`);
+                setLoadingMessage(`Baixando página ${pageCount} (Itens: ${totalFetched})...`);
+
+                // Fix Protocol Mismatch (HTTP vs HTTPS)
+                // APIs behind proxies sometimes return http links in next_page_url while the app is https
+                if (window.location.protocol === 'https:' && nextUrl.startsWith('http:')) {
+                    nextUrl = nextUrl.replace('http:', 'https:');
+                }
 
                 const response = await fetch(nextUrl, { headers });
                 
@@ -247,36 +253,60 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 
                 // Determine structure and extract items for this page
                 let pageItems: any[] = [];
+                let paginationRoot = jsonResponse;
+
                 if (Array.isArray(jsonResponse)) {
                     pageItems = jsonResponse;
                 } else if (jsonResponse.data && Array.isArray(jsonResponse.data)) {
                     pageItems = jsonResponse.data;
                 } else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) {
                     pageItems = jsonResponse.tickets;
+                } else if (jsonResponse.data && typeof jsonResponse.data === 'object' && jsonResponse.data.data && Array.isArray(jsonResponse.data.data)) {
+                    // Nested structure: { data: { data: [...], next_page_url: ... } }
+                    paginationRoot = jsonResponse.data;
+                    pageItems = jsonResponse.data.data;
                 } else if (jsonResponse.data && typeof jsonResponse.data === 'object') {
-                    // Handle single object response wrapped in data
+                    // Single object wrapped
                     pageItems = [jsonResponse.data];
                 }
 
                 if (pageItems.length > 0) {
                     allItems.push(...pageItems);
+                    totalFetched += pageItems.length;
                 } else {
-                     // Empty page usually means we are done, even if next_page_url exists
-                     break; 
+                     // Empty page usually means we are done
+                     // But we continue to check next_page_url just in case logic differs
                 }
 
                 // Determine Next URL for Pagination
-                const rawNextUrl = jsonResponse.next_page_url || (jsonResponse.links && jsonResponse.links.next);
+                let rawNextUrl = paginationRoot.next_page_url || (paginationRoot.links && paginationRoot.links.next);
                 
+                // Manual Fallback: if next_page_url is missing but we have current/last page info
+                // This happens if API doesn't return full URLs
+                if (!rawNextUrl && paginationRoot.current_page && paginationRoot.last_page && paginationRoot.current_page < paginationRoot.last_page) {
+                     const u = new URL(nextUrl);
+                     u.searchParams.set('page', String(paginationRoot.current_page + 1));
+                     rawNextUrl = u.toString();
+                }
+
                 if (rawNextUrl) {
                     // CRITICAL: Re-attach params (like event_id and per_page) if the API drops them in the next_link
                     const nextUrlObj = new URL(rawNextUrl);
                     
+                    // Persist event_id
                     if (apiEventId && !nextUrlObj.searchParams.has('event_id')) {
                         nextUrlObj.searchParams.set('event_id', apiEventId);
+                    } else if (urlObj.searchParams.has('event_id') && !nextUrlObj.searchParams.has('event_id')) {
+                        // Inherit from initial URL if explicit ID wasn't provided but was in URL
+                        nextUrlObj.searchParams.set('event_id', urlObj.searchParams.get('event_id')!);
                     }
-                    if (!nextUrlObj.searchParams.has('per_page') && !nextUrlObj.searchParams.has('limit')) {
-                        nextUrlObj.searchParams.set('per_page', '300');
+
+                    // Persist limits
+                    if (!nextUrlObj.searchParams.has('per_page')) {
+                        nextUrlObj.searchParams.set('per_page', '1000');
+                    }
+                    if (!nextUrlObj.searchParams.has('limit')) {
+                        nextUrlObj.searchParams.set('limit', '1000');
                     }
                     
                     nextUrl = nextUrlObj.toString();
