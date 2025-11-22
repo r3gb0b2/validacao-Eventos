@@ -16,14 +16,6 @@ import { CogIcon, QrCodeIcon } from './components/Icons';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event } from './types';
 
-interface ApiEndpointConfig {
-    id?: string;
-    name?: string;
-    url: string;
-    token: string;
-    customEventId?: string;
-}
-
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
@@ -39,14 +31,10 @@ const App: React.FC = () => {
     
     // New state for Sector Selection Flow
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
-    // Changed from single string to array of strings for multi-selection
-    const [activeSectors, setActiveSectors] = useState<string[]>([]);
+    const [lockedSector, setLockedSector] = useState<string | null>(null);
 
     // Validation Config State
-    const [validationConfig, setValidationConfig] = useState<{
-        mode: string;
-        endpoints: ApiEndpointConfig[];
-    }>({ mode: 'OFFLINE', endpoints: [] });
+    const [validationConfig, setValidationConfig] = useState({ mode: 'OFFLINE', url: '', token: '' });
 
     const cooldownRef = useRef<boolean>(false);
 
@@ -152,17 +140,11 @@ const App: React.FC = () => {
                     setSectorNames(data.sectorNames);
                 }
                 if (data.validation) {
-                    const mode = data.validation.mode || 'OFFLINE';
-                    let endpoints: ApiEndpointConfig[] = [];
-                    
-                    if (data.validation.endpoints && Array.isArray(data.validation.endpoints)) {
-                        endpoints = data.validation.endpoints;
-                    } else if (data.validation.url) {
-                        // Legacy support
-                        endpoints.push({ url: data.validation.url, token: data.validation.token || '' });
-                    }
-                    
-                    setValidationConfig({ mode, endpoints });
+                    setValidationConfig({
+                        mode: data.validation.mode || 'OFFLINE',
+                        url: data.validation.url || '',
+                        token: data.validation.token || ''
+                    });
                 }
             }
         });
@@ -189,38 +171,25 @@ const App: React.FC = () => {
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
         setIsSectorSelectionStep(true);
-        setActiveSectors([]); // Reset selection
+        setLockedSector(null);
         localStorage.setItem('selectedEventId', event.id);
     };
 
-    // Toggle sector selection for the setup screen
-    const toggleSectorSelection = (sector: string) => {
-        setActiveSectors(prev => {
-            if (prev.includes(sector)) {
-                return prev.filter(s => s !== sector);
-            } else {
-                return [...prev, sector];
-            }
-        });
-    };
-
-    const confirmSectorSelection = () => {
-        // If empty, it implies all (but usually we use the "All" button for that).
-        // If the user clicks confirm with empty list, we assume All.
+    const handleConfirmSectorSelection = (sector: string | null) => {
+        if (sector) {
+            setSelectedSector(sector);
+            setLockedSector(sector);
+        } else {
+            setSelectedSector('All');
+            setLockedSector(null);
+        }
         setIsSectorSelectionStep(false);
-        setSelectedSector('All');
-    };
-
-    const handleSelectAllSectors = () => {
-        setActiveSectors([]); // Empty array means ALL sectors
-        setIsSectorSelectionStep(false);
-        setSelectedSector('All');
     };
 
     const handleSwitchEvent = () => {
         setSelectedEvent(null);
         setView('scanner');
-        setActiveSectors([]);
+        setLockedSector(null);
         setIsSectorSelectionStep(false);
         localStorage.removeItem('selectedEventId');
     };
@@ -253,12 +222,6 @@ const App: React.FC = () => {
         const eventId = selectedEvent.id;
         const ticketId = decodedText.trim();
 
-        // Helper to check if sector is allowed
-        const isSectorAllowed = (sectorToCheck: string) => {
-            if (activeSectors.length === 0) return true; // All allowed
-            return activeSectors.includes(sectorToCheck);
-        };
-
         // --- ONLINE MODE ---
         if (validationConfig.mode === 'ONLINE') {
             if (!navigator.onLine) {
@@ -266,184 +229,49 @@ const App: React.FC = () => {
                 return;
             }
             
-            const endpoints = validationConfig.endpoints.length > 0 
-                ? validationConfig.endpoints 
-                : [{ url: '', token: '' }]; 
+            // Optimistic Check for Sector (if we have local data)
+            let detectedSector = 'API';
+            const localTicket = ticketsMap.get(ticketId);
+            if (localTicket) detectedSector = localTicket.sector;
 
-            let resultStatus: ScanStatus | null = null;
-            let resultMessage = '';
-            let resultSector = 'API';
-            let found = false;
-            let triedCode = '';
-
-            // PREPARE CODES TO TRY
-            const codesToTry = [ticketId];
-            
-            // Extract ID from URL if present
             try {
-                if (ticketId.match(/^https?:\/\//i)) {
-                    const urlObj = new URL(ticketId);
-                    const paramKeys = ['code', 'id', 'uuid', 'ticket', 'ticket_code', 't'];
-                    for (const key of paramKeys) {
-                        if (urlObj.searchParams.has(key)) {
-                            const val = urlObj.searchParams.get(key);
-                            if (val) codesToTry.push(val);
-                        }
+                const headers: HeadersInit = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+                if (validationConfig.token) headers['Authorization'] = `Bearer ${validationConfig.token}`;
+
+                const response = await fetch(validationConfig.url, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ code: ticketId, event_id: eventId }) // sending event_id just in case api needs it
+                });
+
+                if (response.ok) {
+                    // Success (200/201)
+                    const json = await response.json().catch(() => ({}));
+                    // Try to read sector from response if available
+                    if (json.sector) detectedSector = json.sector;
+                    else if (json.data && json.data.sector) detectedSector = json.data.sector;
+
+                    // Validate Sector Lock
+                    if (lockedSector && detectedSector !== 'API' && detectedSector !== lockedSector) {
+                        showScanResult('WRONG_SECTOR', `Setor incorreto! (${detectedSector})`);
+                        await logScan(ticketId, 'WRONG_SECTOR', detectedSector);
+                        return;
                     }
-                    const pathSegments = urlObj.pathname.split('/').filter(p => p && p.length > 0);
-                    if (pathSegments.length > 0) {
-                        const lastSegment = pathSegments[pathSegments.length - 1];
-                        if (!codesToTry.includes(lastSegment)) codesToTry.push(lastSegment);
-                    }
+
+                    showScanResult('VALID', 'Acesso Liberado (Online)!');
+                    await logScan(ticketId, 'VALID', detectedSector);
+                } else if (response.status === 404) {
+                    showScanResult('INVALID', `Ingresso não encontrado (API).`);
+                    await logScan(ticketId, 'INVALID', 'Desconhecido');
+                } else if (response.status === 422 || response.status === 409) {
+                    showScanResult('USED', 'Ingresso já utilizado (API).');
+                    await logScan(ticketId, 'USED', detectedSector);
+                } else {
+                    showScanResult('ERROR', `Erro API: ${response.status}`);
                 }
-            } catch (e) { console.warn("Error parsing potential URL code:", e); }
-
-            const uniqueCodes = [...new Set(codesToTry)];
-            console.log(`[Online Scan] Strategies starting. Codes:`, uniqueCodes);
-
-            // STRATEGY DEFINITIONS
-            const strategies = [
-                // 1. Standard POST Body (Most common)
-                {
-                    name: 'POST Body',
-                    fn: async (url: string, code: string, evtId: any, token: string) => {
-                        const body: any = { qr_code: code, code: code, uuid: code, ticket_code: code };
-                        if (evtId) body.event_id = evtId;
-                        return fetch(url, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
-                            body: JSON.stringify(body)
-                        });
-                    }
-                },
-                // 2. POST Path (e.g. /checkins/{code})
-                {
-                    name: 'POST Path',
-                    fn: async (url: string, code: string, evtId: any, token: string) => {
-                         const cleanUrl = url.replace(/\/$/, '');
-                         const fullUrl = `${cleanUrl}/${code}`;
-                         const body: any = {};
-                         if (evtId) body.event_id = evtId;
-                         return fetch(fullUrl, {
-                             method: 'POST',
-                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
-                             body: JSON.stringify(body)
-                         });
-                    }
-                },
-                // 3. GET Query Params
-                {
-                    name: 'GET Query',
-                    fn: async (url: string, code: string, evtId: any, token: string) => {
-                        const u = new URL(url);
-                        u.searchParams.set('code', code);
-                        u.searchParams.set('qr_code', code);
-                        if (evtId) u.searchParams.set('event_id', String(evtId));
-                        return fetch(u.toString(), {
-                            method: 'GET',
-                            headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` }
-                        });
-                    }
-                },
-                // 4. GET Path (e.g. /tickets/{code})
-                {
-                    name: 'GET Path',
-                    fn: async (url: string, code: string, evtId: any, token: string) => {
-                        const cleanUrl = url.replace(/\/$/, '');
-                        const fullUrl = `${cleanUrl}/${code}`;
-                        const u = new URL(fullUrl);
-                        if (evtId) u.searchParams.set('event_id', String(evtId));
-                        return fetch(u.toString(), {
-                            method: 'GET',
-                            headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` }
-                        });
-                    }
-                }
-            ];
-
-            // MAIN LOOPS
-            // 1. Loop APIs
-            for (const api of endpoints) {
-                if (!api.url) continue;
-                
-                // 2. Loop Codes
-                for (const codeAttempt of uniqueCodes) {
-                    
-                    // 3. Loop Strategies
-                    for (const strat of strategies) {
-                        try {
-                            triedCode = codeAttempt;
-                            const payloadEventId = api.customEventId || eventId;
-                            const finalEventId = /^\d+$/.test(String(payloadEventId)) ? parseInt(String(payloadEventId), 10) : payloadEventId;
-
-                            const response = await strat.fn(api.url, codeAttempt, finalEventId, api.token);
-
-                            if (response.status === 404) continue; // Not found, try next strategy/code
-
-                            const json = await response.json().catch(() => ({}));
-                            
-                            // Some APIs return 200 but with success: false
-                            if (response.ok && (json.success === false || json.status === 'error')) {
-                                // This is likely a logic error (e.g. "Already Used" returned as 200 with error msg)
-                                // We treat it as a "Found but failed" case
-                            } else if (!response.ok && response.status !== 422 && response.status !== 409) {
-                                // Server error or other issue, skip to next strategy? 
-                                // Usually if it's 500, we might want to stop, but let's keep trying just in case
-                                continue;
-                            }
-
-                            // If we got here, we found something (Valid 200, Used 409/422, or Soft Error)
-                            found = true;
-
-                            // Parse Response
-                            if (json.sector) resultSector = typeof json.sector === 'object' ? json.sector.name : json.sector;
-                            else if (json.data && json.data.sector) resultSector = typeof json.data.sector === 'object' ? json.data.sector.name : json.data.sector;
-                            else if (api.name) resultSector = api.name;
-
-                            // Check Status
-                            if (response.ok && json.success !== false) {
-                                // VALID
-                                if (!isSectorAllowed(resultSector) && resultSector !== 'API' && resultSector !== api.name) {
-                                    resultStatus = 'WRONG_SECTOR';
-                                    resultMessage = `Setor incorreto! (${resultSector})`;
-                                } else {
-                                    resultStatus = 'VALID';
-                                    resultMessage = `Acesso Liberado${api.name ? ` (${api.name})` : ''}!`;
-                                }
-                            } else {
-                                // INVALID / USED
-                                const msg = json.message || json.error || 'Ingresso inválido ou já utilizado';
-                                if (msg.toLowerCase().includes('já utilizado') || msg.toLowerCase().includes('used') || response.status === 409 || response.status === 422) {
-                                    resultStatus = 'USED';
-                                    resultMessage = `Ingresso Já Utilizado. ${msg}`;
-                                } else {
-                                    resultStatus = 'ERROR'; // Or Invalid
-                                    resultMessage = msg;
-                                }
-                            }
-                            break; // Break strategies loop
-                        } catch (err) {
-                            console.error(`[Online] Error on ${strat.name}:`, err);
-                        }
-                    }
-                    if (found) break; // Break codes loop
-                }
-                if (found) break; // Break API loop
-            }
-
-            if (!found) {
-                 // Warn about Event ID if configured incorrectly
-                 const missingEventId = endpoints.some(ep => !ep.customEventId);
-                 const advice = missingEventId ? " Verifique o ID do Evento." : "";
-                 
-                 showScanResult('INVALID', `Ingresso não encontrado.${advice}`);
-                 await logScan(ticketId, 'INVALID', 'Desconhecido');
-                 return;
-            }
-
-            if (resultStatus) {
-                showScanResult(resultStatus, resultMessage);
-                await logScan(ticketId, resultStatus, resultSector);
+            } catch (err) {
+                console.error(err);
+                showScanResult('ERROR', 'Erro de conexão com a API.');
             }
             return;
         }
@@ -465,18 +293,7 @@ const App: React.FC = () => {
             return;
         }
 
-        // Sector check
-        // 1. Check strict Multi-Sector selection
-        if (!isSectorAllowed(ticket.sector)) {
-             const message = `Setor incorreto! (É: ${ticket.sector})`;
-             showScanResult('WRONG_SECTOR', message);
-             await logScan(ticketId, 'WRONG_SECTOR', ticket.sector);
-             return;
-        }
-
-        // 2. Check legacy single selector in "All" mode (TicketList tabs)
-        // Only applies if we are NOT in restricted mode (activeSectors is empty)
-        if (activeSectors.length === 0 && selectedSector !== 'All' && ticket.sector !== selectedSector) {
+        if (selectedSector !== 'All' && ticket.sector !== selectedSector) {
             const message = `Setor incorreto! Ingresso para ${ticket.sector}, validação em ${selectedSector}.`;
             showScanResult('WRONG_SECTOR', message);
             await logScan(ticketId, 'WRONG_SECTOR', ticket.sector);
@@ -498,7 +315,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
         }
-    }, [db, selectedEvent, ticketsMap, selectedSector, validationConfig, activeSectors]);
+    }, [db, selectedEvent, ticketsMap, selectedSector, validationConfig, lockedSector]);
     
     const handleScanError = (errorMessage: string) => {
         // Debugging only
@@ -549,43 +366,27 @@ const App: React.FC = () => {
                     <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
                     
                     <button 
-                        onClick={handleSelectAllSectors}
-                        className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-colors border border-gray-600"
+                        onClick={() => handleConfirmSectorSelection(null)}
+                        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-transform transform hover:scale-105"
                     >
                         Validar Todos os Setores (Geral)
                     </button>
 
                     <div className="border-t border-gray-600 my-4 relative">
-                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE OS SETORES</span>
+                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE UM SETOR</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 mt-6 mb-6">
-                        {sectorNames.map(sector => {
-                            const isSelected = activeSectors.includes(sector);
-                            return (
-                                <button
-                                    key={sector}
-                                    onClick={() => toggleSectorSelection(sector)}
-                                    className={`font-semibold py-3 px-4 rounded-lg border transition-colors ${
-                                        isSelected 
-                                        ? 'bg-orange-600 text-white border-orange-500' 
-                                        : 'bg-gray-700 text-gray-300 border-gray-600 hover:border-gray-500'
-                                    }`}
-                                >
-                                    {sector}
-                                </button>
-                            );
-                        })}
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                        {sectorNames.map(sector => (
+                            <button
+                                key={sector}
+                                onClick={() => handleConfirmSectorSelection(sector)}
+                                className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-4 rounded-lg border border-gray-600 hover:border-orange-400 transition-colors"
+                            >
+                                {sector}
+                            </button>
+                        ))}
                     </div>
-                    
-                    {activeSectors.length > 0 && (
-                         <button 
-                            onClick={confirmSectorSelection}
-                            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg shadow-md animate-fade-in"
-                        >
-                            Validar {activeSectors.length} Setor(es) Selecionado(s)
-                        </button>
-                    )}
 
                     <div className="mt-8 text-center">
                         <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
@@ -599,15 +400,9 @@ const App: React.FC = () => {
 
     const TABS: SectorFilter[] = ['All', ...sectorNames];
     
-    // Filter history based on active sectors restriction
-    const displayHistory = activeSectors.length > 0
-        ? scanHistory.filter(s => activeSectors.includes(s.ticketSector) || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
+    const displayHistory = lockedSector 
+        ? scanHistory.filter(s => s.ticketSector === lockedSector || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
         : scanHistory;
-
-    // Format header text
-    const validationLabel = activeSectors.length > 0 
-        ? activeSectors.join(', ') 
-        : 'Todos os Setores';
 
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
@@ -620,26 +415,23 @@ const App: React.FC = () => {
                             <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3">
                                 {validationConfig.mode === 'ONLINE' && (
                                     <span className="text-xs font-bold bg-green-900 text-green-200 px-2 py-0.5 rounded border border-green-700 mb-1 sm:mb-0 self-start">
-                                        MODO ONLINE ({validationConfig.endpoints.length} APIs)
+                                        MODO ONLINE (API)
                                     </span>
                                 )}
-                                {activeSectors.length > 0 ? (
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30 max-w-[200px] truncate" title={validationLabel}>
-                                            Validando: {validationLabel}
+                                {lockedSector ? (
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30">
+                                            Validando: {lockedSector}
                                         </span>
-                                        <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline whitespace-nowrap">
+                                        <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline">
                                             Alterar
                                         </button>
                                     </div>
                                 ) : (
-                                    <button onClick={() => setIsSectorSelectionStep(true)} className="text-sm text-orange-400 hover:underline">
-                                        Selecionar Setores
+                                    <button onClick={handleSwitchEvent} className="text-sm text-orange-400 hover:underline">
+                                        Trocar Evento
                                     </button>
                                 )}
-                                <button onClick={handleSwitchEvent} className="text-sm text-gray-500 hover:text-gray-300 underline ml-2">
-                                    Sair
-                                </button>
                             </div>
                         </div>
                     ) : (
@@ -672,8 +464,8 @@ const App: React.FC = () => {
                     {view === 'scanner' && selectedEvent ? (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
-                                {/* Only show sector tabs if NO specific sector restriction is active */}
-                                {activeSectors.length === 0 && (
+                                {/* Only show sector tabs if NO specific sector is locked AND mode is Offline (Online handles sectors on backend usually, but tabs still useful for stats) */}
+                                {!lockedSector && (
                                     <div className="bg-gray-800 p-2 rounded-lg overflow-hidden">
                                         <div className="flex space-x-2 overflow-x-auto pb-1">
                                             {TABS.map(sector => (
@@ -698,7 +490,7 @@ const App: React.FC = () => {
                                  <TicketList 
                                     tickets={displayHistory} 
                                     sectorNames={sectorNames} 
-                                    hideTabs={activeSectors.length > 0}
+                                    hideTabs={!!lockedSector}
                                  />
                              </div>
                         </div>
