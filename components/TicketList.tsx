@@ -46,7 +46,7 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
           case 'VALID': return 'Válido';
           case 'USED': return 'Utilizado';
           case 'WRONG_SECTOR': return 'Setor Incorreto';
-          case 'INVALID': return 'Inválido';
+          case 'INVALID': return 'Não Encontrado';
           case 'ERROR': return 'Erro';
           default: return status;
       }
@@ -94,7 +94,9 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
               </div>
             </div>
             <div className="flex items-center space-x-3">
-                <span className="px-2 py-1 text-xs font-semibold text-white bg-gray-600 rounded-full">{ticket.ticketSector}</span>
+                <span className="px-2 py-1 text-xs font-semibold text-white bg-gray-600 rounded-full">
+                    {ticket.ticketSector === 'Desconhecido' ? 'N/A' : ticket.ticketSector}
+                </span>
                 <span className={`px-2 py-1 text-xs rounded-full ${getStatusBadgeStyle(ticket.status)}`}>{translateStatus(ticket.status)}</span>
             </div>
           </li>

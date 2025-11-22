@@ -361,8 +361,9 @@ const App: React.FC = () => {
     const TABS: SectorFilter[] = ['All', ...sectorNames];
     
     // Filter history if a sector is locked so the user only sees relevant scans
+    // We also include INVALID (not found) and WRONG_SECTOR scans so the user sees their error feedback immediately.
     const displayHistory = lockedSector 
-        ? scanHistory.filter(s => s.ticketSector === lockedSector)
+        ? scanHistory.filter(s => s.ticketSector === lockedSector || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
         : scanHistory;
 
     return (
