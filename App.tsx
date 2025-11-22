@@ -31,7 +31,8 @@ const App: React.FC = () => {
     
     // New state for Sector Selection Flow
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
-    const [lockedSector, setLockedSector] = useState<string | null>(null);
+    // Changed from single string to array of strings for multi-selection
+    const [activeSectors, setActiveSectors] = useState<string[]>([]);
 
     // Validation Config State
     const [validationConfig, setValidationConfig] = useState({ mode: 'OFFLINE', url: '', token: '' });
@@ -171,25 +172,38 @@ const App: React.FC = () => {
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
         setIsSectorSelectionStep(true);
-        setLockedSector(null);
+        setActiveSectors([]); // Reset selection
         localStorage.setItem('selectedEventId', event.id);
     };
 
-    const handleConfirmSectorSelection = (sector: string | null) => {
-        if (sector) {
-            setSelectedSector(sector);
-            setLockedSector(sector);
-        } else {
-            setSelectedSector('All');
-            setLockedSector(null);
-        }
+    // Toggle sector selection for the setup screen
+    const toggleSectorSelection = (sector: string) => {
+        setActiveSectors(prev => {
+            if (prev.includes(sector)) {
+                return prev.filter(s => s !== sector);
+            } else {
+                return [...prev, sector];
+            }
+        });
+    };
+
+    const confirmSectorSelection = () => {
+        // If empty, it implies all (but usually we use the "All" button for that).
+        // If the user clicks confirm with empty list, we assume All.
         setIsSectorSelectionStep(false);
+        setSelectedSector('All');
+    };
+
+    const handleSelectAllSectors = () => {
+        setActiveSectors([]); // Empty array means ALL sectors
+        setIsSectorSelectionStep(false);
+        setSelectedSector('All');
     };
 
     const handleSwitchEvent = () => {
         setSelectedEvent(null);
         setView('scanner');
-        setLockedSector(null);
+        setActiveSectors([]);
         setIsSectorSelectionStep(false);
         localStorage.removeItem('selectedEventId');
     };
@@ -222,6 +236,12 @@ const App: React.FC = () => {
         const eventId = selectedEvent.id;
         const ticketId = decodedText.trim();
 
+        // Helper to check if sector is allowed
+        const isSectorAllowed = (sectorToCheck: string) => {
+            if (activeSectors.length === 0) return true; // All allowed
+            return activeSectors.includes(sectorToCheck);
+        };
+
         // --- ONLINE MODE ---
         if (validationConfig.mode === 'ONLINE') {
             if (!navigator.onLine) {
@@ -251,8 +271,8 @@ const App: React.FC = () => {
                     if (json.sector) detectedSector = json.sector;
                     else if (json.data && json.data.sector) detectedSector = json.data.sector;
 
-                    // Validate Sector Lock
-                    if (lockedSector && detectedSector !== 'API' && detectedSector !== lockedSector) {
+                    // Validate Sector Restriction
+                    if (!isSectorAllowed(detectedSector) && detectedSector !== 'API') {
                         showScanResult('WRONG_SECTOR', `Setor incorreto! (${detectedSector})`);
                         await logScan(ticketId, 'WRONG_SECTOR', detectedSector);
                         return;
@@ -293,7 +313,18 @@ const App: React.FC = () => {
             return;
         }
 
-        if (selectedSector !== 'All' && ticket.sector !== selectedSector) {
+        // Sector check
+        // 1. Check strict Multi-Sector selection
+        if (!isSectorAllowed(ticket.sector)) {
+             const message = `Setor incorreto! (É: ${ticket.sector})`;
+             showScanResult('WRONG_SECTOR', message);
+             await logScan(ticketId, 'WRONG_SECTOR', ticket.sector);
+             return;
+        }
+
+        // 2. Check legacy single selector in "All" mode (TicketList tabs)
+        // Only applies if we are NOT in restricted mode (activeSectors is empty)
+        if (activeSectors.length === 0 && selectedSector !== 'All' && ticket.sector !== selectedSector) {
             const message = `Setor incorreto! Ingresso para ${ticket.sector}, validação em ${selectedSector}.`;
             showScanResult('WRONG_SECTOR', message);
             await logScan(ticketId, 'WRONG_SECTOR', ticket.sector);
@@ -315,7 +346,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
         }
-    }, [db, selectedEvent, ticketsMap, selectedSector, validationConfig, lockedSector]);
+    }, [db, selectedEvent, ticketsMap, selectedSector, validationConfig, activeSectors]);
     
     const handleScanError = (errorMessage: string) => {
         // Debugging only
@@ -366,27 +397,43 @@ const App: React.FC = () => {
                     <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
                     
                     <button 
-                        onClick={() => handleConfirmSectorSelection(null)}
-                        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-transform transform hover:scale-105"
+                        onClick={handleSelectAllSectors}
+                        className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-colors border border-gray-600"
                     >
                         Validar Todos os Setores (Geral)
                     </button>
 
                     <div className="border-t border-gray-600 my-4 relative">
-                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE UM SETOR</span>
+                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE OS SETORES</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 mt-6">
-                        {sectorNames.map(sector => (
-                            <button
-                                key={sector}
-                                onClick={() => handleConfirmSectorSelection(sector)}
-                                className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-4 rounded-lg border border-gray-600 hover:border-orange-400 transition-colors"
-                            >
-                                {sector}
-                            </button>
-                        ))}
+                    <div className="grid grid-cols-2 gap-4 mt-6 mb-6">
+                        {sectorNames.map(sector => {
+                            const isSelected = activeSectors.includes(sector);
+                            return (
+                                <button
+                                    key={sector}
+                                    onClick={() => toggleSectorSelection(sector)}
+                                    className={`font-semibold py-3 px-4 rounded-lg border transition-colors ${
+                                        isSelected 
+                                        ? 'bg-orange-600 text-white border-orange-500' 
+                                        : 'bg-gray-700 text-gray-300 border-gray-600 hover:border-gray-500'
+                                    }`}
+                                >
+                                    {sector}
+                                </button>
+                            );
+                        })}
                     </div>
+                    
+                    {activeSectors.length > 0 && (
+                         <button 
+                            onClick={confirmSectorSelection}
+                            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg shadow-md animate-fade-in"
+                        >
+                            Validar {activeSectors.length} Setor(es) Selecionado(s)
+                        </button>
+                    )}
 
                     <div className="mt-8 text-center">
                         <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
@@ -400,9 +447,15 @@ const App: React.FC = () => {
 
     const TABS: SectorFilter[] = ['All', ...sectorNames];
     
-    const displayHistory = lockedSector 
-        ? scanHistory.filter(s => s.ticketSector === lockedSector || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
+    // Filter history based on active sectors restriction
+    const displayHistory = activeSectors.length > 0
+        ? scanHistory.filter(s => activeSectors.includes(s.ticketSector) || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
         : scanHistory;
+
+    // Format header text
+    const validationLabel = activeSectors.length > 0 
+        ? activeSectors.join(', ') 
+        : 'Todos os Setores';
 
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
@@ -418,20 +471,23 @@ const App: React.FC = () => {
                                         MODO ONLINE (API)
                                     </span>
                                 )}
-                                {lockedSector ? (
-                                    <div className="flex items-center space-x-2">
-                                        <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30">
-                                            Validando: {lockedSector}
+                                {activeSectors.length > 0 ? (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30 max-w-[200px] truncate" title={validationLabel}>
+                                            Validando: {validationLabel}
                                         </span>
-                                        <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline">
+                                        <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline whitespace-nowrap">
                                             Alterar
                                         </button>
                                     </div>
                                 ) : (
-                                    <button onClick={handleSwitchEvent} className="text-sm text-orange-400 hover:underline">
-                                        Trocar Evento
+                                    <button onClick={() => setIsSectorSelectionStep(true)} className="text-sm text-orange-400 hover:underline">
+                                        Selecionar Setores
                                     </button>
                                 )}
+                                <button onClick={handleSwitchEvent} className="text-sm text-gray-500 hover:text-gray-300 underline ml-2">
+                                    Sair
+                                </button>
                             </div>
                         </div>
                     ) : (
@@ -464,8 +520,8 @@ const App: React.FC = () => {
                     {view === 'scanner' && selectedEvent ? (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
-                                {/* Only show sector tabs if NO specific sector is locked AND mode is Offline (Online handles sectors on backend usually, but tabs still useful for stats) */}
-                                {!lockedSector && (
+                                {/* Only show sector tabs if NO specific sector restriction is active */}
+                                {activeSectors.length === 0 && (
                                     <div className="bg-gray-800 p-2 rounded-lg overflow-hidden">
                                         <div className="flex space-x-2 overflow-x-auto pb-1">
                                             {TABS.map(sector => (
@@ -490,7 +546,7 @@ const App: React.FC = () => {
                                  <TicketList 
                                     tickets={displayHistory} 
                                     sectorNames={sectorNames} 
-                                    hideTabs={!!lockedSector}
+                                    hideTabs={activeSectors.length > 0}
                                  />
                              </div>
                         </div>
