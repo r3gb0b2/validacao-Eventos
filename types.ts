@@ -51,3 +51,12 @@ export interface AnalyticsData {
         count: number;
     };
 }
+
+export type ValidationMode = 'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS';
+
+export interface ValidationConfig {
+    mode: ValidationMode;
+    onlineUrls: string[]; // Support multiple URLs for redundancy
+    onlineToken?: string;
+    onlineEventId?: string;
+}
