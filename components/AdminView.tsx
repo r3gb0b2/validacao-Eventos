@@ -42,6 +42,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [importUrl, setImportUrl] = useState('https://public-api.stingressos.com.br/tickets');
     const [importToken, setImportToken] = useState('');
     const [importEventId, setImportEventId] = useState('');
+    const [showImportToken, setShowImportToken] = useState(false);
 
     // Validation Config State
     const [validationMode, setValidationMode] = useState<ValidationMode>('OFFLINE');
@@ -62,8 +63,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (!selectedEvent) {
             setActiveTab('events');
         } else {
-            // Load config
-             const unsub = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'config'), (snap) => {
+            // Load validation config
+             const unsubConfig = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'config'), (snap) => {
                 if (snap.exists()) {
                     const data = snap.data() as ValidationConfig;
                     setValidationMode(data.mode || 'OFFLINE');
@@ -72,14 +73,30 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     setOnlineEventId(data.onlineEventId || '');
                 }
             });
-            return () => unsub();
+
+            // Load import settings (Pre-defined credentials)
+            const unsubImport = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import'), (snap) => {
+                if (snap.exists()) {
+                    const data = snap.data();
+                    setImportToken(data.token || '');
+                    setImportEventId(data.eventId || '');
+                } else {
+                    // Reset fields if no settings exist for this event
+                    setImportToken('');
+                    setImportEventId('');
+                }
+            });
+
+            return () => {
+                unsubConfig();
+                unsubImport();
+            }
         }
     }, [selectedEvent, db]);
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
-        setImportToken(''); 
-        setImportEventId('');
+        // Do not clear token and eventID here, keep them for convenience
         
         switch (type) {
             case 'tickets': setImportUrl('https://public-api.stingressos.com.br/tickets'); break;
@@ -193,6 +210,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+    };
+
+    const handleSaveImportCredentials = async () => {
+        if (!selectedEvent) return;
+        setIsLoading(true);
+        try {
+            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'), {
+                token: importToken,
+                eventId: importEventId
+            }, { merge: true });
+            alert("Credenciais de importação salvas!");
+        } catch(e) {
+            alert("Erro ao salvar credenciais.");
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     // --- IMPORT LOGIC (RETAINED) ---
@@ -320,6 +353,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     });
                     await batch.commit();
                 }
+
+                // Save credentials automatically on success
+                if (importType !== 'google_sheets') {
+                    await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import'), {
+                        token: importToken,
+                        eventId: importEventId
+                    }, { merge: true });
+                }
+
                 alert(`${ticketsToSave.length} registros importados com sucesso!`);
             } else {
                 alert('Nenhum registro encontrado. Verifique o ID do Evento.');
@@ -557,13 +599,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     
                                     {importType !== 'google_sheets' && (
                                         <div className="grid grid-cols-2 gap-2">
-                                            <input 
-                                                type="text" 
-                                                value={importToken} 
-                                                onChange={(e) => setImportToken(e.target.value)} 
-                                                placeholder="Token (Opcional)" 
-                                                className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none" 
-                                            />
+                                            <div className="relative">
+                                                <input 
+                                                    type={showImportToken ? "text" : "password"} 
+                                                    value={importToken} 
+                                                    onChange={(e) => setImportToken(e.target.value)} 
+                                                    placeholder="Token (Opcional)" 
+                                                    className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none pr-8" 
+                                                />
+                                                <button 
+                                                    onClick={() => setShowImportToken(!showImportToken)}
+                                                    className="absolute right-2 top-2 text-gray-400 hover:text-white"
+                                                    tabIndex={-1}
+                                                >
+                                                    {showImportToken ? <EyeSlashIcon className="w-4 h-4"/> : <EyeIcon className="w-4 h-4"/>}
+                                                </button>
+                                            </div>
                                             <input 
                                                 type="text" 
                                                 value={importEventId} 
@@ -572,6 +623,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                 className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm focus:border-orange-500 outline-none" 
                                             />
                                         </div>
+                                    )}
+                                    
+                                    {importType !== 'google_sheets' && (
+                                        <button onClick={handleSaveImportCredentials} className="text-xs text-gray-400 hover:text-white underline w-full text-right mb-1">
+                                            Salvar Acesso Padrão
+                                        </button>
                                     )}
 
                                     <button onClick={handleImportFromApi} disabled={isLoading} className="w-full bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 transition-colors">
