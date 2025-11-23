@@ -579,18 +579,54 @@ const App: React.FC = () => {
         // This is called frequently when no QR code is in view. Can be used for debugging.
     };
 
-    const handleAdminAccess = () => {
+    const checkAdminAuth = () => {
+        const storedAuth = localStorage.getItem('admin_auth_expiry');
+        if (storedAuth) {
+            const expiry = parseInt(storedAuth, 10);
+            if (Date.now() < expiry) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const loginAdmin = () => {
         const password = prompt("Digite a senha para acessar o painel administrativo:");
         if (password === "123654") {
-            setView('admin');
+            // Save persistence for 24 hours
+            const expiry = Date.now() + (24 * 60 * 60 * 1000);
+            localStorage.setItem('admin_auth_expiry', expiry.toString());
+            return true;
         } else if (password !== null) {
             alert("Senha incorreta!");
+        }
+        return false;
+    };
+
+    const handleAdminAccess = () => {
+        if (checkAdminAuth() || loginAdmin()) {
+            setView('admin');
         }
     };
     
     const handleAdminAccessFromSelector = useCallback(() => {
-        const password = prompt("Digite a senha para acessar o painel administrativo:");
-        if (password === "123654") {
+        const storedAuth = localStorage.getItem('admin_auth_expiry');
+        let isAuthenticated = false;
+
+        if (storedAuth && Date.now() < parseInt(storedAuth, 10)) {
+            isAuthenticated = true;
+        } else {
+             const password = prompt("Digite a senha para acessar o painel administrativo:");
+             if (password === "123654") {
+                const expiry = Date.now() + (24 * 60 * 60 * 1000);
+                localStorage.setItem('admin_auth_expiry', expiry.toString());
+                isAuthenticated = true;
+             } else if (password !== null) {
+                alert("Senha incorreta!");
+             }
+        }
+
+        if (isAuthenticated) {
             if (events.length > 0 && !selectedEvent) {
                 const visibleEvents = events.filter(e => !e.isHidden);
                 if (visibleEvents.length > 0) {
@@ -600,8 +636,6 @@ const App: React.FC = () => {
                 }
             }
             setView('admin');
-        } else if (password !== null) {
-            alert("Senha incorreta!");
         }
     }, [events, selectedEvent]);
 
