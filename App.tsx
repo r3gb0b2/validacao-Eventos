@@ -20,6 +20,16 @@ import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event } from './t
 // To enable sounds, implement `hooks/useSound.ts`.
 // import useSound from './hooks/useSound';
 
+// Helper to get or create a unique ID for this browser/device
+const getDeviceId = () => {
+    let id = localStorage.getItem('device_id');
+    if (!id) {
+        // Generate a simple random ID
+        id = 'device_' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+        localStorage.setItem('device_id', id);
+    }
+    return id;
+};
 
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
@@ -51,6 +61,9 @@ const App: React.FC = () => {
     const [onlineSheetUrl, setOnlineSheetUrl] = useState('');
 
     const cooldownRef = useRef<boolean>(false);
+    
+    // Get current device ID
+    const deviceId = useMemo(() => getDeviceId(), []);
 
     // const playSuccessSound = useSound('/sounds/success.mp3');
     // const playErrorSound = useSound('/sounds/error.mp3');
@@ -217,6 +230,7 @@ const App: React.FC = () => {
                     timestamp: (data.timestamp as Timestamp)?.toMillis() || Date.now(),
                     ticketSector: data.sector ?? 'Desconhecido',
                     isPending: doc.metadata.hasPendingWrites,
+                    deviceId: data.deviceId // Ensure we capture who scanned it
                 };
             });
             setScanHistory(historyData);
@@ -448,13 +462,21 @@ const App: React.FC = () => {
                                 
                                 // Log to local history
                                 await addDoc(collection(db, 'events', eventId, 'scans'), {
-                                    ticketId: foundCode, status: 'VALID', timestamp: serverTimestamp(), sector: sector
+                                    ticketId: foundCode, 
+                                    status: 'VALID', 
+                                    timestamp: serverTimestamp(), 
+                                    sector: sector,
+                                    deviceId: deviceId // Log device ID
                                 });
                                 return;
                             } else if (response.status === 409 || response.status === 422) {
                                 showScanResult('USED', `Ingresso já utilizado! (${apiName})`);
                                 await addDoc(collection(db, 'events', eventId, 'scans'), {
-                                    ticketId: foundCode, status: 'USED', timestamp: serverTimestamp(), sector: 'Externo'
+                                    ticketId: foundCode, 
+                                    status: 'USED', 
+                                    timestamp: serverTimestamp(), 
+                                    sector: 'Externo',
+                                    deviceId: deviceId // Log device ID
                                 });
                                 return;
                             }
@@ -466,7 +488,11 @@ const App: React.FC = () => {
 
                 showScanResult('INVALID', 'Não encontrado em nenhuma API configurada.');
                 await addDoc(collection(db, 'events', eventId, 'scans'), {
-                    ticketId: decodedText, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Externo'
+                    ticketId: decodedText, 
+                    status: 'INVALID', 
+                    timestamp: serverTimestamp(), 
+                    sector: 'Externo',
+                    deviceId: deviceId // Log device ID
                 });
                 return;
             }
@@ -480,7 +506,7 @@ const App: React.FC = () => {
         const logScan = async (status: ScanStatus, sector: string) => {
             try {
                 await addDoc(collection(db, 'events', eventId, 'scans'), {
-                    ticketId, status, timestamp: serverTimestamp(), sector
+                    ticketId, status, timestamp: serverTimestamp(), sector, deviceId
                 });
             } catch (error) { console.error(`Failed to log ${status} scan:`, error); }
         };
@@ -513,7 +539,7 @@ const App: React.FC = () => {
             batch.update(ticketRef, { status: 'USED', usedAt: serverTimestamp() });
 
             const logRef = doc(collection(db, 'events', eventId, 'scans'));
-            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector });
+            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId });
 
             await batch.commit();
             showScanResult('VALID', `Acesso liberado para o setor ${ticket.sector}!`);
@@ -522,7 +548,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
         }
-    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl]);
+    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId]);
     
     const handleScanError = (errorMessage: string) => {
         // This is called frequently when no QR code is in view. Can be used for debugging.
@@ -637,11 +663,14 @@ const App: React.FC = () => {
 
     const TABS: SectorFilter[] = ['All', ...sectorNames];
     
-    // Filter history if a sector is locked so the user only sees relevant scans
-    // We also include INVALID (not found) and WRONG_SECTOR scans so the user sees their error feedback immediately.
+    // Filter history logic:
+    // 1. Filter by device ID (Local Scans Only for the list)
+    const myScans = scanHistory.filter(s => s.deviceId === deviceId);
+
+    // 2. Apply Sector Filters and Error Logic
     const displayHistory = (lockedSector && activeSectors.length > 0)
-        ? scanHistory.filter(s => activeSectors.includes(s.ticketSector) || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
-        : scanHistory;
+        ? myScans.filter(s => activeSectors.includes(s.ticketSector) || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
+        : myScans;
 
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
@@ -749,6 +778,7 @@ const App: React.FC = () => {
                             </div>
 
                              <div className="space-y-6">
+                                 {/* Pass only local device history to the TicketList */}
                                  <TicketList 
                                     tickets={displayHistory} 
                                     sectorNames={sectorNames} 
@@ -762,7 +792,7 @@ const App: React.FC = () => {
                             events={events}
                             selectedEvent={selectedEvent}
                             allTickets={allTickets}
-                            scanHistory={scanHistory}
+                            scanHistory={scanHistory} // Admin sees ALL history
                             sectorNames={sectorNames}
                             onUpdateSectorNames={handleUpdateSectorNames}
                             isOnline={isOnline}
