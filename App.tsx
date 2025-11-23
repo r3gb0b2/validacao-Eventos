@@ -45,6 +45,7 @@ const App: React.FC = () => {
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); // New state to track if data is ready
     const [isCheckingUrl, setIsCheckingUrl] = useState(true); // New state to prevent flashing login screen
+    const [manualCode, setManualCode] = useState(''); // State for manual code entry
     
     // New state for Sector Selection Flow
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
@@ -53,7 +54,7 @@ const App: React.FC = () => {
 
     // Inactivity Timer State
     const [isCameraActive, setIsCameraActive] = useState(true);
-    const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
     // Online Validation Config State
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
@@ -550,6 +551,12 @@ const App: React.FC = () => {
         }
     }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId]);
     
+    const handleManualSubmit = () => {
+        if (!manualCode.trim()) return;
+        handleScanSuccess(manualCode);
+        setManualCode('');
+    };
+
     const handleScanError = (errorMessage: string) => {
         // This is called frequently when no QR code is in view. Can be used for debugging.
     };
@@ -775,6 +782,27 @@ const App: React.FC = () => {
                                 {!isCameraActive && (
                                      <p className="text-center text-xs text-gray-500 mt-2">Modo economia de energia ativo</p>
                                 )}
+
+                                {/* Manual Input */}
+                                <div className="mt-4 bg-gray-800 p-4 rounded-lg shadow-lg border border-gray-700">
+                                    <p className="text-sm text-gray-400 mb-2 font-bold">Problemas com a câmera?</p>
+                                    <div className="flex space-x-2">
+                                        <input
+                                            type="text"
+                                            value={manualCode}
+                                            onChange={(e) => setManualCode(e.target.value)}
+                                            placeholder="Digite o código do ingresso..."
+                                            className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-orange-500 transition-colors"
+                                            onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
+                                        />
+                                        <button
+                                            onClick={handleManualSubmit}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-lg border border-gray-600 transition-colors"
+                                        >
+                                            Validar
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
 
                              <div className="space-y-6">

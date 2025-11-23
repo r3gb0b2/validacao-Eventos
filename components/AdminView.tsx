@@ -7,7 +7,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -34,7 +34,7 @@ interface ImportPreset {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events'>('stats');
+    const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
     const [isLoading, setIsLoading] = useState(false);
@@ -63,6 +63,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [onlineApiEndpoints, setOnlineApiEndpoints] = useState<{ url: string, token: string, eventId: string }[]>([{ url: '', token: '', eventId: '' }]);
     const [onlineSheetUrl, setOnlineSheetUrl] = useState('');
     const [visibleTokens, setVisibleTokens] = useState<{ [key: number]: boolean }>({});
+    
+    // Search Tab State
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResult, setSearchResult] = useState<{ ticket: Ticket | undefined, logs: DisplayableScanLog[] } | null>(null);
 
 
     // Load validation settings (Online Mode)
@@ -354,6 +358,21 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             prompt("Copie o link abaixo:", url);
         });
     };
+    
+    // Search handler
+    const handleSearch = () => {
+        if (!searchQuery.trim()) return;
+        
+        // Find ticket info
+        const ticket = allTickets.find(t => t.id === searchQuery.trim());
+        
+        // Find scan logs for this ticket
+        const logs = scanHistory.filter(l => l.ticketId === searchQuery.trim());
+        logs.sort((a,b) => b.timestamp - a.timestamp); // Newest first
+        
+        setSearchResult({ ticket, logs });
+    };
+
 
     const handleImportFromApi = async () => {
         if (!selectedEvent) return;
@@ -917,6 +936,121 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         </div>
                     </div>
                 );
+            case 'search':
+                if (!selectedEvent) return <NoEventSelectedMessage />;
+                return (
+                    <div className="max-w-2xl mx-auto space-y-6">
+                        <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                            <h2 className="text-xl font-bold mb-4 flex items-center">
+                                <SearchIcon className="w-6 h-6 mr-2 text-blue-500" />
+                                Consultar Ingresso
+                            </h2>
+                            <div className="flex space-x-2">
+                                <input 
+                                    type="text" 
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    placeholder="Digite o código..." 
+                                    className="flex-grow bg-gray-900 border border-gray-600 rounded p-3 text-white focus:outline-none focus:border-blue-500"
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                                />
+                                <button 
+                                    onClick={handleSearch}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 rounded transition-colors"
+                                >
+                                    Buscar
+                                </button>
+                            </div>
+                        </div>
+
+                        {searchResult && (
+                            <div className="animate-fade-in space-y-4">
+                                {/* Ticket Details Card */}
+                                <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
+                                    <div className="bg-gray-700 px-6 py-4 border-b border-gray-600">
+                                        <h3 className="font-bold text-lg">Detalhes do Ingresso</h3>
+                                    </div>
+                                    <div className="p-6">
+                                        {searchResult.ticket ? (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                <div>
+                                                    <p className="text-gray-400 text-sm uppercase font-bold">Código</p>
+                                                    <p className="text-xl text-white font-mono">{searchResult.ticket.id}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-gray-400 text-sm uppercase font-bold">Status Atual</p>
+                                                    <div className="flex items-center mt-1">
+                                                        {searchResult.ticket.status === 'USED' ? (
+                                                            <>
+                                                                <AlertTriangleIcon className="w-5 h-5 text-yellow-500 mr-2" />
+                                                                <span className="text-yellow-400 font-bold">JÁ UTILIZADO</span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <CheckCircleIcon className="w-5 h-5 text-green-500 mr-2" />
+                                                                <span className="text-green-400 font-bold">DISPONÍVEL</span>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <p className="text-gray-400 text-sm uppercase font-bold">Setor</p>
+                                                    <p className="text-white text-lg">{searchResult.ticket.sector}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-gray-400 text-sm uppercase font-bold">Nome do Dono</p>
+                                                    <p className="text-white text-lg">{searchResult.ticket.details?.ownerName || '-'}</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-center py-4">
+                                                <XCircleIcon className="w-12 h-12 text-red-500 mx-auto mb-2" />
+                                                <p className="text-red-400 font-bold text-lg">Ingresso não encontrado na base de dados.</p>
+                                                <p className="text-gray-400 text-sm mt-1">Verifique se o código está correto ou se foi importado.</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Validation History Timeline */}
+                                <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-6">
+                                    <h3 className="font-bold text-lg mb-4">Histórico de Tentativas</h3>
+                                    
+                                    {searchResult.logs.length > 0 ? (
+                                        <div className="relative border-l-2 border-gray-600 ml-3 pl-6 space-y-6">
+                                            {searchResult.logs.map((log, index) => (
+                                                <div key={index} className="relative">
+                                                    <div className={`absolute -left-[31px] w-4 h-4 rounded-full border-2 border-gray-800 ${
+                                                        log.status === 'VALID' ? 'bg-green-500' :
+                                                        log.status === 'USED' ? 'bg-yellow-500' : 'bg-red-500'
+                                                    }`}></div>
+                                                    <div>
+                                                        <p className="text-sm text-gray-400">
+                                                            {new Date(log.timestamp).toLocaleString('pt-BR')}
+                                                        </p>
+                                                        <p className={`font-bold ${
+                                                            log.status === 'VALID' ? 'text-green-400' :
+                                                            log.status === 'USED' ? 'text-yellow-400' : 'text-red-400'
+                                                        }`}>
+                                                            {log.status === 'VALID' ? 'Acesso Liberado' :
+                                                             log.status === 'USED' ? 'Tentativa de Reuso' : 
+                                                             log.status === 'WRONG_SECTOR' ? 'Setor Incorreto' : 'Inválido'}
+                                                        </p>
+                                                        <p className="text-xs text-gray-500">
+                                                            Setor Lido: {log.ticketSector} | Device: {log.deviceId ? log.deviceId.substr(0,8) : 'N/A'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-gray-500 text-center italic">Nenhuma tentativa de validação registrada para este código.</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
             case 'settings':
                  if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
@@ -1345,6 +1479,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'settings' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Configurações</button>
                 <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'history' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Histórico</button>
                 <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'events' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Eventos</button>
+                <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'search' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Consultar</button>
             </div>
             {renderContent()}
         </div>
