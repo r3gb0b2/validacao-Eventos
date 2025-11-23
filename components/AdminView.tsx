@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
@@ -7,7 +8,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon } from './Icons';
+import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -371,6 +372,85 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         logs.sort((a,b) => b.timestamp - a.timestamp); // Newest first
         
         setSearchResult({ ticket, logs });
+    };
+
+    // --- SYNC EXPORT FUNCTIONALITY ---
+    const handleSyncExport = async () => {
+        if (!selectedEvent) return;
+        
+        // Determine target API URL
+        let targetUrl = apiUrl;
+        if (targetUrl.includes('tickets')) {
+            targetUrl = targetUrl.replace('tickets', 'checkins');
+        } else if (!targetUrl.includes('checkins')) {
+             // Fallback default
+             targetUrl = 'https://public-api.stingressos.com.br/checkins';
+        }
+        
+        if (!apiToken) {
+            alert("Token da API é necessário para exportar. Por favor preencha no campo de Importação.");
+            return;
+        }
+
+        const usedTickets = allTickets.filter(t => t.status === 'USED');
+        if (usedTickets.length === 0) {
+            alert("Não há ingressos utilizados para sincronizar.");
+            return;
+        }
+
+        if (!confirm(`Deseja enviar ${usedTickets.length} validações para a API externa? Isso marcará esses ingressos como usados no sistema de origem.`)) return;
+
+        setIsLoading(true);
+        setLoadingMessage('Sincronizando...');
+        
+        let successCount = 0;
+        let failCount = 0;
+        const total = usedTickets.length;
+
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${apiToken}`
+        };
+
+        // We process in chunks or sequentially with delays to not flood
+        for (let i = 0; i < total; i++) {
+            const ticket = usedTickets[i];
+            setLoadingMessage(`Enviando ${i+1}/${total} para API...`);
+            
+            try {
+                // Determine payload
+                const payload = {
+                    event_id: apiEventId ? parseInt(apiEventId) : undefined,
+                    code: ticket.id,
+                    qr_code: ticket.id 
+                };
+
+                const res = await fetch(targetUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(payload)
+                });
+
+                // 200/201 = Success
+                // 409/422 = Already used (We consider this a success for sync purposes)
+                if (res.ok || res.status === 409 || res.status === 422) {
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+            } catch (e) {
+                console.error(e);
+                failCount++;
+            }
+            
+            // Small delay to be gentle on API
+            if (i % 20 === 0) await new Promise(r => setTimeout(r, 100));
+        }
+
+        setIsLoading(false);
+        setLoadingMessage('');
+        alert(`Sincronização concluída!\n\nSucesso (Enviados/Já estavam usados): ${successCount}\nFalhas: ${failCount}`);
     };
 
 
@@ -1428,6 +1508,20 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             </button>
                                         </div>
                                     )}
+                                    {/* Sync Export Button */}
+                                    <div className="mt-4 pt-4 border-t border-gray-700">
+                                        <button 
+                                            onClick={handleSyncExport}
+                                            disabled={isLoading}
+                                            className="w-full bg-gray-700 hover:bg-gray-600 text-orange-400 py-2 rounded text-sm font-bold flex items-center justify-center border border-orange-500/30"
+                                        >
+                                            <CloudUploadIcon className="w-4 h-4 mr-2" />
+                                            Enviar Validações para ST / API
+                                        </button>
+                                        <p className="text-[10px] text-gray-500 text-center mt-1">
+                                            Sincroniza ingressos usados localmente com a API externa.
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
