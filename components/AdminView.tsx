@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
@@ -382,6 +380,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         let targetUrl = apiUrl;
         if (targetUrl.includes('tickets')) {
             targetUrl = targetUrl.replace('tickets', 'checkins');
+        } else if (targetUrl.includes('participants')) {
+            targetUrl = targetUrl.replace('participants', 'checkins');
         } else if (!targetUrl.includes('checkins')) {
              // Fallback default
              targetUrl = 'https://public-api.stingressos.com.br/checkins';
@@ -420,6 +420,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setIsLoading(false);
             return;
         }
+        
+        const isStIngressos = targetUrl.includes('stingressos.com.br');
 
         // We process in chunks or sequentially with delays to not flood
         for (let i = 0; i < total; i++) {
@@ -456,7 +458,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return false;
             };
 
-            // --- STRATEGY 1: Standard JSON POST with Query Params ---
+            // --- STRATEGY 1: Path Parameter (POST /checkins/{id}) ---
+            // ST Ingressos often prefers checkins/{id} where ID is the original numeric ID if available
+            if (isStIngressos && !itemSuccess) {
+                 try {
+                     // Use original ID if available (saved during import), otherwise use ticket.id (which might be code)
+                     const idToSend = ticket.details?.originalId || ticket.id;
+                     const pathUrl = `${targetUrl}/${idToSend}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
+                     const res = await fetch(pathUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Authorization': `Bearer ${apiToken}`
+                        },
+                        mode: 'cors'
+                    });
+                     itemSuccess = await tryHandleResponse(res);
+                } catch(e) { console.warn("Strat 1 Fail", e); }
+            }
+
+            // --- STRATEGY 2: Standard JSON POST with Query Params ---
             if (!itemSuccess) {
                 try {
                     const payload = {
@@ -474,10 +495,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         mode: 'cors'
                     });
                     itemSuccess = await tryHandleResponse(res);
-                } catch (e) { console.warn("Strat 1 Fail", e); if(!currentError) currentError = "Network Error"; }
+                } catch (e) { console.warn("Strat 2 Fail", e); if(!currentError) currentError = "Network Error"; }
             }
             
-            // --- STRATEGY 2: FormData (Good for PHP/Laravel APIs) ---
+            // --- STRATEGY 3: FormData (Good for PHP/Laravel APIs) ---
             if (!itemSuccess) {
                 try {
                     const formData = new FormData();
@@ -495,22 +516,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         method: 'POST',
                         headers: fdHeaders,
                         body: formData,
-                        mode: 'cors'
-                    });
-                     itemSuccess = await tryHandleResponse(res);
-                } catch(e) { console.warn("Strat 2 Fail", e); }
-            }
-
-            // --- STRATEGY 3: Path Parameter (POST /checkins/{code}) ---
-            if (!itemSuccess) {
-                try {
-                     const pathUrl = `${targetUrl}/${ticket.id}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
-                     const res = await fetch(pathUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Accept': 'application/json',
-                            'Authorization': `Bearer ${apiToken}`
-                        },
                         mode: 'cors'
                     });
                      itemSuccess = await tryHandleResponse(res);
@@ -533,7 +538,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         let report = `Sincronização concluída!\n\nSucesso Confirmado: ${successCount}\nFalhas: ${failCount}`;
         if (failCount > 0) {
             report += `\n\nATENÇÃO: Houve falhas. Mensagem do primeiro erro: "${lastErrorMessage || 'Erro desconhecido'}"`;
-            report += `\nVerifique se o ID do Evento (${numericEventId}) está correto para estes ingressos.`;
+            report += `\nVerifique se o ID do Evento (${numericEventId}) está correto e se a API aceita exportação.`;
+            report += `\nRecomendação: Para APIs ST Ingressos, tente re-importar os ingressos para capturar os IDs originais.`;
         }
         alert(report);
     };
@@ -800,7 +806,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 id: idStr,
                                 sector: String(sector),
                                 status: 'AVAILABLE',
-                                details: { ownerName: String(ownerName) }
+                                details: { 
+                                    ownerName: String(ownerName),
+                                    originalId: item.id // SAVE ORIGINAL ID FOR SYNC
+                                }
                             });
                         }
                     };

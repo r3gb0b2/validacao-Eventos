@@ -18,6 +18,7 @@ export interface Ticket {
   details?: {
     ownerName?: string;
     eventName?: string;
+    originalId?: string | number; // ID numérico/original da API externa
   };
 }
 

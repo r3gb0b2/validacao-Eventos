@@ -206,7 +206,11 @@ const App: React.FC = () => {
                     id: doc.id,
                     sector: data.sector,
                     status: data.status,
-                    details: data.details ? { ownerName: data.details.ownerName, eventName: data.details.eventName } : undefined,
+                    details: data.details ? { 
+                        ownerName: data.details.ownerName, 
+                        eventName: data.details.eventName,
+                        originalId: data.details.originalId // Load original numeric ID if available
+                    } : undefined,
                 };
                 if (data.usedAt instanceof Timestamp) {
                     ticket.usedAt = data.usedAt.toMillis();
@@ -373,6 +377,18 @@ const App: React.FC = () => {
                              showScanResult('ERROR', 'ID do Evento não configurado nas opções (Necessário p/ API).');
                              return;
                         }
+                        
+                        // AUTO-CORRECT URL: If user put .../tickets, switch to .../checkins
+                        let checkinBaseUrl = endpoint.url;
+                        if (checkinBaseUrl.includes('stingressos') || checkinBaseUrl.includes('tickets')) {
+                             checkinBaseUrl = checkinBaseUrl
+                                .replace('/tickets', '/checkins')
+                                .replace('/participants', '/checkins')
+                                .replace('/buyers', '/checkins');
+                             
+                             // If URL didn't have any of the above but is stingressos, ensure it ends in checkins?
+                             // Best to trust replacements.
+                        }
 
                         // Try each extracted code variant
                         for (const code of codesToSend) {
@@ -385,7 +401,7 @@ const App: React.FC = () => {
                                     ticket_code: code,
                                     uuid: code
                                 };
-                                const res = await fetch(endpoint.url, {
+                                const res = await fetch(checkinBaseUrl, {
                                     method: 'POST',
                                     headers: {
                                         'Content-Type': 'application/json',
@@ -404,7 +420,7 @@ const App: React.FC = () => {
                             // STRATEGY 2: POST to Path (/checkins/{code})
                             if (!response) {
                                 try {
-                                    const pathUrl = `${endpoint.url}/${code}?event_id=${numericEventId}`;
+                                    const pathUrl = `${checkinBaseUrl}/${code}?event_id=${numericEventId}`;
                                     const res = await fetch(pathUrl, {
                                         method: 'POST',
                                         headers: {
@@ -418,10 +434,12 @@ const App: React.FC = () => {
                                 } catch(e) {}
                             }
 
-                            // STRATEGY 3: GET Path (/tickets/{code})
+                            // STRATEGY 3: GET Path (/tickets/{code}) - fallback lookup
                             if (!response) {
                                 try {
-                                     const pathUrl = `${endpoint.url}/${code}?event_id=${numericEventId}`;
+                                     // For GET we might need the tickets endpoint again
+                                     let ticketUrl = checkinBaseUrl.replace('checkins', 'tickets');
+                                     const pathUrl = `${ticketUrl}/${code}?event_id=${numericEventId}`;
                                      const res = await fetch(pathUrl, {
                                         method: 'GET',
                                         headers: { 'Authorization': `Bearer ${endpoint.token}` }
