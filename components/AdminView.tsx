@@ -398,7 +398,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             return;
         }
 
-        if (!confirm(`Deseja enviar ${usedTickets.length} validações para a API externa? Isso marcará esses ingressos como usados no sistema de origem.`)) return;
+        if (!confirm(`Deseja enviar ${usedTickets.length} validações para a API externa? Isso marcará esses ingressos como usados no sistema de origem.\n\nATENÇÃO: Este processo requer que a API aceite conexões externas (CORS).`)) return;
 
         setIsLoading(true);
         setLoadingMessage('Sincronizando...');
@@ -407,7 +407,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         let failCount = 0;
         const total = usedTickets.length;
 
-        const headers = {
+        const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'Authorization': `Bearer ${apiToken}`
@@ -423,17 +423,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let itemSuccess = false;
 
             // --- STRATEGY 1: Standard JSON POST with Query Params ---
-            // Some APIs require event_id in query even for POSTs
             try {
                 const payload = {
                     event_id: numericEventId,
                     code: ticket.id,
                     qr_code: ticket.id,
-                    ticket_code: ticket.id
+                    ticket_code: ticket.id,
+                    uuid: ticket.id
                 };
 
                 // Add event_id to URL for safety
-                const urlWithParams = `${targetUrl}?event_id=${numericEventId}`;
+                const urlWithParams = `${targetUrl}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
 
                 const res = await fetch(urlWithParams, {
                     method: 'POST',
@@ -446,7 +446,24 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 if (res.ok || res.status === 409 || res.status === 422) {
                     itemSuccess = true;
                 } else {
-                    console.warn(`Strategy 1 failed for ${ticket.id}: Status ${res.status}`);
+                     // Check if it's a "silent error" (200 OK but success: false)
+                     try {
+                         const data = await res.json();
+                         if (data && data.success === false) {
+                             // If it says "used", it's a success for us
+                             if (data.message && (data.message.includes('used') || data.message.includes('utilizado'))) {
+                                 itemSuccess = true;
+                             } else {
+                                console.warn(`API returned success:false for ${ticket.id}: ${data.message}`);
+                             }
+                         } else {
+                             // Regular success
+                             itemSuccess = true;
+                         }
+                     } catch(e) {
+                         // Could not parse JSON, but status was OK?
+                         if (res.ok) itemSuccess = true;
+                     }
                 }
             } catch (e) {
                 console.warn(`Strategy 1 Network error for ${ticket.id}`, e);
@@ -463,47 +480,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             'Authorization': `Bearer ${apiToken}`
                         }
                     });
-                    if (res.ok || res.status === 409 || res.status === 422) {
+                     if (res.ok || res.status === 409 || res.status === 422) {
                         itemSuccess = true;
-                    } else {
-                         console.warn(`Strategy 2 failed for ${ticket.id}: Status ${res.status}`);
                     }
                 } catch(e) {
                     console.warn(`Strategy 2 Network error for ${ticket.id}`, e);
                 }
             }
 
-            // --- STRATEGY 3: NO-CORS FALLBACK (Opaque Request) ---
-            // If previous failed due to CORS/Network, try sending blindly
-            if (!itemSuccess) {
-                try {
-                    const payload = {
-                        event_id: numericEventId,
-                        code: ticket.id
-                    };
-                    const urlWithParams = `${targetUrl}?event_id=${numericEventId}`;
-                    
-                    // We cannot use custom headers like Authorization in no-cors usually,
-                    // but we can try passing the token in URL if the API supports it
-                    // Or just hope the browser allows the headers but blocks reading response.
-                    await fetch(urlWithParams, {
-                        method: 'POST',
-                        mode: 'no-cors', // <--- BYPASS CORS (Opaque response)
-                        headers: {
-                             'Content-Type': 'application/json',
-                             'Authorization': `Bearer ${apiToken}`
-                        },
-                        body: JSON.stringify(payload)
-                    });
-                    
-                    // We assume success because we can't read the error.
-                    // This is a "Hail Mary" attempt.
-                    console.log(`Strategy 3 (No-CORS) sent for ${ticket.id}`);
-                    itemSuccess = true;
-                } catch (e) {
-                     console.error(`All Strategies failed for ${ticket.id}`, e);
-                }
-            }
+            // --- STRATEGY 3 (REMOVED) ---
+            // Removed No-CORS strategy because it strips Authorization headers, 
+            // causing 401 errors on the server while the client thinks it sent successfully.
             
             if (itemSuccess) successCount++;
             else failCount++;
@@ -514,7 +501,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
         setIsLoading(false);
         setLoadingMessage('');
-        alert(`Sincronização concluída!\n\nEnviados (Incluindo tentativas ocultas): ${successCount}\nFalhas confirmadas: ${failCount}\n\nNota: Se a API tiver bloqueio de região (CORS), o navegador envia os dados mas não consegue ler a confirmação. O sistema conta isso como enviado.`);
+        
+        let report = `Sincronização concluída!\n\nSucesso Confirmado: ${successCount}\nFalhas: ${failCount}`;
+        if (failCount > 0) {
+            report += `\n\nATENÇÃO: As falhas geralmente ocorrem por bloqueio do navegador (CORS) ou Token inválido. Verifique o console (F12) para detalhes.`;
+        }
+        alert(report);
     };
 
 
