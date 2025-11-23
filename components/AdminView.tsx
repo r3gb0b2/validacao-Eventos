@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
@@ -93,8 +94,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             try {
                 const docRef = doc(db, 'settings', 'import_presets');
                 const snap = await getDoc(docRef);
-                if (snap.exists() && snap.data().presets) {
-                    setImportPresets(snap.data().presets);
+                if (snap.exists()) {
+                    setImportPresets(snap.data().presets || []);
                 }
             } catch (e) {
                 console.error("Failed to load presets", e);
@@ -398,6 +399,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             alert("Não há ingressos utilizados para sincronizar.");
             return;
         }
+        
+        // WARNING about originalId
+        const missingOriginalIdCount = usedTickets.filter(t => !t.details?.originalId).length;
+        if (missingOriginalIdCount > 0) {
+            if (!confirm(`ATENÇÃO: ${missingOriginalIdCount} ingressos não possuem o "ID Original" (Provavelmente importados em versão antiga). \n\nA sincronização pode falhar para estes itens. Recomendamos IMPORTAR novamente os ingressos antes de sincronizar.\n\nDeseja continuar mesmo assim?`)) {
+                return;
+            }
+        }
 
         if (!confirm(`Deseja enviar ${usedTickets.length} validações para a API externa?\n\nURL Alvo: ${targetUrl}\n\nIsso marcará esses ingressos como usados no sistema de origem.`)) return;
 
@@ -462,19 +471,29 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             };
 
             // --- STRATEGY 1: Path Parameter (POST /checkins/{id}) ---
+            // ST Ingressos specifically often requires ID in path AND event_id in body
             if (isStIngressos && !itemSuccess) {
                  try {
                      const idToSend = ticket.details?.originalId || ticket.id;
-                     const pathUrl = `${targetUrl}/${idToSend}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
-                     const res = await fetch(pathUrl, {
+                     const pathUrl = `${targetUrl}/${idToSend}`;
+                     // Add query param backup
+                     const urlWithQuery = `${pathUrl}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
+                     
+                     const res = await fetch(urlWithQuery, {
                         method: 'POST',
                         headers: {
+                            'Content-Type': 'application/json',
                             'Accept': 'application/json',
                             'Authorization': `Bearer ${apiToken}`
                         },
+                        // Include body even for path strategy
+                        body: JSON.stringify({ 
+                            event_id: numericEventId, 
+                            qr_code: ticket.id 
+                        }),
                         mode: 'cors'
                     });
-                     itemSuccess = await tryHandleResponse(res, 'Strategy 1 (Path)');
+                     itemSuccess = await tryHandleResponse(res, 'Strategy 1 (Path+Body)');
                 } catch(e) { 
                     console.warn("Strategy 1 Network Fail", e); 
                     if (!currentError) currentError = (e as any).message || "Network Error";
@@ -546,11 +565,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         let report = `Sincronização concluída!\n\nSucesso Confirmado: ${successCount}\nFalhas: ${failCount}`;
         if (failCount > 0) {
-            report += `\n\n--- DETALHES DO ERRO ---`;
+            report += `\n\n--- DETALHES DO PRIMEIRO ERRO ---`;
             report += `\nResposta da API: "${lastErrorMessage}"`;
             if (lastErrorStatus) report += `\nStatus: ${lastErrorStatus}`;
             
-            if (lastErrorMessage.includes('Failed to fetch') || lastErrorMessage.includes('Network Error')) {
+            if (lastErrorStatus.includes('404')) {
+                report += `\n\nCAUSA PROVÁVEL: ID do Ingresso incorreto na URL. Se você importou os dados em uma versão anterior do sistema, RE-IMPORTE os dados agora para capturar o ID correto da API.`;
+            } else if (lastErrorMessage.includes('Failed to fetch') || lastErrorMessage.includes('Network Error')) {
                 report += `\n\nCAUSA PROVÁVEL: Bloqueio CORS do navegador ou URL inválida.`;
             }
         }
