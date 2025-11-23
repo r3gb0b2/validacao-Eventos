@@ -405,6 +405,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         let successCount = 0;
         let failCount = 0;
+        let lastErrorMessage = '';
         const total = usedTickets.length;
 
         const headers: Record<string, string> = {
@@ -414,6 +415,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         };
 
         const numericEventId = apiEventId ? parseInt(apiEventId, 10) : undefined;
+        if (!numericEventId) {
+            alert("Erro: ID do Evento não configurado ou inválido (precisa ser número).");
+            setIsLoading(false);
+            return;
+        }
 
         // We process in chunks or sequentially with delays to not flood
         for (let i = 0; i < total; i++) {
@@ -421,55 +427,81 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setLoadingMessage(`Enviando ${i+1}/${total} para API...`);
             
             let itemSuccess = false;
+            let currentError = '';
 
-            // --- STRATEGY 1: Standard JSON POST with Query Params ---
-            try {
-                const payload = {
-                    event_id: numericEventId,
-                    code: ticket.id,
-                    qr_code: ticket.id,
-                    ticket_code: ticket.id,
-                    uuid: ticket.id
-                };
-
-                // Add event_id to URL for safety
-                const urlWithParams = `${targetUrl}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
-
-                const res = await fetch(urlWithParams, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(payload)
-                });
-
-                // 200/201 = Success
-                // 409/422 = Already used (We consider this a success for sync purposes)
+            const tryHandleResponse = async (res: Response) => {
                 if (res.ok || res.status === 409 || res.status === 422) {
-                    itemSuccess = true;
-                } else {
-                     // Check if it's a "silent error" (200 OK but success: false)
+                     // Check strictly for success:false inside body even on 200 OK
                      try {
                          const data = await res.json();
-                         if (data && data.success === false) {
-                             // If it says "used", it's a success for us
-                             if (data.message && (data.message.includes('used') || data.message.includes('utilizado'))) {
-                                 itemSuccess = true;
-                             } else {
-                                console.warn(`API returned success:false for ${ticket.id}: ${data.message}`);
+                         if (data.success === false || data.error === true) {
+                             currentError = data.message || JSON.stringify(data);
+                             // Exception: if message says "already used", it's a success for us
+                             if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
+                                 return true;
                              }
-                         } else {
-                             // Regular success
-                             itemSuccess = true;
+                             return false; 
                          }
+                         return true; // Success: true or undefined
                      } catch(e) {
-                         // Could not parse JSON, but status was OK?
-                         if (res.ok) itemSuccess = true;
+                         // JSON parse failed, but HTTP was OK. Assume success.
+                         return true;
                      }
                 }
-            } catch (e) {
-                console.warn(`Strategy 1 Network error for ${ticket.id}`, e);
+                // HTTP Error
+                try {
+                    const data = await res.json();
+                    currentError = data.message || `HTTP ${res.status}`;
+                } catch(e) { currentError = `HTTP ${res.status}`; }
+                return false;
+            };
+
+            // --- STRATEGY 1: Standard JSON POST with Query Params ---
+            if (!itemSuccess) {
+                try {
+                    const payload = {
+                        event_id: numericEventId,
+                        code: ticket.id,
+                        qr_code: ticket.id,
+                        ticket_code: ticket.id,
+                        uuid: ticket.id
+                    };
+                    const urlWithParams = `${targetUrl}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
+                    const res = await fetch(urlWithParams, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(payload),
+                        mode: 'cors'
+                    });
+                    itemSuccess = await tryHandleResponse(res);
+                } catch (e) { console.warn("Strat 1 Fail", e); if(!currentError) currentError = "Network Error"; }
+            }
+            
+            // --- STRATEGY 2: FormData (Good for PHP/Laravel APIs) ---
+            if (!itemSuccess) {
+                try {
+                    const formData = new FormData();
+                    formData.append('event_id', String(numericEventId));
+                    formData.append('code', ticket.id);
+                    formData.append('qr_code', ticket.id);
+                    
+                    const fdHeaders: any = {
+                        'Accept': 'application/json',
+                        'Authorization': `Bearer ${apiToken}`
+                    };
+
+                    const urlWithParams = `${targetUrl}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
+                    const res = await fetch(urlWithParams, {
+                        method: 'POST',
+                        headers: fdHeaders,
+                        body: formData,
+                        mode: 'cors'
+                    });
+                     itemSuccess = await tryHandleResponse(res);
+                } catch(e) { console.warn("Strat 2 Fail", e); }
             }
 
-            // --- STRATEGY 2: Path Parameter (POST /checkins/{code}) ---
+            // --- STRATEGY 3: Path Parameter (POST /checkins/{code}) ---
             if (!itemSuccess) {
                 try {
                      const pathUrl = `${targetUrl}/${ticket.id}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
@@ -478,22 +510,18 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         headers: {
                             'Accept': 'application/json',
                             'Authorization': `Bearer ${apiToken}`
-                        }
+                        },
+                        mode: 'cors'
                     });
-                     if (res.ok || res.status === 409 || res.status === 422) {
-                        itemSuccess = true;
-                    }
-                } catch(e) {
-                    console.warn(`Strategy 2 Network error for ${ticket.id}`, e);
-                }
+                     itemSuccess = await tryHandleResponse(res);
+                } catch(e) { console.warn("Strat 3 Fail", e); }
             }
 
-            // --- STRATEGY 3 (REMOVED) ---
-            // Removed No-CORS strategy because it strips Authorization headers, 
-            // causing 401 errors on the server while the client thinks it sent successfully.
-            
             if (itemSuccess) successCount++;
-            else failCount++;
+            else {
+                failCount++;
+                if (!lastErrorMessage && currentError) lastErrorMessage = currentError;
+            }
             
             // Small delay to be gentle on API
             if (i % 20 === 0) await new Promise(r => setTimeout(r, 100));
@@ -504,7 +532,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         let report = `Sincronização concluída!\n\nSucesso Confirmado: ${successCount}\nFalhas: ${failCount}`;
         if (failCount > 0) {
-            report += `\n\nATENÇÃO: As falhas geralmente ocorrem por bloqueio do navegador (CORS) ou Token inválido. Verifique o console (F12) para detalhes.`;
+            report += `\n\nATENÇÃO: Houve falhas. Mensagem do primeiro erro: "${lastErrorMessage || 'Erro desconhecido'}"`;
+            report += `\nVerifique se o ID do Evento (${numericEventId}) está correto para estes ingressos.`;
         }
         alert(report);
     };
