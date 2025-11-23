@@ -458,7 +458,25 @@ const App: React.FC = () => {
                                       }
                                 }
 
-                                const sector = data.sector_name || data.sector || 'Externo';
+                                const sector = (data.sector_name || data.sector || 'Externo').trim();
+                                
+                                // SECTOR VALIDATION LOGIC FOR ONLINE API
+                                if (activeSectors.length > 0) {
+                                    // Normalize for comparison (trim and lowercase)
+                                    const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === sector.toLowerCase());
+                                    if (!isAllowed) {
+                                         showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é do setor "${sector}".`);
+                                         await addDoc(collection(db, 'events', eventId, 'scans'), {
+                                            ticketId: foundCode, 
+                                            status: 'WRONG_SECTOR', 
+                                            timestamp: serverTimestamp(), 
+                                            sector: sector,
+                                            deviceId: deviceId
+                                        });
+                                        return;
+                                    }
+                                }
+
                                 showScanResult('VALID', `Acesso Liberado! (${apiName}) - ${sector}`);
                                 
                                 // Log to local history
