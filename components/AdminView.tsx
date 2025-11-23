@@ -440,34 +440,62 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ownerName = buyer.name || buyer.buyer_name || '';
 
             buyer.tickets.forEach((t: any) => {
-                // IMPORTANT: Handle nested structures or different key names aggressively
-                // Sometimes API returns ticket data nested in 'ticket' key, or uses different ID fields
-                const actualTicket = t.ticket || t;
-                const code = actualTicket.code || actualTicket.qr_code || actualTicket.ticket_code || actualTicket.uuid || actualTicket.barcode || actualTicket.id;
+                // ROBUST EXTRACTION STRATEGY
+                // 1. Try to find code in the item itself (t)
+                // 2. Try to find code in t.ticket (nested object)
+                // 3. Fallback to ID if present and looks like a code
                 
-                let sector = actualTicket.sector || actualTicket.sector_name || actualTicket.section || actualTicket.product_name || 'Geral';
-                if (typeof sector === 'object' && sector.name) sector = sector.name;
+                const nestedTicket = t.ticket || {};
+                
+                // Search for code everywhere
+                let code = t.code || t.qr_code || t.ticket_code || t.uuid || t.barcode;
+                if (!code) {
+                    code = nestedTicket.code || nestedTicket.qr_code || nestedTicket.ticket_code || nestedTicket.uuid || nestedTicket.barcode;
+                }
+                
+                // Fallback to 'id' if specific code fields are missing
+                if (!code) {
+                    // Avoid small numeric IDs if they seem like DB IDs, but accept them if nothing else
+                    if (t.id) code = t.id; 
+                    else if (nestedTicket.id) code = nestedTicket.id;
+                }
+                
+                // Search for sector everywhere
+                let sector = t.sector || t.sector_name || t.section || t.product_name;
+                if (!sector || sector === 'Geral') {
+                     sector = nestedTicket.sector || nestedTicket.sector_name || nestedTicket.section || nestedTicket.product_name || 'Geral';
+                }
+                if (typeof sector === 'object' && sector && sector.name) sector = sector.name;
+                
+                // Search for status
+                let statusRaw = t.status || nestedTicket.status;
+                
+                // Search for Original ID (for Sync)
+                let originalId = t.id || nestedTicket.id;
 
                 if (code) {
                     const idStr = String(code).trim();
-                    const sectorStr = String(sector).trim();
+                    const sectorStr = String(sector || 'Geral').trim();
                     
                     newSectors.add(sectorStr);
                     
                     const ticketData: Ticket = {
                         id: idStr,
                         sector: sectorStr,
-                        status: (actualTicket.status === 'used' || actualTicket.status === 'checked_in') ? 'USED' : 'AVAILABLE',
+                        status: (statusRaw === 'used' || statusRaw === 'checked_in') ? 'USED' : 'AVAILABLE',
                         details: { 
                             ownerName: ownerName,
-                            originalId: actualTicket.id // Capture numeric ID if available for sync
+                            originalId: originalId // Capture numeric ID if available for sync
                         },
                     };
                     
-                    if ((actualTicket.status === 'used' || actualTicket.status === 'checked_in') && actualTicket.updated_at) {
+                    // Handle Used At date
+                    let dateStr = t.updated_at || t.checked_in_at || nestedTicket.updated_at || nestedTicket.checked_in_at;
+                    if ((ticketData.status === 'USED') && dateStr) {
                          // Fix date format for Safari if needed
-                         const dateStr = String(actualTicket.updated_at).replace(' ', 'T');
-                         ticketData.usedAt = new Date(dateStr).getTime();
+                         dateStr = String(dateStr).replace(' ', 'T');
+                         const ts = new Date(dateStr).getTime();
+                         if (!isNaN(ts)) ticketData.usedAt = ts;
                     }
                     
                     ticketsToSave.push(ticketData);
@@ -481,7 +509,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             });
 
             if (ticketsToSave.length === 0) {
-                alert("Nenhum código de ingresso válido encontrado para importar.");
+                console.log("Debug Buyer Tickets:", buyer.tickets); // Debug log
+                alert("Nenhum código de ingresso válido encontrado para importar. (Erro de Formato)");
                 return;
             }
 
@@ -504,9 +533,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             await batch.commit();
             alert(`${ticketsToSave.length} ingressos importados com sucesso!`);
             
-            // Clear search to show updated local state (optional, or just alert)
-            setSearchType('TICKET_LOCAL'); // Switch to local search to encourage checking
-            setSearchQuery(''); // Clear query
+            setSearchType('TICKET_LOCAL'); 
+            setSearchQuery(''); 
 
         } catch (error) {
             console.error("Error importing buyer tickets", error);
