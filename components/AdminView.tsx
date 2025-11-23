@@ -440,38 +440,50 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ownerName = buyer.name || buyer.buyer_name || '';
 
             buyer.tickets.forEach((t: any) => {
-                const code = t.code || t.qr_code || t.ticket_code || t.id;
-                let sector = t.sector || t.sector_name || t.section || t.product_name || 'Geral';
+                // IMPORTANT: Handle nested structures or different key names aggressively
+                // Sometimes API returns ticket data nested in 'ticket' key, or uses different ID fields
+                const actualTicket = t.ticket || t;
+                const code = actualTicket.code || actualTicket.qr_code || actualTicket.ticket_code || actualTicket.uuid || actualTicket.barcode || actualTicket.id;
+                
+                let sector = actualTicket.sector || actualTicket.sector_name || actualTicket.section || actualTicket.product_name || 'Geral';
                 if (typeof sector === 'object' && sector.name) sector = sector.name;
 
                 if (code) {
-                    const idStr = String(code);
-                    const sectorStr = String(sector);
+                    const idStr = String(code).trim();
+                    const sectorStr = String(sector).trim();
                     
                     newSectors.add(sectorStr);
-                    ticketsToSave.push({
+                    
+                    const ticketData: Ticket = {
                         id: idStr,
                         sector: sectorStr,
-                        status: (t.status === 'used' || t.status === 'checked_in') ? 'USED' : 'AVAILABLE',
+                        status: (actualTicket.status === 'used' || actualTicket.status === 'checked_in') ? 'USED' : 'AVAILABLE',
                         details: { 
                             ownerName: ownerName,
-                            originalId: t.id // Capture ID
+                            originalId: actualTicket.id // Capture numeric ID if available for sync
                         },
-                        usedAt: (t.status === 'used' && t.updated_at) ? new Date(t.updated_at).getTime() : undefined
-                    });
+                    };
+                    
+                    if ((actualTicket.status === 'used' || actualTicket.status === 'checked_in') && actualTicket.updated_at) {
+                         // Fix date format for Safari if needed
+                         const dateStr = String(actualTicket.updated_at).replace(' ', 'T');
+                         ticketData.usedAt = new Date(dateStr).getTime();
+                    }
+                    
+                    ticketsToSave.push(ticketData);
 
                     const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', idStr);
                     batch.set(ticketRef, {
-                        sector: sectorStr,
-                        status: (t.status === 'used' || t.status === 'checked_in') ? 'USED' : 'AVAILABLE',
-                        details: { 
-                            ownerName: ownerName,
-                            originalId: t.id
-                        },
-                        usedAt: (t.status === 'used' && t.updated_at) ? Timestamp.fromDate(new Date(t.updated_at)) : null
+                        ...ticketData,
+                        usedAt: ticketData.usedAt ? Timestamp.fromMillis(ticketData.usedAt) : null
                     }, { merge: true });
                 }
             });
+
+            if (ticketsToSave.length === 0) {
+                alert("Nenhum código de ingresso válido encontrado para importar.");
+                return;
+            }
 
             // Update sectors if needed
             const currentSectorsSet = new Set(sectorNames);
