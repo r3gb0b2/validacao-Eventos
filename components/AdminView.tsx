@@ -424,6 +424,85 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
         }
     };
+    
+    // Import tickets from a specific buyer found in search
+    const handleImportSingleBuyer = async (buyer: any) => {
+        if (!selectedEvent || !buyer.tickets || buyer.tickets.length === 0) return;
+        
+        const confirmMsg = `Deseja importar ${buyer.tickets.length} ingressos de "${buyer.name || 'Comprador'}" para o sistema local?`;
+        if (!window.confirm(confirmMsg)) return;
+
+        setIsLoading(true);
+        try {
+            const batch = writeBatch(db);
+            const ticketsToSave: Ticket[] = [];
+            const newSectors = new Set<string>();
+            const ownerName = buyer.name || buyer.buyer_name || '';
+
+            buyer.tickets.forEach((t: any) => {
+                const code = t.code || t.qr_code || t.ticket_code || t.id;
+                let sector = t.sector || t.sector_name || t.section || t.product_name || 'Geral';
+                if (typeof sector === 'object' && sector.name) sector = sector.name;
+
+                if (code) {
+                    const idStr = String(code);
+                    const sectorStr = String(sector);
+                    
+                    newSectors.add(sectorStr);
+                    ticketsToSave.push({
+                        id: idStr,
+                        sector: sectorStr,
+                        status: (t.status === 'used' || t.status === 'checked_in') ? 'USED' : 'AVAILABLE',
+                        details: { 
+                            ownerName: ownerName,
+                            originalId: t.id // Capture ID
+                        },
+                        usedAt: (t.status === 'used' && t.updated_at) ? new Date(t.updated_at).getTime() : undefined
+                    });
+
+                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', idStr);
+                    batch.set(ticketRef, {
+                        sector: sectorStr,
+                        status: (t.status === 'used' || t.status === 'checked_in') ? 'USED' : 'AVAILABLE',
+                        details: { 
+                            ownerName: ownerName,
+                            originalId: t.id
+                        },
+                        usedAt: (t.status === 'used' && t.updated_at) ? Timestamp.fromDate(new Date(t.updated_at)) : null
+                    }, { merge: true });
+                }
+            });
+
+            // Update sectors if needed
+            const currentSectorsSet = new Set(sectorNames);
+            let sectorsUpdated = false;
+            newSectors.forEach(s => {
+                if (!currentSectorsSet.has(s)) {
+                    currentSectorsSet.add(s);
+                    sectorsUpdated = true;
+                }
+            });
+
+            if (sectorsUpdated) {
+                const updatedSectorList = Array.from(currentSectorsSet);
+                await onUpdateSectorNames(updatedSectorList);
+                setEditableSectorNames(updatedSectorList);
+            }
+
+            await batch.commit();
+            alert(`${ticketsToSave.length} ingressos importados com sucesso!`);
+            
+            // Clear search to show updated local state (optional, or just alert)
+            setSearchType('TICKET_LOCAL'); // Switch to local search to encourage checking
+            setSearchQuery(''); // Clear query
+
+        } catch (error) {
+            console.error("Error importing buyer tickets", error);
+            alert("Erro ao importar ingressos.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     // --- SYNC EXPORT FUNCTIONALITY ---
     const handleSyncExport = async () => {
@@ -1354,10 +1433,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             <div className="animate-fade-in space-y-4">
                                 {buyerSearchResults.map((buyer, idx) => (
                                     <div key={idx} className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
-                                        <div className="bg-purple-900/30 px-6 py-4 border-b border-gray-600">
+                                        <div className="bg-purple-900/30 px-6 py-4 border-b border-gray-600 flex justify-between items-center flex-wrap gap-2">
                                             <h3 className="font-bold text-lg text-purple-300">
                                                 {buyer.name || buyer.buyer_name || "Comprador Desconhecido"}
                                             </h3>
+                                            {(buyer.tickets && buyer.tickets.length > 0) && (
+                                                <button 
+                                                    onClick={() => handleImportSingleBuyer(buyer)}
+                                                    className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs font-bold flex items-center shadow"
+                                                >
+                                                    <CloudDownloadIcon className="w-3 h-3 mr-1" />
+                                                    Importar Ingressos deste Comprador
+                                                </button>
+                                            )}
                                         </div>
                                         <div className="p-6">
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -1382,8 +1470,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                         {buyer.tickets.map((t: any, tIdx: number) => (
                                                             <li key={tIdx} className="bg-gray-700/50 p-3 rounded flex justify-between items-center">
                                                                 <div>
-                                                                    <p className="font-mono font-bold text-sm text-white">{t.code || t.qr_code || t.ticket_code}</p>
-                                                                    <p className="text-xs text-gray-400">{t.sector_name || t.sector || t.product_name}</p>
+                                                                    <div className="flex items-center space-x-2">
+                                                                         <p className="font-mono font-bold text-sm text-white">{t.code || t.qr_code || t.ticket_code}</p>
+                                                                         <span className="text-xs bg-gray-600 px-1 rounded text-gray-300">
+                                                                             {t.id ? `ID: ${t.id}` : ''}
+                                                                         </span>
+                                                                    </div>
+                                                                    <p className="text-xs text-gray-400">{t.sector_name || t.sector || t.product_name || 'Setor Geral'}</p>
                                                                 </div>
                                                                 <span className={`text-xs px-2 py-1 rounded font-bold ${
                                                                     t.status === 'used' || t.status === 'checked_in' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
