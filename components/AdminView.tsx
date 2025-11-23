@@ -7,7 +7,7 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon } from './Icons';
+import { CloudDownloadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -1001,6 +1001,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                     <p className="text-gray-400 text-sm uppercase font-bold">Nome do Dono</p>
                                                     <p className="text-white text-lg">{searchResult.ticket.details?.ownerName || '-'}</p>
                                                 </div>
+                                                {searchResult.ticket.status === 'USED' && (
+                                                    <div className="md:col-span-2 bg-gray-700/30 p-3 rounded border border-gray-600/50">
+                                                         <p className="text-gray-400 text-xs uppercase font-bold mb-1">Horário da Validação (Acesso)</p>
+                                                         <div className="flex items-center text-yellow-400">
+                                                             <ClockIcon className="w-5 h-5 mr-2" />
+                                                             <p className="text-xl font-mono font-bold">
+                                                                {searchResult.ticket.usedAt 
+                                                                    ? new Date(searchResult.ticket.usedAt).toLocaleString('pt-BR') 
+                                                                    : 'Horário não registrado'}
+                                                             </p>
+                                                         </div>
+                                                    </div>
+                                                )}
                                             </div>
                                         ) : (
                                             <div className="text-center py-4">
