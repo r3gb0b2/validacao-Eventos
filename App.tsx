@@ -361,11 +361,14 @@ const App: React.FC = () => {
                         const segments = urlObj.pathname.split('/');
                         urlCode = segments[segments.length - 1]; // Get last part of path
                         if (urlObj.searchParams.get('code')) urlCode = urlObj.searchParams.get('code')!;
+                        if (urlObj.searchParams.get('id')) urlCode = urlObj.searchParams.get('id')!;
                     }
                 } catch (e) {}
 
-                const codesToSend = [decodedText.trim()];
-                if (urlCode && urlCode !== decodedText.trim()) codesToSend.push(urlCode);
+                // Priority: extracted URL code, then raw text
+                const codesToSend = [];
+                if (urlCode && urlCode !== codeToValidate) codesToSend.push(urlCode);
+                codesToSend.push(codeToValidate);
 
                 for (const endpoint of endpoints) {
                     try {
@@ -378,71 +381,94 @@ const App: React.FC = () => {
                              return;
                         }
                         
-                        // AUTO-CORRECT URL: If user put .../tickets, switch to .../checkins
-                        let checkinBaseUrl = endpoint.url;
-                        if (checkinBaseUrl.includes('stingressos') || checkinBaseUrl.includes('tickets')) {
-                             checkinBaseUrl = checkinBaseUrl
-                                .replace('/tickets', '/checkins')
-                                .replace('/participants', '/checkins')
-                                .replace('/buyers', '/checkins');
-                             
-                             // If URL didn't have any of the above but is stingressos, ensure it ends in checkins?
-                             // Best to trust replacements.
-                        }
+                        // ROBUST URL SANITIZATION
+                        // Remove trailing slash
+                        let apiBase = endpoint.url.trim();
+                        if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
+                        
+                        // Remove known endpoints to get the root or parent if user pasted something specific
+                        // ST Ingressos works best with base url ending in nothing specific or just host
+                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '')
+                                         .replace(/\/participants(\/.*)?$/, '')
+                                         .replace(/\/buyers(\/.*)?$/, '')
+                                         .replace(/\/checkins(\/.*)?$/, '');
+                        
+                        const checkinUrl = `${apiBase}/checkins`;
 
                         // Try each extracted code variant
                         for (const code of codesToSend) {
-                            // STRATEGY 1: POST Body
+                            const headers = {
+                                'Accept': 'application/json',
+                                'Authorization': `Bearer ${endpoint.token}`
+                            };
+
+                            // STRATEGY 1: POST to /checkins/{code} with JSON body (Best for ST Ingressos)
                             try {
-                                const bodyPayload = {
-                                    event_id: numericEventId,
-                                    code: code,
-                                    qr_code: code,
-                                    ticket_code: code,
-                                    uuid: code
-                                };
-                                const res = await fetch(checkinBaseUrl, {
+                                const pathUrl = `${checkinUrl}/${code}`;
+                                const urlWithQuery = `${pathUrl}?event_id=${numericEventId}`; // Some APIs check query
+                                
+                                const res = await fetch(urlWithQuery, {
                                     method: 'POST',
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                        'Accept': 'application/json',
-                                        'Authorization': `Bearer ${endpoint.token}`
-                                    },
-                                    body: JSON.stringify(bodyPayload)
+                                    headers: { ...headers, 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ 
+                                        event_id: numericEventId,
+                                        qr_code: code 
+                                    })
                                 });
-                                if (res.status === 200 || res.status === 201 || res.status === 409 || res.status === 422) {
-                                    response = res;
-                                    foundCode = code;
-                                    break;
+                                
+                                // 200, 201 = Valid/Recorded. 409, 422 = Already Used/Logical Error
+                                if (res.status !== 404 && res.status !== 405) {
+                                    response = res; foundCode = code; break;
                                 }
-                            } catch (e) {}
-                            
-                            // STRATEGY 2: POST to Path (/checkins/{code})
+                            } catch(e) { console.warn('Strat 1 fail', e); }
+
+                            // STRATEGY 2: POST to /checkins (Body only)
                             if (!response) {
                                 try {
-                                    const pathUrl = `${checkinBaseUrl}/${code}?event_id=${numericEventId}`;
+                                    const bodyPayload = {
+                                        event_id: numericEventId,
+                                        code: code,
+                                        qr_code: code,
+                                        ticket_code: code,
+                                        uuid: code
+                                    };
+                                    const res = await fetch(checkinUrl, {
+                                        method: 'POST',
+                                        headers: { ...headers, 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(bodyPayload)
+                                    });
+                                    if (res.status !== 404) {
+                                        response = res; foundCode = code; break;
+                                    }
+                                } catch (e) {}
+                            }
+                            
+                            // STRATEGY 3: POST to /checkins/{code} with FormData (PHP Fallback)
+                            if (!response) {
+                                try {
+                                    const formData = new FormData();
+                                    formData.append('event_id', String(numericEventId));
+                                    formData.append('qr_code', code);
+                                    
+                                    const pathUrl = `${checkinUrl}/${code}`;
                                     const res = await fetch(pathUrl, {
                                         method: 'POST',
-                                        headers: {
-                                            'Accept': 'application/json',
-                                            'Authorization': `Bearer ${endpoint.token}`
-                                        }
+                                        headers: headers, // Content-Type is automatic
+                                        body: formData
                                     });
-                                    if (res.status !== 404 && res.status !== 405) {
+                                     if (res.status !== 404) {
                                         response = res; foundCode = code; break;
                                     }
                                 } catch(e) {}
                             }
 
-                            // STRATEGY 3: GET Path (/tickets/{code}) - fallback lookup
+                            // STRATEGY 4: GET /tickets/{code} (Last resort - Read Only)
                             if (!response) {
                                 try {
-                                     // For GET we might need the tickets endpoint again
-                                     let ticketUrl = checkinBaseUrl.replace('checkins', 'tickets');
-                                     const pathUrl = `${ticketUrl}/${code}?event_id=${numericEventId}`;
-                                     const res = await fetch(pathUrl, {
+                                     const ticketsUrl = `${apiBase}/tickets/${code}?event_id=${numericEventId}`;
+                                     const res = await fetch(ticketsUrl, {
                                         method: 'GET',
-                                        headers: { 'Authorization': `Bearer ${endpoint.token}` }
+                                        headers: headers
                                      });
                                      if (res.ok) { response = res; foundCode = code; break; }
                                 } catch (e) {}
@@ -451,36 +477,32 @@ const App: React.FC = () => {
 
                         if (response) {
                             const data = await response.json();
-                            const apiName = new URL(endpoint.url).hostname;
+                            const apiHost = new URL(endpoint.url).hostname;
+                            const apiName = apiHost.replace('public-api.', '').replace('.com.br', '');
 
-                            // Handle Error Messages explicitly
+                            // Handle Error Messages explicitly from JSON body even if HTTP 200
                             if (data.message && (data.message.includes('belongs to another event') || data.message.includes('not found'))) {
-                                // Continue to next API if not found/wrong event
-                                continue;
+                                continue; // Try next API
                             }
 
                             if (response.status === 200 || response.status === 201) {
                                 // Double check success flag often used in JSON responses even with 200 OK
-                                if (data.success === false) {
+                                if (data.success === false || data.error === true) {
                                      // Treat as used or invalid based on message
                                       if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
                                           showScanResult('USED', `Ingresso já utilizado! (${apiName})`);
                                           return;
                                       } else {
-                                           // Continue searching other APIs? Or fail?
-                                           // Let's assume fail if it explicitly returned success:false but 200 OK
-                                           // unless it's strictly "not found"
                                            if (data.message.toLowerCase().includes('not found')) continue;
                                            showScanResult('INVALID', `${data.message || 'Erro na validação'} (${apiName})`);
                                            return;
                                       }
                                 }
 
-                                const sector = (data.sector_name || data.sector || 'Externo').trim();
+                                const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
                                 
                                 // SECTOR VALIDATION LOGIC FOR ONLINE API
                                 if (activeSectors.length > 0) {
-                                    // Normalize for comparison (trim and lowercase)
                                     const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === sector.toLowerCase());
                                     if (!isAllowed) {
                                          showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é do setor "${sector}".`);
@@ -497,13 +519,12 @@ const App: React.FC = () => {
 
                                 showScanResult('VALID', `Acesso Liberado! (${apiName}) - ${sector}`);
                                 
-                                // Log to local history
                                 await addDoc(collection(db, 'events', eventId, 'scans'), {
                                     ticketId: foundCode, 
                                     status: 'VALID', 
                                     timestamp: serverTimestamp(), 
                                     sector: sector,
-                                    deviceId: deviceId // Log device ID
+                                    deviceId: deviceId
                                 });
                                 return;
                             } else if (response.status === 409 || response.status === 422) {
@@ -513,8 +534,12 @@ const App: React.FC = () => {
                                     status: 'USED', 
                                     timestamp: serverTimestamp(), 
                                     sector: 'Externo',
-                                    deviceId: deviceId // Log device ID
+                                    deviceId: deviceId
                                 });
+                                return;
+                            } else {
+                                // Other error status
+                                showScanResult('INVALID', `Erro: ${data.message || response.statusText}`);
                                 return;
                             }
                         }
@@ -529,7 +554,7 @@ const App: React.FC = () => {
                     status: 'INVALID', 
                     timestamp: serverTimestamp(), 
                     sector: 'Externo',
-                    deviceId: deviceId // Log device ID
+                    deviceId: deviceId
                 });
                 return;
             }
