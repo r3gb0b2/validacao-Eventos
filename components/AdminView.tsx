@@ -24,6 +24,7 @@ interface AdminViewProps {
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
 type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
+type SearchType = 'TICKET_LOCAL' | 'BUYER_API';
 
 interface ImportPreset {
     id?: string;
@@ -65,8 +66,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [visibleTokens, setVisibleTokens] = useState<{ [key: number]: boolean }>({});
     
     // Search Tab State
+    const [searchType, setSearchType] = useState<SearchType>('TICKET_LOCAL');
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResult, setSearchResult] = useState<{ ticket: Ticket | undefined, logs: DisplayableScanLog[] } | null>(null);
+    const [buyerSearchResults, setBuyerSearchResults] = useState<any[]>([]);
 
 
     // Load validation settings (Online Mode)
@@ -360,17 +363,66 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
     
     // Search handler
-    const handleSearch = () => {
+    const handleSearch = async () => {
         if (!searchQuery.trim()) return;
-        
-        // Find ticket info
-        const ticket = allTickets.find(t => t.id === searchQuery.trim());
-        
-        // Find scan logs for this ticket
-        const logs = scanHistory.filter(l => l.ticketId === searchQuery.trim());
-        logs.sort((a,b) => b.timestamp - a.timestamp); // Newest first
-        
-        setSearchResult({ ticket, logs });
+
+        if (searchType === 'TICKET_LOCAL') {
+            // Find ticket info
+            const ticket = allTickets.find(t => t.id === searchQuery.trim());
+            
+            // Find scan logs for this ticket
+            const logs = scanHistory.filter(l => l.ticketId === searchQuery.trim());
+            logs.sort((a,b) => b.timestamp - a.timestamp); // Newest first
+            
+            setSearchResult({ ticket, logs });
+        } else {
+            // API BUYER SEARCH
+            if (!apiToken) {
+                alert("Para buscar online, configure o Token na aba 'Configurações' > 'Importação'.");
+                return;
+            }
+            
+            setIsLoading(true);
+            setBuyerSearchResults([]);
+            
+            try {
+                // Construct URL to /buyers endpoint
+                let buyersUrl = apiUrl.trim();
+                if (!buyersUrl.includes('/buyers')) {
+                    // Try to guess base URL from configuration or default
+                    const urlObj = new URL(buyersUrl || 'https://public-api.stingressos.com.br/tickets');
+                    buyersUrl = `${urlObj.origin}/buyers`;
+                }
+                
+                // Append Query
+                const searchUrl = `${buyersUrl}?search=${encodeURIComponent(searchQuery)}${apiEventId ? `&event_id=${apiEventId}` : ''}`;
+                
+                const res = await fetch(searchUrl, {
+                    headers: {
+                        'Accept': 'application/json',
+                        'Authorization': `Bearer ${apiToken}`
+                    }
+                });
+                
+                if (!res.ok) throw new Error(`Erro API: ${res.status}`);
+                
+                const data = await res.json();
+                let results = [];
+                
+                if (Array.isArray(data)) results = data;
+                else if (data.data && Array.isArray(data.data)) results = data.data;
+                else if (data.buyers && Array.isArray(data.buyers)) results = data.buyers;
+                
+                setBuyerSearchResults(results);
+                if (results.length === 0) alert("Nenhum comprador encontrado com esse termo.");
+
+            } catch (error) {
+                console.error(error);
+                alert(`Erro na busca: ${error instanceof Error ? error.message : 'Desconhecido'}`);
+            } finally {
+                setIsLoading(false);
+            }
+        }
     };
 
     // --- SYNC EXPORT FUNCTIONALITY ---
@@ -1151,27 +1203,53 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
                             <h2 className="text-xl font-bold mb-4 flex items-center">
                                 <SearchIcon className="w-6 h-6 mr-2 text-blue-500" />
-                                Consultar Ingresso
+                                Consultar
                             </h2>
+                            
+                            {/* Toggle Switch */}
+                            <div className="flex bg-gray-700 rounded-lg p-1 mb-4">
+                                <button 
+                                    onClick={() => setSearchType('TICKET_LOCAL')}
+                                    className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${
+                                        searchType === 'TICKET_LOCAL' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                                    }`}
+                                >
+                                    Código do Ingresso (Local)
+                                </button>
+                                <button 
+                                    onClick={() => setSearchType('BUYER_API')}
+                                    className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${
+                                        searchType === 'BUYER_API' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                                    }`}
+                                >
+                                    Buscar Comprador (API Online)
+                                </button>
+                            </div>
+
                             <div className="flex space-x-2">
                                 <input 
                                     type="text" 
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    placeholder="Digite o código..." 
+                                    placeholder={searchType === 'TICKET_LOCAL' ? "Digite o código do ingresso..." : "Nome, E-mail ou CPF do comprador..."}
                                     className="flex-grow bg-gray-900 border border-gray-600 rounded p-3 text-white focus:outline-none focus:border-blue-500"
                                     onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                                 />
                                 <button 
                                     onClick={handleSearch}
-                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 rounded transition-colors"
+                                    disabled={isLoading}
+                                    className={`${searchType === 'TICKET_LOCAL' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'} text-white font-bold px-6 rounded transition-colors disabled:opacity-50`}
                                 >
-                                    Buscar
+                                    {isLoading ? 'Buscando...' : 'Buscar'}
                                 </button>
                             </div>
+                            {searchType === 'BUYER_API' && (
+                                <p className="text-[10px] text-gray-500 mt-2">* Requer Token da API configurado na aba de Importação.</p>
+                            )}
                         </div>
 
-                        {searchResult && (
+                        {/* Local Search Result */}
+                        {searchType === 'TICKET_LOCAL' && searchResult && (
                             <div className="animate-fade-in space-y-4">
                                 {/* Ticket Details Card */}
                                 <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
@@ -1268,6 +1346,60 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         <p className="text-gray-500 text-center italic">Nenhuma tentativa de validação registrada para este código.</p>
                                     )}
                                 </div>
+                            </div>
+                        )}
+
+                        {/* API Buyer Search Result */}
+                        {searchType === 'BUYER_API' && buyerSearchResults.length > 0 && (
+                            <div className="animate-fade-in space-y-4">
+                                {buyerSearchResults.map((buyer, idx) => (
+                                    <div key={idx} className="bg-gray-800 rounded-lg shadow-lg overflow-hidden border border-gray-700">
+                                        <div className="bg-purple-900/30 px-6 py-4 border-b border-gray-600">
+                                            <h3 className="font-bold text-lg text-purple-300">
+                                                {buyer.name || buyer.buyer_name || "Comprador Desconhecido"}
+                                            </h3>
+                                        </div>
+                                        <div className="p-6">
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                                <div>
+                                                    <p className="text-xs text-gray-500 uppercase">Email</p>
+                                                    <p className="text-white">{buyer.email || '-'}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs text-gray-500 uppercase">CPF</p>
+                                                    <p className="text-white">{buyer.cpf || buyer.document || '-'}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs text-gray-500 uppercase">Telefone</p>
+                                                    <p className="text-white">{buyer.phone || buyer.whatsapp || '-'}</p>
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="border-t border-gray-700 pt-4">
+                                                <h4 className="text-sm font-bold text-gray-300 mb-2">Ingressos Associados (API)</h4>
+                                                {(buyer.tickets && buyer.tickets.length > 0) ? (
+                                                    <ul className="space-y-2">
+                                                        {buyer.tickets.map((t: any, tIdx: number) => (
+                                                            <li key={tIdx} className="bg-gray-700/50 p-3 rounded flex justify-between items-center">
+                                                                <div>
+                                                                    <p className="font-mono font-bold text-sm text-white">{t.code || t.qr_code || t.ticket_code}</p>
+                                                                    <p className="text-xs text-gray-400">{t.sector_name || t.sector || t.product_name}</p>
+                                                                </div>
+                                                                <span className={`text-xs px-2 py-1 rounded font-bold ${
+                                                                    t.status === 'used' || t.status === 'checked_in' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
+                                                                }`}>
+                                                                    {t.status === 'used' || t.status === 'checked_in' ? 'UTILIZADO' : 'VÁLIDO'}
+                                                                </span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                ) : (
+                                                    <p className="text-xs text-gray-500 italic">Nenhum ingresso listado neste objeto de comprador.</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </div>
