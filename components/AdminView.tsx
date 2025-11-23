@@ -413,17 +413,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             'Authorization': `Bearer ${apiToken}`
         };
 
+        const numericEventId = apiEventId ? parseInt(apiEventId, 10) : undefined;
+
         // We process in chunks or sequentially with delays to not flood
         for (let i = 0; i < total; i++) {
             const ticket = usedTickets[i];
             setLoadingMessage(`Enviando ${i+1}/${total} para API...`);
             
+            let itemSuccess = false;
+
+            // Strategy 1: Standard POST body
             try {
-                // Determine payload
                 const payload = {
-                    event_id: apiEventId ? parseInt(apiEventId) : undefined,
+                    event_id: numericEventId,
                     code: ticket.id,
-                    qr_code: ticket.id 
+                    qr_code: ticket.id,
+                    ticket_code: ticket.id
                 };
 
                 const res = await fetch(targetUrl, {
@@ -435,14 +440,33 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 // 200/201 = Success
                 // 409/422 = Already used (We consider this a success for sync purposes)
                 if (res.ok || res.status === 409 || res.status === 422) {
-                    successCount++;
-                } else {
-                    failCount++;
+                    itemSuccess = true;
                 }
             } catch (e) {
-                console.error(e);
-                failCount++;
+                console.warn(`Export Strategy 1 failed for ${ticket.id}`, e);
             }
+
+            // Strategy 2: Path Parameter (POST /checkins/{code})
+            if (!itemSuccess) {
+                try {
+                     const pathUrl = `${targetUrl}/${ticket.id}${numericEventId ? `?event_id=${numericEventId}` : ''}`;
+                     const res = await fetch(pathUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Authorization': `Bearer ${apiToken}`
+                        }
+                    });
+                    if (res.ok || res.status === 409 || res.status === 422) {
+                        itemSuccess = true;
+                    }
+                } catch(e) {
+                    console.warn(`Export Strategy 2 failed for ${ticket.id}`, e);
+                }
+            }
+            
+            if (itemSuccess) successCount++;
+            else failCount++;
             
             // Small delay to be gentle on API
             if (i % 20 === 0) await new Promise(r => setTimeout(r, 100));
