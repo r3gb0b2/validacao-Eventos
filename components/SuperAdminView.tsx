@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Firestore, collection, getDocs, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { User, Event } from '../types';
@@ -26,10 +27,21 @@ const SuperAdminView: React.FC<SuperAdminViewProps> = ({ db, events, onClose }) 
         setIsLoading(true);
         try {
             const snap = await getDocs(collection(db, 'users'));
-            const usersList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as User));
+            const usersList = snap.docs.map(doc => {
+                const data = doc.data();
+                // Safety check: ensure arrays and strings exist to prevent white screen crashes
+                return { 
+                    id: doc.id, 
+                    username: data.username || 'Usuário Desconhecido',
+                    password: data.password || '',
+                    role: data.role || 'ADMIN',
+                    allowedEvents: Array.isArray(data.allowedEvents) ? data.allowedEvents : []
+                } as User;
+            });
             setUsers(usersList);
         } catch (e) {
             console.error("Failed to load users", e);
+            alert("Erro ao carregar lista de usuários.");
         } finally {
             setIsLoading(false);
         }
@@ -75,9 +87,10 @@ const SuperAdminView: React.FC<SuperAdminViewProps> = ({ db, events, onClose }) 
     };
 
     const handleUpdateUserEvents = async (userId: string, eventId: string, currentEvents: string[]) => {
-        const newEvents = currentEvents.includes(eventId) 
-            ? currentEvents.filter(id => id !== eventId)
-            : [...currentEvents, eventId];
+        const safeCurrentEvents = Array.isArray(currentEvents) ? currentEvents : [];
+        const newEvents = safeCurrentEvents.includes(eventId) 
+            ? safeCurrentEvents.filter(id => id !== eventId)
+            : [...safeCurrentEvents, eventId];
         
         try {
             // Optimistic update locally
@@ -165,58 +178,64 @@ const SuperAdminView: React.FC<SuperAdminViewProps> = ({ db, events, onClose }) 
 
                 {/* User List */}
                 <div className="lg:col-span-2 space-y-4">
-                    {users.map(user => (
-                        <div key={user.id} className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex flex-col md:flex-row gap-4">
-                            <div className="flex-shrink-0 min-w-[150px]">
-                                <div className="flex items-center">
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white mr-3 ${user.role === 'SUPER_ADMIN' ? 'bg-orange-600' : 'bg-blue-600'}`}>
-                                        {user.username.charAt(0).toUpperCase()}
-                                    </div>
-                                    <div>
-                                        <p className="font-bold text-white">{user.username}</p>
-                                        <span className={`text-xs px-2 py-0.5 rounded font-bold ${user.role === 'SUPER_ADMIN' ? 'bg-orange-900 text-orange-300' : 'bg-blue-900 text-blue-300'}`}>
-                                            {user.role === 'SUPER_ADMIN' ? 'Super Admin' : 'Admin'}
-                                        </span>
-                                    </div>
-                                </div>
-                                {user.role !== 'SUPER_ADMIN' && (
-                                    <button 
-                                        onClick={() => handleDeleteUser(user.id, user.username)}
-                                        className="mt-3 text-xs text-red-400 hover:text-red-300 flex items-center"
-                                    >
-                                        <TrashIcon className="w-3 h-3 mr-1" /> Remover Usuário
-                                    </button>
-                                )}
-                            </div>
+                    {users.map(user => {
+                        const safeUsername = user.username || '???';
+                        const safeRole = user.role || 'ADMIN';
+                        const safeEvents = Array.isArray(user.allowedEvents) ? user.allowedEvents : [];
 
-                            <div className="flex-grow bg-gray-900/50 p-3 rounded border border-gray-700/50">
-                                <p className="text-xs text-gray-500 font-bold uppercase mb-2">Acesso aos Eventos:</p>
-                                {user.role === 'SUPER_ADMIN' ? (
-                                    <p className="text-sm text-green-400 italic">Acesso Total (Todos os eventos)</p>
-                                ) : (
-                                    <div className="flex flex-wrap gap-2">
-                                        {events.map(ev => {
-                                            const hasAccess = user.allowedEvents?.includes(ev.id);
-                                            return (
-                                                <button 
-                                                    key={ev.id}
-                                                    onClick={() => handleUpdateUserEvents(user.id, ev.id, user.allowedEvents || [])}
-                                                    className={`text-xs px-2 py-1 rounded border transition-colors ${
-                                                        hasAccess 
-                                                        ? 'bg-green-900/30 border-green-600 text-green-300 hover:bg-red-900/30 hover:border-red-600 hover:text-red-300' 
-                                                        : 'bg-gray-800 border-gray-600 text-gray-500 hover:bg-green-900/30 hover:border-green-600 hover:text-green-300'
-                                                    }`}
-                                                    title={hasAccess ? "Clique para remover acesso" : "Clique para dar acesso"}
-                                                >
-                                                    {ev.name}
-                                                </button>
-                                            );
-                                        })}
+                        return (
+                            <div key={user.id} className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex flex-col md:flex-row gap-4">
+                                <div className="flex-shrink-0 min-w-[150px]">
+                                    <div className="flex items-center">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white mr-3 ${safeRole === 'SUPER_ADMIN' ? 'bg-orange-600' : 'bg-blue-600'}`}>
+                                            {safeUsername.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div>
+                                            <p className="font-bold text-white">{safeUsername}</p>
+                                            <span className={`text-xs px-2 py-0.5 rounded font-bold ${safeRole === 'SUPER_ADMIN' ? 'bg-orange-900 text-orange-300' : 'bg-blue-900 text-blue-300'}`}>
+                                                {safeRole === 'SUPER_ADMIN' ? 'Super Admin' : 'Admin'}
+                                            </span>
+                                        </div>
                                     </div>
-                                )}
+                                    {safeRole !== 'SUPER_ADMIN' && (
+                                        <button 
+                                            onClick={() => handleDeleteUser(user.id, safeUsername)}
+                                            className="mt-3 text-xs text-red-400 hover:text-red-300 flex items-center"
+                                        >
+                                            <TrashIcon className="w-3 h-3 mr-1" /> Remover Usuário
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div className="flex-grow bg-gray-900/50 p-3 rounded border border-gray-700/50">
+                                    <p className="text-xs text-gray-500 font-bold uppercase mb-2">Acesso aos Eventos:</p>
+                                    {safeRole === 'SUPER_ADMIN' ? (
+                                        <p className="text-sm text-green-400 italic">Acesso Total (Todos os eventos)</p>
+                                    ) : (
+                                        <div className="flex flex-wrap gap-2">
+                                            {events.map(ev => {
+                                                const hasAccess = safeEvents.includes(ev.id);
+                                                return (
+                                                    <button 
+                                                        key={ev.id}
+                                                        onClick={() => handleUpdateUserEvents(user.id, ev.id, safeEvents)}
+                                                        className={`text-xs px-2 py-1 rounded border transition-colors ${
+                                                            hasAccess 
+                                                            ? 'bg-green-900/30 border-green-600 text-green-300 hover:bg-red-900/30 hover:border-red-600 hover:text-red-300' 
+                                                            : 'bg-gray-800 border-gray-600 text-gray-500 hover:bg-green-900/30 hover:border-green-600 hover:text-green-300'
+                                                        }`}
+                                                        title={hasAccess ? "Clique para remover acesso" : "Clique para dar acesso"}
+                                                    >
+                                                        {ev.name}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
         </div>
@@ -224,3 +243,4 @@ const SuperAdminView: React.FC<SuperAdminViewProps> = ({ db, events, onClose }) 
 };
 
 export default SuperAdminView;
+    
