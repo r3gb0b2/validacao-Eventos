@@ -1,6 +1,7 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Ticket } from '../types';
+import { TableCellsIcon } from './Icons';
 
 interface StatsProps {
   allTickets: Ticket[];
@@ -8,6 +9,7 @@ interface StatsProps {
 }
 
 const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
+    const [isGrouped, setIsGrouped] = useState(true);
     
     // 1. Calculate General Stats (KPIs)
     const generalStats = useMemo(() => {
@@ -19,57 +21,70 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
         return { total, scanned, remaining, percentage };
     }, [allTickets]);
 
-    // 2. Calculate Grouped Sector Stats (The Table)
-    const groupedSectorStats = useMemo(() => {
-        const statsMap: Record<string, { total: number; scanned: number }> = {};
+    // 2. Calculate Sector Stats (Grouped or Raw)
+    const tableStats = useMemo(() => {
+        // Map to store stats: Key -> { total, scanned, originalName }
+        const statsMap: Record<string, { total: number; scanned: number; displayName: string }> = {};
         const safeSectorNames = sectorNames || [];
 
-        // Initialize with configured sectors to ensure custom order and existence (even if count is 0)
+        // Helper to get the key based on grouping setting
+        const getKey = (name: string) => {
+            if (!name) return 'Desconhecido';
+            return isGrouped ? name.trim().toLowerCase() : name;
+        };
+
+        // Helper to formatting display name (capitalize first letter if grouped)
+        const formatName = (name: string) => {
+            if (!isGrouped) return name;
+            return name.charAt(0).toUpperCase() + name.slice(1);
+        };
+
+        // 1. Initialize with Configured Sectors (so they appear even if empty)
         safeSectorNames.forEach(name => {
-            const normalized = name.trim();
-            if (!normalized) return;
-            if (!statsMap[normalized]) {
-                statsMap[normalized] = { total: 0, scanned: 0 };
+            const key = getKey(name);
+            if (!statsMap[key]) {
+                statsMap[key] = { 
+                    total: 0, 
+                    scanned: 0, 
+                    displayName: isGrouped ? name.trim() : name // Prefer the configured casing
+                };
             }
         });
 
-        // Iterate tickets and aggregate
+        // 2. Iterate Tickets
         allTickets.forEach(ticket => {
-            const normalized = (ticket.sector || 'Desconhecido').trim();
-            
-            // Initialize if it wasn't in sectorNames list (e.g. imported sector not yet saved in config)
-            if (!statsMap[normalized]) {
-                statsMap[normalized] = { total: 0, scanned: 0 };
+            const rawSector = ticket.sector || 'Desconhecido';
+            const key = getKey(rawSector);
+
+            if (!statsMap[key]) {
+                statsMap[key] = { 
+                    total: 0, 
+                    scanned: 0, 
+                    displayName: isGrouped ? formatName(rawSector.trim()) : rawSector 
+                };
             }
 
-            statsMap[normalized].total += 1;
+            statsMap[key].total += 1;
             if (ticket.status === 'USED') {
-                statsMap[normalized].scanned += 1;
+                statsMap[key].scanned += 1;
             }
         });
 
-        // Convert map to array for rendering
-        // We prioritize the order in 'sectorNames', then append any others found in tickets
-        const definedOrder = safeSectorNames.map(s => s.trim()).filter(s => !!s);
-        const uniqueDefinedOrder = Array.from(new Set(definedOrder)); // Remove duplicates in config
-        
-        const result = uniqueDefinedOrder.map(name => ({
-            name,
-            ...statsMap[name]
-        }));
-
-        // Add extra sectors found in tickets that aren't in config
-        Object.keys(statsMap).forEach(key => {
-            if (!uniqueDefinedOrder.includes(key)) {
-                result.push({
-                    name: key,
-                    ...statsMap[key]
-                });
-            }
+        // 3. Convert to Array and Sort
+        // We try to respect the order of sectorNames config if possible
+        const result = Object.values(statsMap).sort((a, b) => {
+            // Sort logic: Configured sectors first, then others alphabetically
+            const idxA = safeSectorNames.findIndex(s => getKey(s) === getKey(a.displayName));
+            const idxB = safeSectorNames.findIndex(s => getKey(s) === getKey(b.displayName));
+            
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+            return a.displayName.localeCompare(b.displayName);
         });
 
         return result;
-    }, [allTickets, sectorNames]);
+    }, [allTickets, sectorNames, isGrouped]);
 
   return (
     <div className="space-y-6">
@@ -98,8 +113,28 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
 
       {/* 2. Detailed Sector Table */}
       <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-700">
-          <div className="bg-gray-700 px-6 py-4 border-b border-gray-600">
-              <h3 className="text-lg font-bold text-white">Detalhamento por Setor (Agrupado)</h3>
+          <div className="bg-gray-700 px-6 py-4 border-b border-gray-600 flex justify-between items-center flex-wrap gap-2">
+              <div className="flex items-center">
+                  <TableCellsIcon className="w-5 h-5 mr-2 text-gray-400" />
+                  <h3 className="text-lg font-bold text-white">Detalhamento por Setor</h3>
+              </div>
+              
+              {/* Toggle Grouping */}
+              <label className="flex items-center cursor-pointer bg-gray-800 px-3 py-1.5 rounded-full border border-gray-600 hover:border-gray-500 transition-colors">
+                  <div className="relative">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only" 
+                        checked={isGrouped} 
+                        onChange={() => setIsGrouped(!isGrouped)} 
+                      />
+                      <div className={`block w-10 h-6 rounded-full transition-colors ${isGrouped ? 'bg-orange-600' : 'bg-gray-600'}`}></div>
+                      <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${isGrouped ? 'transform translate-x-4' : ''}`}></div>
+                  </div>
+                  <div className="ml-3 text-sm text-gray-300 font-medium select-none">
+                      Agrupar Semelhantes
+                  </div>
+              </label>
           </div>
           <div className="overflow-x-auto">
               <table className="w-full text-left">
@@ -114,14 +149,14 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700">
-                      {groupedSectorStats.map((stats) => {
+                      {tableStats.map((stats) => {
                           const remaining = stats.total - stats.scanned;
                           const percentage = stats.total > 0 ? ((stats.scanned / stats.total) * 100).toFixed(1) : '0.0';
                           
                           return (
-                              <tr key={stats.name} className="hover:bg-gray-700/50 transition-colors">
-                                  <td className="px-6 py-4 font-medium text-white">{stats.name}</td>
-                                  <td className="px-6 py-4 w-1/3">
+                              <tr key={stats.displayName} className="hover:bg-gray-700/50 transition-colors">
+                                  <td className="px-6 py-4 font-medium text-white">{stats.displayName}</td>
+                                  <td className="px-6 py-4 w-1/3 min-w-[150px]">
                                       <div className="w-full bg-gray-900 rounded-full h-2">
                                           <div 
                                             className="bg-green-500 h-2 rounded-full transition-all duration-500" 
@@ -139,7 +174,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                   </tbody>
               </table>
           </div>
-          {groupedSectorStats.length === 0 && (
+          {tableStats.length === 0 && (
               <div className="p-6 text-center text-gray-500">
                   Nenhum setor configurado ou ingressos importados.
               </div>
