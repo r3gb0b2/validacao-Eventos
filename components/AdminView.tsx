@@ -7,7 +7,7 @@ import PieChart from './PieChart';
 import Scanner from './Scanner';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, LockClosedIcon } from './Icons';
+import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -19,7 +19,6 @@ interface AdminViewProps {
   sectorNames: string[];
   onUpdateSectorNames: (newNames: string[]) => Promise<void>;
   isOnline: boolean;
-  adminRole: 'ADMIN' | 'SUPER_ADMIN' | null;
 }
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#f43f5e', '#84cc16', '#a855f7', '#06b6d4'];
@@ -35,7 +34,7 @@ interface ImportPreset {
     eventId: string;
 }
 
-const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline, adminRole }) => {
+const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
@@ -95,13 +94,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         };
         loadSettings();
     }, [db, selectedEvent]);
-
-    // Force ignoreExisting to true if not SUPER_ADMIN
-    useEffect(() => {
-        if (adminRole !== 'SUPER_ADMIN') {
-            setIgnoreExisting(true);
-        }
-    }, [adminRole]);
     
     // Load import presets
     useEffect(() => {
@@ -2042,23 +2034,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         </div>
                                     )}
 
-                                    <div className="flex items-center my-2 bg-gray-700 p-2 rounded relative">
+                                    <div className="flex items-center my-2 bg-gray-700 p-2 rounded">
                                         <input
                                             type="checkbox"
                                             id="ignoreExisting"
                                             checked={ignoreExisting}
-                                            disabled={adminRole !== 'SUPER_ADMIN'}
                                             onChange={(e) => setIgnoreExisting(e.target.checked)}
-                                            className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="w-4 h-4 text-orange-600 rounded focus:ring-orange-500"
                                         />
-                                        <label htmlFor="ignoreExisting" className={`ml-2 text-xs text-gray-200 select-none ${adminRole !== 'SUPER_ADMIN' ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'}`}>
+                                        <label htmlFor="ignoreExisting" className="ml-2 text-xs text-gray-200 cursor-pointer select-none">
                                             Ignorar ingressos já importados (Mais rápido)
                                         </label>
-                                        {adminRole !== 'SUPER_ADMIN' && (
-                                            <div className="absolute right-2 text-gray-400" title="Apenas Super Admin pode alterar esta opção">
-                                                <LockClosedIcon className="w-4 h-4" />
-                                            </div>
-                                        )}
                                     </div>
                                     
                                     <div className="flex space-x-2 pt-2">

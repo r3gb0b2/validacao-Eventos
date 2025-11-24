@@ -65,9 +65,6 @@ const App: React.FC = () => {
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
     const [onlineApiEndpoints, setOnlineApiEndpoints] = useState<{ url: string, token: string, eventId: string }[]>([{ url: '', token: '', eventId: '' }]);
     const [onlineSheetUrl, setOnlineSheetUrl] = useState('');
-    
-    // Admin Role State
-    const [adminRole, setAdminRole] = useState<'ADMIN' | 'SUPER_ADMIN' | null>(null);
 
     const cooldownRef = useRef<boolean>(false);
     
@@ -668,13 +665,9 @@ const App: React.FC = () => {
 
     const checkAdminAuth = () => {
         const storedAuth = localStorage.getItem('admin_auth_expiry');
-        const storedRole = localStorage.getItem('admin_role');
-        
         if (storedAuth) {
             const expiry = parseInt(storedAuth, 10);
             if (Date.now() < expiry) {
-                if (storedRole === 'SUPER_ADMIN') setAdminRole('SUPER_ADMIN');
-                else setAdminRole('ADMIN');
                 return true;
             }
         }
@@ -687,15 +680,6 @@ const App: React.FC = () => {
             // Save persistence for 24 hours
             const expiry = Date.now() + (24 * 60 * 60 * 1000);
             localStorage.setItem('admin_auth_expiry', expiry.toString());
-            localStorage.setItem('admin_role', 'ADMIN');
-            setAdminRole('ADMIN');
-            return true;
-        } else if (password === "987654") {
-            // SUPER ADMIN
-            const expiry = Date.now() + (24 * 60 * 60 * 1000);
-            localStorage.setItem('admin_auth_expiry', expiry.toString());
-            localStorage.setItem('admin_role', 'SUPER_ADMIN');
-            setAdminRole('SUPER_ADMIN');
             return true;
         } else if (password !== null) {
             alert("Senha incorreta!");
@@ -711,26 +695,15 @@ const App: React.FC = () => {
     
     const handleAdminAccessFromSelector = useCallback(() => {
         const storedAuth = localStorage.getItem('admin_auth_expiry');
-        const storedRole = localStorage.getItem('admin_role');
         let isAuthenticated = false;
 
         if (storedAuth && Date.now() < parseInt(storedAuth, 10)) {
             isAuthenticated = true;
-            if (storedRole === 'SUPER_ADMIN') setAdminRole('SUPER_ADMIN');
-            else setAdminRole('ADMIN');
         } else {
              const password = prompt("Digite a senha para acessar o painel administrativo:");
              if (password === "123654") {
                 const expiry = Date.now() + (24 * 60 * 60 * 1000);
                 localStorage.setItem('admin_auth_expiry', expiry.toString());
-                localStorage.setItem('admin_role', 'ADMIN');
-                setAdminRole('ADMIN');
-                isAuthenticated = true;
-             } else if (password === "987654") {
-                const expiry = Date.now() + (24 * 60 * 60 * 1000);
-                localStorage.setItem('admin_auth_expiry', expiry.toString());
-                localStorage.setItem('admin_role', 'SUPER_ADMIN');
-                setAdminRole('SUPER_ADMIN');
                 isAuthenticated = true;
              } else if (password !== null) {
                 alert("Senha incorreta!");
@@ -1034,7 +1007,6 @@ const App: React.FC = () => {
                             sectorNames={sectorNames}
                             onUpdateSectorNames={handleUpdateSectorNames}
                             isOnline={isOnline}
-                            adminRole={adminRole}
                         />
                     )}
                 </main>
