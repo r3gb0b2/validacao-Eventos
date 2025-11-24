@@ -1603,7 +1603,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                     <ul className="space-y-2">
                                                         {buyer.tickets.map((t: any, tIdx: number) => {
                                                             // Use recursive search to ensure we display code/sector/status even if API structure varies
-                                                            const displayCode = findValueRecursively(t, ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'access_code', 'identifier', 'number']) || 'Cód. não encontrado';
+                                                            const displayCode = findValueRecursively(t, [
+                                                                'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'access_code', 
+                                                                'token', 'loc', 'locator', 'identifier', 'friendly_id', 'hash', 'serial', 
+                                                                'number', 'localizador', 'cod', 'codigo', 'id_ingresso',
+                                                                'ticket_id', 'id', 'pk'
+                                                            ]) || 'Cód. não encontrado';
+                                                            
                                                             const sectorRaw = findValueRecursively(t, ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor']);
                                                             const displaySector = (typeof sectorRaw === 'object' && sectorRaw.name) ? sectorRaw.name : (sectorRaw || 'Geral');
                                                             const statusRaw = findValueRecursively(t, ['status', 'state', 'estado']);
