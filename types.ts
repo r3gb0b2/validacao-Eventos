@@ -56,3 +56,13 @@ export interface AnalyticsData {
         count: number;
     };
 }
+
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN';
+
+export interface User {
+    id: string;
+    username: string;
+    password?: string; // Only used for creation/auth, prefer not to store plainly in prod but per request
+    role: UserRole;
+    allowedEvents: string[]; // Array of Event IDs
+}
