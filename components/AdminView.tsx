@@ -476,7 +476,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return null;
             };
 
-            const HIGH_PRIORITY_CODE_KEYS = ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'ticket_id', 'locator', 'identifier', 'friendly_id', 'hash', 'serial'];
+            const HIGH_PRIORITY_CODE_KEYS = [
+                'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'ticket_id', 
+                'locator', 'identifier', 'friendly_id', 'hash', 'serial', 
+                'access_code', 'token', 'number', 'localizador'
+            ];
             const LOW_PRIORITY_CODE_KEYS = ['id', 'pk'];
             
             const SECTOR_KEYS = ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor'];
@@ -484,14 +488,18 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const DATE_KEYS = ['updated_at', 'checked_in_at', 'used_at', 'created_at'];
 
             ticketsList.forEach((t: any) => {
-                // Objects to inspect in order of priority (root, nested ticket, pivot data, attributes, item)
+                // Objects to inspect in order of priority. 
+                // We add more candidates for deep search.
                 const candidates = [
                     t, 
                     t.ticket, 
                     t.data, 
                     t.pivot,
                     t.attributes,
-                    t.item
+                    t.item,
+                    t.participant,
+                    t.guest,
+                    t.attendee
                 ].filter(c => c && typeof c === 'object');
 
                 let code = null;
@@ -596,7 +604,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
             if (ticketsToSave.length === 0) {
                 console.log("Debug Buyer Tickets Data (Dump):", ticketsList);
-                alert("Nenhum código de ingresso válido encontrado para importar.\n\nPossíveis causas:\n1. A estrutura da API mudou.\n2. O campo de código (qr_code/code) está vazio.\n3. O ingresso não tem ID identificável.");
+                alert(`Nenhum código de ingresso válido encontrado para importar. (Erro de Formato)\n\nESTRUTURA DO PRIMEIRO ITEM (DEBUG):\n${JSON.stringify(ticketsList[0], null, 2).substring(0, 500)}...`);
                 return;
             }
 
