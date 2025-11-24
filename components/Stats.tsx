@@ -1,4 +1,5 @@
-import React from 'react';
+
+import React, { useMemo } from 'react';
 import { Ticket } from '../types';
 
 interface StatsProps {
@@ -7,19 +8,68 @@ interface StatsProps {
 }
 
 const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
-    const calculateStats = (filter?: string) => {
+    
+    // 1. Calculate General Stats (KPIs)
+    const generalStats = useMemo(() => {
         if (!allTickets) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
-        
-        const relevantTickets = filter ? allTickets.filter(t => t.sector === filter) : allTickets;
-        const total = relevantTickets.length;
-        const scanned = relevantTickets.filter(t => t.status === 'USED').length;
+        const total = allTickets.length;
+        const scanned = allTickets.filter(t => t.status === 'USED').length;
         const remaining = total - scanned;
         const percentage = total > 0 ? ((scanned / total) * 100).toFixed(1) : '0.0';
         return { total, scanned, remaining, percentage };
-    };
+    }, [allTickets]);
 
-    const generalStats = calculateStats();
-    const safeSectorNames = sectorNames || [];
+    // 2. Calculate Grouped Sector Stats (The Table)
+    const groupedSectorStats = useMemo(() => {
+        const statsMap: Record<string, { total: number; scanned: number }> = {};
+        const safeSectorNames = sectorNames || [];
+
+        // Initialize with configured sectors to ensure custom order and existence (even if count is 0)
+        safeSectorNames.forEach(name => {
+            const normalized = name.trim();
+            if (!normalized) return;
+            if (!statsMap[normalized]) {
+                statsMap[normalized] = { total: 0, scanned: 0 };
+            }
+        });
+
+        // Iterate tickets and aggregate
+        allTickets.forEach(ticket => {
+            const normalized = (ticket.sector || 'Desconhecido').trim();
+            
+            // Initialize if it wasn't in sectorNames list (e.g. imported sector not yet saved in config)
+            if (!statsMap[normalized]) {
+                statsMap[normalized] = { total: 0, scanned: 0 };
+            }
+
+            statsMap[normalized].total += 1;
+            if (ticket.status === 'USED') {
+                statsMap[normalized].scanned += 1;
+            }
+        });
+
+        // Convert map to array for rendering
+        // We prioritize the order in 'sectorNames', then append any others found in tickets
+        const definedOrder = safeSectorNames.map(s => s.trim()).filter(s => !!s);
+        const uniqueDefinedOrder = Array.from(new Set(definedOrder)); // Remove duplicates in config
+        
+        const result = uniqueDefinedOrder.map(name => ({
+            name,
+            ...statsMap[name]
+        }));
+
+        // Add extra sectors found in tickets that aren't in config
+        Object.keys(statsMap).forEach(key => {
+            if (!uniqueDefinedOrder.includes(key)) {
+                result.push({
+                    name: key,
+                    ...statsMap[key]
+                });
+            }
+        });
+
+        return result;
+    }, [allTickets, sectorNames]);
 
   return (
     <div className="space-y-6">
@@ -49,7 +99,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
       {/* 2. Detailed Sector Table */}
       <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-700">
           <div className="bg-gray-700 px-6 py-4 border-b border-gray-600">
-              <h3 className="text-lg font-bold text-white">Detalhamento por Setor</h3>
+              <h3 className="text-lg font-bold text-white">Detalhamento por Setor (Agrupado)</h3>
           </div>
           <div className="overflow-x-auto">
               <table className="w-full text-left">
@@ -64,32 +114,34 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700">
-                      {safeSectorNames.map((sector) => {
-                          const stats = calculateStats(sector);
+                      {groupedSectorStats.map((stats) => {
+                          const remaining = stats.total - stats.scanned;
+                          const percentage = stats.total > 0 ? ((stats.scanned / stats.total) * 100).toFixed(1) : '0.0';
+                          
                           return (
-                              <tr key={sector} className="hover:bg-gray-700/50 transition-colors">
-                                  <td className="px-6 py-4 font-medium text-white">{sector}</td>
+                              <tr key={stats.name} className="hover:bg-gray-700/50 transition-colors">
+                                  <td className="px-6 py-4 font-medium text-white">{stats.name}</td>
                                   <td className="px-6 py-4 w-1/3">
                                       <div className="w-full bg-gray-900 rounded-full h-2">
                                           <div 
                                             className="bg-green-500 h-2 rounded-full transition-all duration-500" 
-                                            style={{ width: `${stats.percentage}%` }}
+                                            style={{ width: `${percentage}%` }}
                                           ></div>
                                       </div>
                                   </td>
                                   <td className="px-6 py-4 text-center text-gray-300">{stats.total}</td>
                                   <td className="px-6 py-4 text-center text-green-400 font-bold">{stats.scanned}</td>
-                                  <td className="px-6 py-4 text-center text-yellow-400">{stats.remaining}</td>
-                                  <td className="px-6 py-4 text-center text-white font-bold">{stats.percentage}%</td>
+                                  <td className="px-6 py-4 text-center text-yellow-400">{remaining}</td>
+                                  <td className="px-6 py-4 text-center text-white font-bold">{percentage}%</td>
                               </tr>
                           );
                       })}
                   </tbody>
               </table>
           </div>
-          {safeSectorNames.length === 0 && (
+          {groupedSectorStats.length === 0 && (
               <div className="p-6 text-center text-gray-500">
-                  Nenhum setor configurado.
+                  Nenhum setor configurado ou ingressos importados.
               </div>
           )}
       </div>
