@@ -2,6 +2,8 @@
 
 
 
+
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User } from '../types';
 import Stats from './Stats';
@@ -12,7 +14,7 @@ import Scanner from './Scanner';
 import SuperAdminView from './SuperAdminView'; // Import Super Admin Component
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon } from './Icons';
+import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon, LockClosedIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -60,7 +62,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
-    const [ignoreExisting, setIgnoreExisting] = useState(true); // DEFAULT TRUE as requested
+    // Force ignoreExisting to true always for logic, UI will be disabled
+    const ignoreExisting = true; 
 
     // Presets State
     const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
@@ -1305,6 +1308,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                                 <div><p className="text-gray-400 text-sm uppercase font-bold">Código</p><p className="text-xl text-white font-mono">{searchResult.ticket.id}</p></div>
                                                 <div><p className="text-gray-400 text-sm uppercase font-bold">Status Atual</p><div className="flex items-center mt-1">{searchResult.ticket.status === 'USED' ? (<><AlertTriangleIcon className="w-5 h-5 text-yellow-500 mr-2" /><span className="text-yellow-400 font-bold">JÁ UTILIZADO</span></>) : (<><CheckCircleIcon className="w-5 h-5 text-green-500 mr-2" /><span className="text-green-400 font-bold">DISPONÍVEL</span></>)}</div></div>
+                                                {searchResult.ticket.status === 'USED' && searchResult.ticket.usedAt && (
+                                                    <div className="col-span-1 md:col-span-2 bg-yellow-900/20 border border-yellow-700/50 p-3 rounded flex items-center">
+                                                        <ClockIcon className="w-6 h-6 text-yellow-500 mr-3" />
+                                                        <div>
+                                                            <p className="text-yellow-500 text-xs font-bold uppercase">Validado em</p>
+                                                            <p className="text-yellow-100 font-mono text-lg">{new Date(searchResult.ticket.usedAt).toLocaleString('pt-BR')}</p>
+                                                        </div>
+                                                    </div>
+                                                )}
                                                 <div><p className="text-gray-400 text-sm uppercase font-bold">Setor</p><p className="text-white text-lg">{searchResult.ticket.sector}</p></div>
                                                 <div><p className="text-gray-400 text-sm uppercase font-bold">Nome do Dono</p><p className="text-white text-lg">{searchResult.ticket.details?.ownerName || '-'}</p></div>
                                             </div>
@@ -1312,6 +1324,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             <div className="text-center py-4"><XCircleIcon className="w-12 h-12 text-red-500 mx-auto mb-2" /><p className="text-red-400 font-bold text-lg">Ingresso não encontrado.</p></div>
                                         )}
                                     </div>
+                                    {searchResult.logs.length > 0 && (
+                                        <div className="border-t border-gray-600">
+                                            <div className="bg-gray-700/50 px-6 py-2 border-b border-gray-600"><h4 className="font-bold text-sm text-gray-300">Histórico de Validação</h4></div>
+                                            <div className="max-h-48 overflow-y-auto">
+                                                {searchResult.logs.map((log, i) => (
+                                                    <div key={i} className="px-6 py-3 border-b border-gray-700 flex justify-between items-center hover:bg-gray-700/30">
+                                                        <div>
+                                                            <p className="text-sm font-mono text-white">{new Date(log.timestamp).toLocaleString('pt-BR')}</p>
+                                                            <p className="text-xs text-gray-400">{log.operator ? `Operador: ${log.operator}` : 'Operador Desconhecido'}</p>
+                                                        </div>
+                                                        <span className={`text-xs px-2 py-1 rounded font-bold ${log.status === 'VALID' ? 'bg-green-600 text-white' : log.status === 'USED' ? 'bg-yellow-600 text-white' : 'bg-red-600 text-white'}`}>{log.status}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                              </div>
                         )}
@@ -1323,7 +1351,36 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             <h3 className="font-bold text-lg text-purple-300">{buyer.name || buyer.buyer_name || "Comprador Desconhecido"}</h3>
                                             {(buyer.tickets && buyer.tickets.length > 0) && (<button onClick={() => handleImportSingleBuyer(buyer)} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs font-bold flex items-center shadow"><CloudDownloadIcon className="w-3 h-3 mr-1" />Importar</button>)}
                                         </div>
-                                        {/* ... Result details ... */}
+                                        <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div><span className="text-xs text-gray-400 uppercase">Email</span><p className="text-white">{buyer.email || '-'}</p></div>
+                                            <div><span className="text-xs text-gray-400 uppercase">Documento</span><p className="text-white">{buyer.cpf || buyer.document || '-'}</p></div>
+                                        </div>
+                                        {buyer.tickets && buyer.tickets.length > 0 && (
+                                            <div className="bg-black/20 p-4">
+                                                <p className="text-xs font-bold text-gray-400 mb-2 uppercase">Ingressos ({buyer.tickets.length})</p>
+                                                <div className="space-y-2">
+                                                    {buyer.tickets.map((t: any, ti: number) => {
+                                                        const code = findValueRecursively(t, ['qr_code', 'code', 'ticket_code', 'uuid', 'barcode', 'id', 'ticket_id', 'pk', 'locator', 'identifier', 'friendly_id']);
+                                                        const sector = findValueRecursively(t, ['sector', 'sector_name', 'section', 'category', 'product_name']);
+                                                        const status = findValueRecursively(t, ['status', 'state']);
+                                                        
+                                                        let sectorName = 'Geral';
+                                                        if (typeof sector === 'object' && sector && (sector as any).name) sectorName = (sector as any).name;
+                                                        else if (typeof sector === 'string') sectorName = sector;
+
+                                                        return (
+                                                            <div key={ti} className="flex justify-between items-center bg-gray-700/50 p-2 rounded border border-gray-600">
+                                                                <div>
+                                                                    <p className="text-sm font-mono text-white font-bold">{code || 'S/ CÓDIGO'}</p>
+                                                                    <p className="text-xs text-gray-400">{sectorName}</p>
+                                                                </div>
+                                                                <span className={`text-xs px-2 py-0.5 rounded uppercase font-bold ${status === 'used' || status === 'checked_in' ? 'bg-yellow-600 text-white' : 'bg-green-600 text-white'}`}>{status || 'available'}</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                             </div>
@@ -1395,7 +1452,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     <div><label className="text-xs text-gray-400">Tipo de Importação</label><select value={importType} onChange={(e) => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2"><option value="tickets">Ingressos (API Padrão)</option><option value="participants">Participantes (API)</option><option value="buyers">Compradores (API)</option><option value="checkins">Sincronizar Check-ins (API)</option><option value="google_sheets">Google Sheets (Link CSV)</option></select></div>
                                     <input type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://..." className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
                                     {importType !== 'google_sheets' && (<div className="grid grid-cols-2 gap-2"><div className="relative"><label className="text-xs text-gray-400">Token</label><input type={showImportToken ? "text" : "password"} value={apiToken} onChange={(e) => setApiToken(e.target.value)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm pr-8" /><button onClick={() => setShowImportToken(!showImportToken)} className="absolute right-2 top-6 text-gray-400">{showImportToken ? <EyeSlashIcon className="w-3 h-3"/> : <EyeIcon className="w-3 h-3"/>}</button></div><div><label className="text-xs text-gray-400">ID Evento</label><input type="text" value={apiEventId} onChange={(e) => setApiEventId(e.target.value)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" /></div></div>)}
-                                    <div className="flex items-center my-2 bg-gray-700 p-2 rounded"><input type="checkbox" id="ignoreExisting" checked={ignoreExisting} onChange={(e) => setIgnoreExisting(e.target.checked)} className="w-4 h-4 text-orange-600 rounded" /><label htmlFor="ignoreExisting" className="ml-2 text-xs text-gray-200 cursor-pointer select-none">Ignorar ingressos já importados (Mais rápido)</label></div>
+                                    <div className="flex items-center my-2 bg-gray-700/50 p-2 rounded border border-gray-600"><input type="checkbox" id="ignoreExisting" checked={true} disabled className="w-4 h-4 text-orange-600 rounded bg-gray-600 border-gray-500 cursor-not-allowed opacity-50" /><label htmlFor="ignoreExisting" className="ml-2 text-xs text-gray-400 cursor-not-allowed select-none flex items-center">Ignorar ingressos já importados (Bloqueado pelo Admin)<LockClosedIcon className="w-3 h-3 ml-1" /></label></div>
                                     <div className="flex space-x-2 pt-2"><button onClick={handleImportFromApi} disabled={isLoading} className="flex-grow bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center text-sm">{isLoading ? (loadingMessage || 'Processando...') : 'Importar Agora'}</button>{importType !== 'google_sheets' && (<button onClick={handleSavePreset} className="px-3 bg-gray-600 hover:bg-gray-500 rounded text-xs font-bold" title="Salvar na Lista">Salvar Lista</button>)}</div>
                                     <div className="mt-4 pt-4 border-t border-gray-700"><button onClick={handleSyncExport} disabled={isLoading} className="w-full bg-gray-700 hover:bg-gray-600 text-orange-400 py-2 rounded text-sm font-bold flex items-center justify-center border border-orange-500/30"><CloudUploadIcon className="w-4 h-4 mr-2" /> Enviar Validações para ST / API</button></div>
                                 </div>
