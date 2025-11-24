@@ -765,58 +765,69 @@ const App: React.FC = () => {
         return (
             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
                 <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
-                    <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
+                    <h2 className="text-2xl font-bold text-center mb-6 text-orange-500">{selectedEvent.name}</h2>
                     
-                    <div className="mb-6">
-                        <label className="block text-sm text-gray-400 mb-2 font-bold uppercase">Nome do Operador / Portaria</label>
+                    {/* STEP 1: Identification */}
+                    <div className="mb-8 border-b border-gray-700 pb-6">
+                         <div className="flex items-center mb-3">
+                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded mr-2">PASSO 1</span>
+                            <h3 className="text-lg font-semibold">Identificação</h3>
+                        </div>
+                        <label className="block text-sm text-gray-400 mb-2 uppercase font-bold">Nome do Operador / Portaria</label>
                         <input 
                             type="text" 
                             value={operatorName}
                             onChange={(e) => setOperatorName(e.target.value)}
                             placeholder="Ex: Portaria 1, João..."
-                            className="w-full bg-gray-700 p-3 rounded text-white border border-gray-600 focus:outline-none focus:border-orange-500"
+                            className="w-full bg-gray-700 p-3 rounded text-white border border-gray-600 focus:outline-none focus:border-orange-500 placeholder-gray-500"
                         />
                     </div>
 
-                    <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
-                    
-                    <button 
-                        onClick={() => { setActiveSectors([]); handleConfirmSectorSelection(); }}
-                        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-transform transform hover:scale-105"
-                    >
-                        Validar Todos os Setores (Geral)
-                    </button>
-
-                    <div className="border-t border-gray-600 my-4 relative">
-                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE SETORES</span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 mt-6">
-                        {sectorNames.map(sector => (
-                            <button
-                                key={sector}
-                                onClick={() => handleToggleSectorSelection(sector)}
-                                className={`font-semibold py-3 px-4 rounded-lg border transition-colors ${
-                                    activeSectors.includes(sector)
-                                    ? 'bg-orange-500 text-white border-orange-400'
-                                    : 'bg-gray-700 hover:bg-gray-600 text-white border-gray-600'
-                                }`}
-                            >
-                                {sector}
-                            </button>
-                        ))}
-                    </div>
-
-                    {activeSectors.length > 0 && (
-                        <div className="mt-6">
-                            <button 
-                                onClick={handleConfirmSectorSelection}
-                                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md animate-fade-in"
-                            >
-                                Validar {activeSectors.length} Setores Selecionados
-                            </button>
+                    {/* STEP 2: Selection */}
+                    <div>
+                        <div className="flex items-center mb-4">
+                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded mr-2">PASSO 2</span>
+                            <h3 className="text-lg font-semibold">O que validar?</h3>
                         </div>
-                    )}
+                        
+                        <button 
+                            onClick={() => { setActiveSectors([]); handleConfirmSectorSelection(); }}
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-transform transform hover:scale-105 flex items-center justify-center"
+                        >
+                            Validar Todos os Setores (Geral)
+                        </button>
+
+                        <div className="border-t border-gray-600 my-4 relative">
+                            <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE ESPECÍFICOS</span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4 mt-6">
+                            {sectorNames.map(sector => (
+                                <button
+                                    key={sector}
+                                    onClick={() => handleToggleSectorSelection(sector)}
+                                    className={`font-semibold py-3 px-4 rounded-lg border transition-colors ${
+                                        activeSectors.includes(sector)
+                                        ? 'bg-orange-500 text-white border-orange-400'
+                                        : 'bg-gray-700 hover:bg-gray-600 text-white border-gray-600'
+                                    }`}
+                                >
+                                    {sector}
+                                </button>
+                            ))}
+                        </div>
+
+                        {activeSectors.length > 0 && (
+                            <div className="mt-6">
+                                <button 
+                                    onClick={handleConfirmSectorSelection}
+                                    className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md animate-fade-in"
+                                >
+                                    Confirmar {activeSectors.length} Setores
+                                </button>
+                            </div>
+                        )}
+                    </div>
 
                     <div className="mt-8 text-center">
                         <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
