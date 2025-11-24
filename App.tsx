@@ -294,6 +294,12 @@ const App: React.FC = () => {
         localStorage.setItem('selectedEventId', event.id);
     };
 
+    const handleAdminSelectEvent = (event: Event) => {
+        setSelectedEvent(event);
+        setView('admin'); // Ensure stay in admin
+        localStorage.setItem('selectedEventId', event.id);
+    };
+
     const handleOperatorConfirm = () => {
         if (!operatorName.trim()) {
             alert("Por favor, digite o nome do operador ou portaria.");
@@ -306,7 +312,12 @@ const App: React.FC = () => {
 
     const handleBackToEvents = () => {
         setSelectedEvent(null);
-        setView('scanner');
+        // If we are in admin mode, we want to stay in admin mode (showing event list)
+        // Only go to scanner selector if we are not admin
+        if (view !== 'admin') {
+            setView('scanner');
+        }
+        
         setLockedSector(null);
         setActiveSectors([]);
         setIsSectorSelectionStep(false);
@@ -1033,6 +1044,7 @@ const App: React.FC = () => {
                             sectorNames={sectorNames}
                             onUpdateSectorNames={handleUpdateSectorNames}
                             isOnline={isOnline}
+                            onSelectEvent={handleAdminSelectEvent}
                         />
                     )}
                 </main>

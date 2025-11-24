@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
@@ -20,6 +21,7 @@ interface AdminViewProps {
   sectorNames: string[];
   onUpdateSectorNames: (newNames: string[]) => Promise<void>;
   isOnline: boolean;
+  onSelectEvent: (event: Event) => void;
 }
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
@@ -35,7 +37,7 @@ interface ImportPreset {
     eventId: string;
 }
 
-const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline }) => {
+const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline, onSelectEvent }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
@@ -2053,6 +2055,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         <div key={event.id} className="flex items-center justify-between bg-gray-700 p-3 rounded hover:bg-gray-600 transition-colors">
                                             <span className={`font-medium ${event.isHidden ? 'text-gray-500 italic' : 'text-white'}`}>{event.name}</span>
                                             <div className="flex space-x-2">
+                                                <button onClick={() => { onSelectEvent(event); setActiveTab('stats'); }} className="text-xs px-3 py-1 bg-green-600 hover:bg-green-500 rounded font-bold text-white shadow-sm">
+                                                    Gerenciar
+                                                </button>
                                                 <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden || false)} className="text-xs px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded border border-gray-500">
                                                     {event.isHidden ? 'Mostrar' : 'Ocultar'}
                                                 </button>
