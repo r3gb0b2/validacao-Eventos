@@ -289,15 +289,20 @@ const App: React.FC = () => {
         if (!db) return;
         setIsAuthLoading(true);
         try {
-            // In prod, use hashed passwords and maybe auth service. For this prototype:
-            const q = query(collection(db, 'users'), where('username', '==', username));
-            const snap = await getDocs(q);
+            // Fetch all users to do case-insensitive match client-side (small collection)
+            const snap = await getDocs(collection(db, 'users'));
             
+            const normalizedInputName = username.trim().toLowerCase();
             let foundUser: User | null = null;
+            
             snap.forEach(doc => {
                 const data = doc.data();
-                if (data.password === pass) { // Plain text comparison
-                    foundUser = { id: doc.id, ...data } as User;
+                // Compare username lowercase
+                if ((data.username || '').toLowerCase() === normalizedInputName) {
+                    // Check password (case sensitive usually, but user didn't specify, standard is case sensitive password, insensitive username)
+                    if (data.password === pass) { 
+                        foundUser = { id: doc.id, ...data } as User;
+                    }
                 }
             });
 
@@ -719,7 +724,9 @@ const App: React.FC = () => {
                              <button onClick={() => setView('scanner')} className={`p-2 rounded-full transition-colors ${view === 'scanner' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><QrCodeIcon className="w-6 h-6" /></button>
                          )}
                          <button onClick={handleAdminRequest} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><CogIcon className="w-6 h-6" /></button>
-                         <button onClick={handleLogout} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>
+                         {currentUser && (
+                            <button onClick={handleLogout} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>
+                         )}
                     </div>
                 </header>
 
