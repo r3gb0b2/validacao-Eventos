@@ -47,11 +47,6 @@ const App: React.FC = () => {
     const [isCheckingUrl, setIsCheckingUrl] = useState(true); // New state to prevent flashing login screen
     const [manualCode, setManualCode] = useState(''); // State for manual code entry
     
-    // New state for Operator Flow
-    const [operatorName, setOperatorName] = useState(localStorage.getItem('operatorName') || '');
-    const [isOperatorStep, setIsOperatorStep] = useState(false);
-    const [tempOperatorName, setTempOperatorName] = useState('');
-
     // New state for Sector Selection Flow
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
     const [lockedSector, setLockedSector] = useState<string | null>(null);
@@ -125,7 +120,6 @@ const App: React.FC = () => {
                         setSelectedEvent({ id: eventDoc.id, name: eventDoc.data().name, isHidden: eventDoc.data().isHidden });
                         setView('public_stats');
                         setIsSectorSelectionStep(false);
-                        setIsOperatorStep(false);
                     } else {
                         console.error("Event not found for public stats");
                     }
@@ -241,8 +235,7 @@ const App: React.FC = () => {
                     timestamp: (data.timestamp as Timestamp)?.toMillis() || Date.now(),
                     ticketSector: data.sector ?? 'Desconhecido',
                     isPending: doc.metadata.hasPendingWrites,
-                    deviceId: data.deviceId, // Ensure we capture who scanned it
-                    operatorName: data.operatorName // Who scanned it
+                    deviceId: data.deviceId // Ensure we capture who scanned it
                 };
             });
             setScanHistory(historyData);
@@ -282,39 +275,10 @@ const App: React.FC = () => {
 
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
-        
-        // Flow: Event -> Operator -> Sector -> Scanner
-        // Check if operator name is already set
-        if (!operatorName) {
-             setIsOperatorStep(true);
-             setTempOperatorName('');
-        } else {
-             setIsOperatorStep(false);
-             setIsSectorSelectionStep(true);
-        }
-        
+        setIsSectorSelectionStep(true);
         setLockedSector(null);
         setActiveSectors([]);
         localStorage.setItem('selectedEventId', event.id);
-    };
-
-    const handleConfirmOperator = () => {
-        if (!tempOperatorName.trim()) {
-            alert("Por favor, insira seu nome.");
-            return;
-        }
-        const name = tempOperatorName.trim();
-        setOperatorName(name);
-        localStorage.setItem('operatorName', name);
-        setIsOperatorStep(false);
-        setIsSectorSelectionStep(true);
-    };
-
-    const handleChangeOperator = () => {
-        setView('scanner');
-        setIsSectorSelectionStep(false);
-        setIsOperatorStep(true);
-        setTempOperatorName(operatorName);
     };
 
     const handleToggleSectorSelection = (sector: string) => {
@@ -342,7 +306,6 @@ const App: React.FC = () => {
         setLockedSector(null);
         setActiveSectors([]);
         setIsSectorSelectionStep(false);
-        setIsOperatorStep(false);
         localStorage.removeItem('selectedEventId');
     };
 
@@ -539,6 +502,7 @@ const App: React.FC = () => {
                                 const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
                                 
                                 // SECTOR VALIDATION LOGIC FOR ONLINE API
+                                // 1. Global Check (Active Sectors from Setup)
                                 if (activeSectors.length > 0) {
                                     const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === sector.toLowerCase());
                                     if (!isAllowed) {
@@ -548,11 +512,23 @@ const App: React.FC = () => {
                                             status: 'WRONG_SECTOR', 
                                             timestamp: serverTimestamp(), 
                                             sector: sector,
-                                            deviceId: deviceId,
-                                            operatorName: operatorName // Add operator
+                                            deviceId: deviceId
                                         });
                                         return;
                                     }
+                                }
+
+                                // 2. Local Check (Active Tab Selection)
+                                if (selectedSector !== 'All' && sector.toLowerCase() !== selectedSector.toLowerCase()) {
+                                    showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${selectedSector}). Ingresso é: ${sector}`);
+                                    await addDoc(collection(db, 'events', eventId, 'scans'), {
+                                        ticketId: foundCode,
+                                        status: 'WRONG_SECTOR',
+                                        timestamp: serverTimestamp(),
+                                        sector: sector,
+                                        deviceId: deviceId
+                                    });
+                                    return;
                                 }
 
                                 showScanResult('VALID', `Acesso Liberado! (${apiName}) - ${sector}`);
@@ -562,8 +538,7 @@ const App: React.FC = () => {
                                     status: 'VALID', 
                                     timestamp: serverTimestamp(), 
                                     sector: sector,
-                                    deviceId: deviceId,
-                                    operatorName: operatorName // Add operator
+                                    deviceId: deviceId
                                 });
                                 return;
                             } else if (response.status === 409 || response.status === 422) {
@@ -573,8 +548,7 @@ const App: React.FC = () => {
                                     status: 'USED', 
                                     timestamp: serverTimestamp(), 
                                     sector: 'Externo',
-                                    deviceId: deviceId,
-                                    operatorName: operatorName // Add operator
+                                    deviceId: deviceId
                                 });
                                 return;
                             } else {
@@ -594,8 +568,7 @@ const App: React.FC = () => {
                     status: 'INVALID', 
                     timestamp: serverTimestamp(), 
                     sector: 'Externo',
-                    deviceId: deviceId,
-                    operatorName: operatorName // Add operator
+                    deviceId: deviceId
                 });
                 return;
             }
@@ -609,7 +582,7 @@ const App: React.FC = () => {
         const logScan = async (status: ScanStatus, sector: string) => {
             try {
                 await addDoc(collection(db, 'events', eventId, 'scans'), {
-                    ticketId, status, timestamp: serverTimestamp(), sector, deviceId, operatorName
+                    ticketId, status, timestamp: serverTimestamp(), sector, deviceId
                 });
             } catch (error) { console.error(`Failed to log ${status} scan:`, error); }
         };
@@ -620,19 +593,27 @@ const App: React.FC = () => {
             return;
         }
 
+        // 1. Global Sector Check
+        if (activeSectors.length > 0 && !activeSectors.includes(ticket.sector)) {
+            const message = `Setor incorreto! Ingresso é do setor "${ticket.sector}".`;
+            showScanResult('WRONG_SECTOR', message);
+            await logScan('WRONG_SECTOR', ticket.sector);
+            return;
+        }
+
+        // 2. Local Tab Check (If a specific tab is selected)
+        if (selectedSector !== 'All' && ticket.sector !== selectedSector) {
+             const message = `Setor incorreto! Filtro ativo: "${selectedSector}". Ingresso é do setor: "${ticket.sector}".`;
+             showScanResult('WRONG_SECTOR', message);
+             await logScan('WRONG_SECTOR', ticket.sector);
+             return;
+        }
+
         if (ticket.status === 'USED') {
             const usedAtDate = ticket.usedAt ? new Date(ticket.usedAt) : null;
             const message = `Ingresso já utilizado${usedAtDate ? ` em ${usedAtDate.toLocaleString('pt-BR')}` : ''}`;
             showScanResult('USED', message);
             await logScan('USED', ticket.sector);
-            return;
-        }
-
-        // Logic check: if we have locked sectors (Multi-sector selection), ensure the ticket matches one of them
-        if (activeSectors.length > 0 && !activeSectors.includes(ticket.sector)) {
-            const message = `Setor incorreto! Ingresso é do setor "${ticket.sector}".`;
-            showScanResult('WRONG_SECTOR', message);
-            await logScan('WRONG_SECTOR', ticket.sector);
             return;
         }
 
@@ -642,7 +623,7 @@ const App: React.FC = () => {
             batch.update(ticketRef, { status: 'USED', usedAt: serverTimestamp() });
 
             const logRef = doc(collection(db, 'events', eventId, 'scans'));
-            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operatorName });
+            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId });
 
             await batch.commit();
             showScanResult('VALID', `Acesso liberado para o setor ${ticket.sector}!`);
@@ -651,7 +632,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
         }
-    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId, operatorName]);
+    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId, selectedSector]);
     
     const handleManualSubmit = () => {
         if (!manualCode.trim()) return;
@@ -717,7 +698,6 @@ const App: React.FC = () => {
                     // We select it but skip sector selection step for admin view
                     setSelectedEvent(visibleEvents[0]);
                     setIsSectorSelectionStep(false);
-                    setIsOperatorStep(false);
                 }
             }
             setView('admin');
@@ -749,54 +729,12 @@ const App: React.FC = () => {
         return <EventSelector events={events} onSelectEvent={handleSelectEvent} onAccessAdmin={handleAdminAccessFromSelector} />;
     }
 
-    // Operator Input Screen
-    if (selectedEvent && view === 'scanner' && isOperatorStep) {
-        return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
-                <div className="w-full max-w-md bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
-                     <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
-                     <h3 className="text-xl font-semibold text-center mb-6">Identificação do Operador</h3>
-                     
-                     <div className="mb-6">
-                         <label className="block text-sm text-gray-400 mb-2">Qual seu nome?</label>
-                         <input 
-                             type="text" 
-                             value={tempOperatorName}
-                             onChange={(e) => setTempOperatorName(e.target.value)}
-                             placeholder="Ex: João Silva"
-                             className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                             onKeyDown={(e) => e.key === 'Enter' && handleConfirmOperator()}
-                             autoFocus
-                         />
-                     </div>
-
-                     <button 
-                         onClick={handleConfirmOperator}
-                         className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-transform transform active:scale-95"
-                     >
-                         Continuar
-                     </button>
-
-                     <div className="mt-6 text-center">
-                        <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
-                            Voltar para seleção de eventos
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
     // Sector Selection Screen
     if (selectedEvent && view === 'scanner' && isSectorSelectionStep) {
         return (
             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
                 <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
-                    <h2 className="text-2xl font-bold text-center mb-1 text-orange-500">{selectedEvent.name}</h2>
-                    <p className="text-center text-gray-400 mb-6 text-sm">
-                        Operador: <strong className="text-white">{operatorName}</strong> 
-                        <button onClick={handleChangeOperator} className="ml-2 text-orange-400 hover:underline text-xs">(Trocar)</button>
-                    </p>
+                    <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
                     <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
                     
                     <button 
@@ -884,10 +822,6 @@ const App: React.FC = () => {
                                         Trocar Evento
                                     </button>
                                 )}
-                            </div>
-                            <div className="flex items-center mt-1">
-                                 <span className="text-xs text-gray-400 mr-2">Operador: <strong className="text-gray-300">{operatorName}</strong></span>
-                                 <button onClick={handleChangeOperator} className="text-[10px] bg-gray-800 px-1 rounded text-gray-500 hover:text-white border border-gray-700">Trocar</button>
                             </div>
                         </div>
                     ) : (

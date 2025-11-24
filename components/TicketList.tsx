@@ -81,17 +81,12 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
           <li key={ticket.id} className="py-3 flex justify-between items-center">
             <div>
               <p className="font-medium text-white">{ticket.ticketId}</p>
-              <div className="flex flex-col text-xs text-gray-500 mt-1">
+              <div className="flex items-center text-xs text-gray-500 mt-1">
                  <p>
                     Validado em: {new Date(ticket.timestamp).toLocaleString('pt-BR')}
                  </p>
-                 {ticket.operatorName && (
-                    <p className="text-gray-400">
-                        Por: <span className="font-semibold text-gray-300">{ticket.operatorName}</span>
-                    </p>
-                 )}
                  {ticket.isPending && (
-                    <span title="Esta validação foi feita offline e será sincronizada." className="flex items-center text-yellow-400 font-semibold mt-1">
+                    <span title="Esta validação foi feita offline e será sincronizada." className="ml-2 flex items-center text-yellow-400 font-semibold">
                         <ClockIcon className="w-3 h-3 mr-1" />
                         Pendente
                     </span>

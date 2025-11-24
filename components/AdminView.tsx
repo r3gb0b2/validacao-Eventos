@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
-import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, SectorGroup } from '../types';
+import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event } from '../types';
 import Stats from './Stats';
 import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
@@ -21,7 +22,7 @@ interface AdminViewProps {
   isOnline: boolean;
 }
 
-const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#f43f5e', '#84cc16', '#a855f7', '#06b6d4'];
+const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
 type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
 type SearchType = 'TICKET_LOCAL' | 'BUYER_API';
@@ -43,9 +44,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [isSavingSectors, setIsSavingSectors] = useState(false);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-    // Grouping State
-    const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
-
     // Event Management State
     const [newEventName, setNewEventName] = useState('');
     const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
@@ -56,7 +54,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
-    const [ignoreExisting, setIgnoreExisting] = useState(true); // Default to true
+    const [ignoreExisting, setIgnoreExisting] = useState(false); // New state for skipping existing tickets
 
     // Presets State
     const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
@@ -110,18 +108,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         };
         loadPresets();
     }, [db]);
-    
-    // Load Sector Groups from LocalStorage
-    useEffect(() => {
-        try {
-            const savedGroups = localStorage.getItem('stats_sector_groups');
-            if (savedGroups) {
-                setSectorGroups(JSON.parse(savedGroups));
-            }
-        } catch (e) {
-            console.error("Failed to load sector groups", e);
-        }
-    }, []);
+
 
     // Load saved import credentials (offline import) when event is selected
     useEffect(() => {
@@ -159,11 +146,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setActiveTab('events');
         }
     }, [selectedEvent]);
-    
-    const handleUpdateSectorGroups = (newGroups: SectorGroup[]) => {
-        setSectorGroups(newGroups);
-        localStorage.setItem('stats_sector_groups', JSON.stringify(newGroups));
-    };
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
@@ -243,30 +225,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     };
 
-    // --- ANALYTICS DATA CALCULATION ---
-    const chartDisplayData = useMemo(() => {
-        // Prepare list of display names (Groups + Ungrouped Sectors)
-        const groupedSectorNames = new Set<string>();
-        sectorGroups.forEach(g => g.sectors.forEach(s => groupedSectorNames.add(s)));
-        
-        const displaySectors = [
-            ...sectorGroups.map(g => g.name),
-            ...sectorNames.filter(s => !groupedSectorNames.has(s))
-        ];
-
+    const analyticsData: AnalyticsData = useMemo(() => {
         // Safeguard: Filter valid scans with valid timestamps
         const validScans = scanHistory.filter(s => s.status === 'VALID' && s.timestamp && !isNaN(Number(s.timestamp)));
-        
         if (validScans.length === 0) {
             return {
-                analyticsData: {
-                    timeBuckets: [],
-                    firstAccess: null,
-                    lastAccess: null,
-                    peak: { time: '-', count: 0 },
-                },
-                displaySectors,
-                pieData: []
+                timeBuckets: [],
+                firstAccess: null,
+                lastAccess: null,
+                peak: { time: '-', count: 0 },
             };
         }
 
@@ -276,34 +243,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         const lastAccess = validScans[validScans.length - 1].timestamp;
 
         const buckets = new Map<string, { [sector: string]: number }>();
-        const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+        const TEN_MINUTES_MS = 10 * 60 * 1000;
 
         for (const scan of validScans) {
-            const bucketStart = Math.floor(scan.timestamp / THIRTY_MINUTES_MS) * THIRTY_MINUTES_MS;
+            const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
             const date = new Date(bucketStart);
+            // Check if date is valid
             if (isNaN(date.getTime())) continue;
 
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
-                // Initialize counts for all display sectors (groups + standalone)
-                const initialCounts = displaySectors.reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
+                const initialCounts = sectorNames.reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
                 buckets.set(key, initialCounts);
             }
             const currentBucket = buckets.get(key)!;
-
-            // Determine if sector belongs to a group
-            let sectorKey = scan.ticketSector;
-            const foundGroup = sectorGroups.find(g => g.sectors.includes(scan.ticketSector));
-            if (foundGroup) {
-                sectorKey = foundGroup.name;
-            }
-
-            if (currentBucket[sectorKey] !== undefined) {
-                currentBucket[sectorKey]++;
-            } else if (sectorKey !== 'Desconhecido') {
-                 // Fallback if sector changed name or something, maybe treat as general
-            }
+            currentBucket[scan.ticketSector] = (currentBucket[scan.ticketSector] || 0) + 1;
         }
 
         let peak = { time: '-', count: 0 };
@@ -317,36 +272,25 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return { time, counts, total };
             })
             .sort((a, b) => a.time.localeCompare(b.time));
-            
-        // PIE CHART DATA (Grouped)
-        const usedTickets = allTickets.filter(t => t.status === 'USED');
-        const counts: Record<string, number> = {};
-        
-        // Initialize 0
-        displaySectors.forEach(ds => counts[ds] = 0);
-        
-        usedTickets.forEach(t => {
-            let key = t.sector;
-            const grp = sectorGroups.find(g => g.sectors.includes(t.sector));
-            if (grp) key = grp.name;
-            
-            if (counts[key] !== undefined) counts[key]++;
-        });
 
-        const pieData = displaySectors.map((name, index) => ({
+        return { timeBuckets, firstAccess, lastAccess, peak };
+    }, [scanHistory, sectorNames]);
+
+     const pieChartData = useMemo(() => {
+        const usedTickets = allTickets.filter(t => t.status === 'USED');
+        if (usedTickets.length === 0) return [];
+        
+        const counts = sectorNames.reduce((acc, sector) => {
+            acc[sector] = usedTickets.filter(t => t.sector === sector).length;
+            return acc;
+        }, {} as Record<string, number>);
+
+        return sectorNames.map((name, index) => ({
             name: name,
             value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
-
-
-        return { 
-            analyticsData: { timeBuckets, firstAccess, lastAccess, peak },
-            displaySectors,
-            pieData
-        };
-    }, [scanHistory, sectorNames, sectorGroups, allTickets]);
-
+    }, [allTickets, sectorNames]);
 
     const handleSaveSectorNames = async () => {
         if (editableSectorNames.some(name => name.trim() === '')) {
@@ -519,6 +463,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     };
     
+    // Scan in Admin
     const handleScanInAdmin = (decodedText: string) => {
         // Stop scanning UI
         setShowScanner(false);
@@ -1395,20 +1340,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         </div>
 
                         {/* Main Stats Component (KPIs + Table) */}
-                        <Stats 
-                            allTickets={allTickets} 
-                            sectorNames={sectorNames} 
-                            groups={sectorGroups}
-                            onUpdateGroups={handleUpdateSectorGroups}
-                        />
+                        <Stats allTickets={allTickets} sectorNames={sectorNames} />
 
                         {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                              <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <PieChart data={chartDisplayData.pieData} title="Distribuição por Setor"/>
+                                <PieChart data={pieChartData} title="Distribuição por Setor"/>
                             </div>
                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <AnalyticsChart data={chartDisplayData.analyticsData} sectorNames={chartDisplayData.displaySectors} />
+                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames} />
                             </div>
                         </div>
 
@@ -1419,19 +1359,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm hover:border-green-500 transition-colors">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
                                     <p className="text-2xl font-bold text-green-400">
-                                        {chartDisplayData.analyticsData.firstAccess ? new Date(chartDisplayData.analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}
+                                        {analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm hover:border-red-500 transition-colors">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
                                     <p className="text-2xl font-bold text-red-400">
-                                        {chartDisplayData.analyticsData.lastAccess ? new Date(chartDisplayData.analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}
+                                        {analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm hover:border-orange-500 transition-colors">
-                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({chartDisplayData.analyticsData.peak.time})</p>
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({analyticsData.peak.time})</p>
                                     <p className="text-2xl font-bold text-orange-400">
-                                        {chartDisplayData.analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
+                                        {analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
                                     </p>
                                 </div>
                             </div>
