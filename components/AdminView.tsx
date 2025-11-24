@@ -364,6 +364,40 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         });
     };
     
+    // Helper function to find keys deep in object (Recursive)
+    const findValueRecursively = (obj: any, keys: string[], depth = 0): any => {
+        if (!obj || typeof obj !== 'object' || depth > 5) return null;
+
+        // 1. Check current level properties
+        for (const key of keys) {
+             // Exact match
+             if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') return obj[key];
+             
+             // Case insensitive match
+             const foundKey = Object.keys(obj).find(k => k.toLowerCase() === key.toLowerCase());
+             if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== null && obj[foundKey] !== '') {
+                 return obj[foundKey];
+             }
+        }
+
+        // 2. Go deeper into children (objects and arrays)
+        if (Array.isArray(obj)) {
+            for (const item of obj) {
+                const found = findValueRecursively(item, keys, depth + 1);
+                if (found) return found;
+            }
+        } else {
+            for (const k in obj) {
+                if (typeof obj[k] === 'object') {
+                    const found = findValueRecursively(obj[k], keys, depth + 1);
+                    if (found) return found;
+                }
+            }
+        }
+
+        return null;
+    };
+
     // Search handler
     const handleSearch = async (overrideQuery?: string) => {
         const queryToUse = overrideQuery || searchQuery;
@@ -437,40 +471,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setSearchQuery(decodedText);
         // Trigger search immediately
         handleSearch(decodedText);
-    };
-    
-    // Helper function to find keys deep in object (Recursive)
-    const findValueRecursively = (obj: any, keys: string[], depth = 0): any => {
-        if (!obj || typeof obj !== 'object' || depth > 5) return null;
-
-        // 1. Check current level properties
-        for (const key of keys) {
-             // Exact match
-             if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') return obj[key];
-             
-             // Case insensitive match
-             const foundKey = Object.keys(obj).find(k => k.toLowerCase() === key.toLowerCase());
-             if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== null && obj[foundKey] !== '') {
-                 return obj[foundKey];
-             }
-        }
-
-        // 2. Go deeper into children (objects and arrays)
-        if (Array.isArray(obj)) {
-            for (const item of obj) {
-                const found = findValueRecursively(item, keys, depth + 1);
-                if (found) return found;
-            }
-        } else {
-            for (const k in obj) {
-                if (typeof obj[k] === 'object') {
-                    const found = findValueRecursively(obj[k], keys, depth + 1);
-                    if (found) return found;
-                }
-            }
-        }
-
-        return null;
     };
 
     // Import tickets from a specific buyer found in search
@@ -1601,24 +1601,35 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                 <h4 className="text-sm font-bold text-gray-300 mb-2">Ingressos Associados (API)</h4>
                                                 {(buyer.tickets && buyer.tickets.length > 0) ? (
                                                     <ul className="space-y-2">
-                                                        {buyer.tickets.map((t: any, tIdx: number) => (
-                                                            <li key={tIdx} className="bg-gray-700/50 p-3 rounded flex justify-between items-center">
-                                                                <div>
-                                                                    <div className="flex items-center space-x-2">
-                                                                         <p className="font-mono font-bold text-sm text-white">{t.code || t.qr_code || t.ticket_code}</p>
-                                                                         <span className="text-xs bg-gray-600 px-1 rounded text-gray-300">
-                                                                             {t.id ? `ID: ${t.id}` : ''}
-                                                                         </span>
+                                                        {buyer.tickets.map((t: any, tIdx: number) => {
+                                                            // Use recursive search to ensure we display code/sector/status even if API structure varies
+                                                            const displayCode = findValueRecursively(t, ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'access_code', 'identifier', 'number']) || 'Cód. não encontrado';
+                                                            const sectorRaw = findValueRecursively(t, ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor']);
+                                                            const displaySector = (typeof sectorRaw === 'object' && sectorRaw.name) ? sectorRaw.name : (sectorRaw || 'Geral');
+                                                            const statusRaw = findValueRecursively(t, ['status', 'state', 'estado']);
+                                                            const displayId = t.id || findValueRecursively(t, ['id', 'ticket_id']);
+                                                            
+                                                            const isUsed = statusRaw === 'used' || statusRaw === 'checked_in' || statusRaw === 'utilizado';
+
+                                                            return (
+                                                                <li key={tIdx} className="bg-gray-700/50 p-3 rounded flex justify-between items-center">
+                                                                    <div>
+                                                                        <div className="flex items-center space-x-2">
+                                                                             <p className="font-mono font-bold text-sm text-white">{displayCode}</p>
+                                                                             <span className="text-xs bg-gray-600 px-1 rounded text-gray-300">
+                                                                                 {displayId ? `ID: ${displayId}` : ''}
+                                                                             </span>
+                                                                        </div>
+                                                                        <p className="text-xs text-gray-400">{displaySector}</p>
                                                                     </div>
-                                                                    <p className="text-xs text-gray-400">{t.sector_name || t.sector || t.product_name || 'Setor Geral'}</p>
-                                                                </div>
-                                                                <span className={`text-xs px-2 py-1 rounded font-bold ${
-                                                                    t.status === 'used' || t.status === 'checked_in' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
-                                                                }`}>
-                                                                    {t.status === 'used' || t.status === 'checked_in' ? 'UTILIZADO' : 'VÁLIDO'}
-                                                                </span>
-                                                            </li>
-                                                        ))}
+                                                                    <span className={`text-xs px-2 py-1 rounded font-bold ${
+                                                                        isUsed ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
+                                                                    }`}>
+                                                                        {isUsed ? 'UTILIZADO' : 'VÁLIDO'}
+                                                                    </span>
+                                                                </li>
+                                                            );
+                                                        })}
                                                     </ul>
                                                 ) : (
                                                     <p className="text-xs text-gray-500 italic">Nenhum ingresso listado neste objeto de comprador.</p>
