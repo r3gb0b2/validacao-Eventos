@@ -442,13 +442,20 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             // Helper to find property case-insensitive or specific keys
             const findProp = (obj: any, keys: string[]) => {
                 if (!obj) return null;
+                // Case insensitive check
+                const objKeys = Object.keys(obj).map(k => k.toLowerCase());
                 for (const k of keys) {
-                    if (obj[k]) return obj[k];
+                    if (obj[k]) return obj[k]; // exact match
+                    // loose match
+                    const idx = objKeys.indexOf(k.toLowerCase());
+                    if (idx !== -1) return obj[Object.keys(obj)[idx]];
                 }
                 return null;
             };
 
-            const CODE_KEYS = ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'ticket_id', 'id'];
+            const HIGH_PRIORITY_CODE_KEYS = ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode'];
+            const LOW_PRIORITY_CODE_KEYS = ['ticket_id', 'id'];
+            
             const SECTOR_KEYS = ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor'];
             const STATUS_KEYS = ['status', 'state'];
             const DATE_KEYS = ['updated_at', 'checked_in_at', 'used_at', 'created_at'];
@@ -468,11 +475,34 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 let originalId = null;
                 let dateStr = null;
 
-                // 1. Find Code & Original ID
+                // 1. STRATEGY A: Find HIGH PRIORITY Code (Actual QR String)
                 for (const candidate of candidates) {
-                    if (!code) code = findProp(candidate, CODE_KEYS);
-                    if (candidate.id) originalId = candidate.id; // Capture ID if present
+                    const c = findProp(candidate, HIGH_PRIORITY_CODE_KEYS);
+                    if (c) {
+                        code = c;
+                        break;
+                    }
                 }
+
+                // 2. STRATEGY B: Find LOW PRIORITY Code (ID) only if no QR string found
+                if (!code) {
+                     for (const candidate of candidates) {
+                        const c = findProp(candidate, LOW_PRIORITY_CODE_KEYS);
+                        if (c) {
+                            code = c;
+                            break;
+                        }
+                    }
+                }
+
+                // Capture original ID for Sync purposes (usually 'id')
+                for (const candidate of candidates) {
+                    if (candidate.id) {
+                        originalId = candidate.id;
+                        break;
+                    }
+                }
+
 
                 if (code) {
                     // 2. Find Sector (if not found with code)
