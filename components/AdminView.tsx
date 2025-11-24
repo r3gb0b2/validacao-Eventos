@@ -439,20 +439,59 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         handleSearch(decodedText);
     };
     
+    // Helper function to find keys deep in object (Recursive)
+    const findValueRecursively = (obj: any, keys: string[], depth = 0): any => {
+        if (!obj || typeof obj !== 'object' || depth > 5) return null;
+
+        // 1. Check current level properties
+        for (const key of keys) {
+             // Exact match
+             if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') return obj[key];
+             
+             // Case insensitive match
+             const foundKey = Object.keys(obj).find(k => k.toLowerCase() === key.toLowerCase());
+             if (foundKey && obj[foundKey] !== undefined && obj[foundKey] !== null && obj[foundKey] !== '') {
+                 return obj[foundKey];
+             }
+        }
+
+        // 2. Go deeper into children (objects and arrays)
+        if (Array.isArray(obj)) {
+            for (const item of obj) {
+                const found = findValueRecursively(item, keys, depth + 1);
+                if (found) return found;
+            }
+        } else {
+            for (const k in obj) {
+                if (typeof obj[k] === 'object') {
+                    const found = findValueRecursively(obj[k], keys, depth + 1);
+                    if (found) return found;
+                }
+            }
+        }
+
+        return null;
+    };
+
     // Import tickets from a specific buyer found in search
     const handleImportSingleBuyer = async (buyer: any) => {
-        if (!selectedEvent || !buyer.tickets) {
-            alert("Nenhum ingresso encontrado neste comprador.");
+        if (!selectedEvent || !buyer) {
+            alert("Dados inválidos.");
             return;
         }
         
-        const ticketsList = Array.isArray(buyer.tickets) ? buyer.tickets : [];
+        let ticketsList = [];
+        if (buyer.tickets && Array.isArray(buyer.tickets)) ticketsList = buyer.tickets;
+        else if (Array.isArray(buyer)) ticketsList = buyer; // Sometimes the buyer object is just the list itself
+        else ticketsList = [buyer]; // Or it's a single object
+
         if (ticketsList.length === 0) {
-            alert("A lista de ingressos deste comprador está vazia.");
+            alert("A lista de ingressos deste comprador está vazia ou mal formatada.");
             return;
         }
         
-        const confirmMsg = `Deseja importar ${ticketsList.length} ingressos de "${buyer.name || buyer.buyer_name || 'Comprador'}" para o sistema local?`;
+        const ownerName = buyer.name || buyer.buyer_name || 'Comprador Importado';
+        const confirmMsg = `Deseja importar ingressos de "${ownerName}" para o sistema local?`;
         if (!window.confirm(confirmMsg)) return;
 
         setIsLoading(true);
@@ -460,112 +499,42 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const batch = writeBatch(db);
             const ticketsToSave: Ticket[] = [];
             const newSectors = new Set<string>();
-            const ownerName = buyer.name || buyer.buyer_name || '';
-
-            // Helper to find property case-insensitive or specific keys
-            const findProp = (obj: any, keys: string[]) => {
-                if (!obj) return null;
-                // Case insensitive check
-                const objKeys = Object.keys(obj).map(k => k.toLowerCase());
-                for (const k of keys) {
-                    if (obj[k]) return obj[k]; // exact match
-                    // loose match
-                    const idx = objKeys.indexOf(k.toLowerCase());
-                    if (idx !== -1) return obj[Object.keys(obj)[idx]];
-                }
-                return null;
-            };
 
             const HIGH_PRIORITY_CODE_KEYS = [
-                'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'ticket_id', 
-                'locator', 'identifier', 'friendly_id', 'hash', 'serial', 
-                'access_code', 'token', 'number', 'localizador'
+                'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'access_code', 
+                'token', 'loc', 'locator', 'identifier', 'friendly_id', 'hash', 'serial', 
+                'number', 'localizador', 'cod', 'codigo', 'id_ingresso'
             ];
-            const LOW_PRIORITY_CODE_KEYS = ['id', 'pk'];
             
-            const SECTOR_KEYS = ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor'];
-            const STATUS_KEYS = ['status', 'state'];
-            const DATE_KEYS = ['updated_at', 'checked_in_at', 'used_at', 'created_at'];
+            const LOW_PRIORITY_CODE_KEYS = ['id', 'ticket_id', 'pk'];
+            
+            const SECTOR_KEYS = ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor', 'nome_setor'];
+            const STATUS_KEYS = ['status', 'state', 'estado'];
+            const DATE_KEYS = ['updated_at', 'checked_in_at', 'used_at', 'created_at', 'data_uso'];
 
             ticketsList.forEach((t: any) => {
-                // Objects to inspect in order of priority. 
-                // We add more candidates for deep search.
-                const candidates = [
-                    t, 
-                    t.ticket, 
-                    t.data, 
-                    t.pivot,
-                    t.attributes,
-                    t.item,
-                    t.participant,
-                    t.guest,
-                    t.attendee
-                ].filter(c => c && typeof c === 'object');
-
-                let code = null;
-                let sector = null;
-                let statusRaw = null;
-                let originalId = null;
-                let dateStr = null;
-
-                // 1. STRATEGY A: Find HIGH PRIORITY Code (Actual QR String)
-                for (const candidate of candidates) {
-                    const c = findProp(candidate, HIGH_PRIORITY_CODE_KEYS);
-                    if (c) {
-                        code = c;
-                        break;
-                    }
-                }
-
-                // 2. STRATEGY B: Find LOW PRIORITY Code (ID) only if no QR string found
+                // RECURSIVE SEARCH FOR DATA
+                
+                // 1. Find Code (Deep Search)
+                let code = findValueRecursively(t, HIGH_PRIORITY_CODE_KEYS);
                 if (!code) {
-                     for (const candidate of candidates) {
-                        const c = findProp(candidate, LOW_PRIORITY_CODE_KEYS);
-                        if (c) {
-                            code = c;
-                            break;
-                        }
-                    }
+                    code = findValueRecursively(t, LOW_PRIORITY_CODE_KEYS);
                 }
-
-                // Capture original ID for Sync purposes (usually 'id')
-                for (const candidate of candidates) {
-                    if (candidate.id) {
-                        originalId = candidate.id;
-                        break;
-                    }
-                }
-
 
                 if (code) {
-                    // 2. Find Sector (if not found with code)
-                    for (const candidate of candidates) {
-                        const s = findProp(candidate, SECTOR_KEYS);
-                        if (s) {
-                             sector = s;
-                             break;
-                        }
-                    }
+                    // 2. Find Sector (Deep Search)
+                    let sector = findValueRecursively(t, SECTOR_KEYS);
                     
-                    // 3. Find Status
-                    for (const candidate of candidates) {
-                        const st = findProp(candidate, STATUS_KEYS);
-                        if (st) {
-                            statusRaw = st;
-                            break;
-                        }
-                    }
+                    // 3. Find Status (Deep Search)
+                    let statusRaw = findValueRecursively(t, STATUS_KEYS);
+                    
+                    // 4. Find Date (Deep Search)
+                    let dateStr = findValueRecursively(t, DATE_KEYS);
+                    
+                    // 5. Find Original ID (for Sync) usually 'id'
+                    let originalId = t.id || findValueRecursively(t, ['id', 'ticket_id']);
 
-                    // 4. Find Date
-                    for (const candidate of candidates) {
-                        const d = findProp(candidate, DATE_KEYS);
-                        if (d) {
-                            dateStr = d;
-                            break;
-                        }
-                    }
-
-                    // Normalize Sector Object
+                    // Normalize Sector Object if needed
                     if (typeof sector === 'object' && sector && (sector as any).name) sector = (sector as any).name;
 
                     const idStr = String(code).trim();
@@ -576,7 +545,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     const ticketData: Ticket = {
                         id: idStr,
                         sector: sectorStr,
-                        status: (statusRaw === 'used' || statusRaw === 'checked_in') ? 'USED' : 'AVAILABLE',
+                        status: (statusRaw === 'used' || statusRaw === 'checked_in' || statusRaw === 'utilizado') ? 'USED' : 'AVAILABLE',
                         details: { 
                             ownerName: ownerName,
                             originalId: originalId || idStr
@@ -586,8 +555,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     // Handle Used At date
                     if ((ticketData.status === 'USED') && dateStr) {
                          // Fix date format for Safari if needed
-                         dateStr = String(dateStr).replace(' ', 'T');
-                         const ts = new Date(dateStr).getTime();
+                         const dS = String(dateStr).replace(' ', 'T');
+                         const ts = new Date(dS).getTime();
                          if (!isNaN(ts)) ticketData.usedAt = ts;
                          else ticketData.usedAt = Date.now();
                     }
