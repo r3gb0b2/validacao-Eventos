@@ -18,13 +18,19 @@ const AnalyticsChart: React.FC<AnalyticsChartProps> = ({ data, sectorNames }) =>
   }
 
   const maxCount = Math.max(...timeBuckets.map(b => b.total), 1);
-  const sectorColors = ['bg-blue-500', 'bg-teal-500', 'bg-purple-500', 'bg-pink-500', 'bg-fuchsia-500', 'bg-sky-500'];
-  const sectorTextColors = ['text-blue-400', 'text-teal-400', 'text-purple-400', 'text-pink-400', 'text-fuchsia-400', 'text-sky-400'];
+  const sectorColors = [
+      'bg-blue-500', 'bg-teal-500', 'bg-purple-500', 'bg-pink-500', 'bg-fuchsia-500', 'bg-sky-500',
+      'bg-indigo-500', 'bg-rose-500', 'bg-lime-500', 'bg-emerald-500', 'bg-amber-500', 'bg-cyan-500'
+  ];
+  const sectorTextColors = [
+      'text-blue-400', 'text-teal-400', 'text-purple-400', 'text-pink-400', 'text-fuchsia-400', 'text-sky-400',
+      'text-indigo-400', 'text-rose-400', 'text-lime-400', 'text-emerald-400', 'text-amber-400', 'text-cyan-400'
+  ];
 
 
   return (
     <div className="w-full bg-gray-800 p-4 rounded-lg">
-      <h3 className="text-lg font-semibold text-white mb-4">Entradas a Cada 10 Minutos</h3>
+      <h3 className="text-lg font-semibold text-white mb-4">Entradas a Cada 30 Minutos</h3>
       <div className="flex items-end h-72 space-x-2 border-l-2 border-b-2 border-gray-600 pl-2 pb-1">
         {timeBuckets.map((bucket) => {
           const isPeak = bucket.time === peak.time;
@@ -47,21 +53,28 @@ const AnalyticsChart: React.FC<AnalyticsChartProps> = ({ data, sectorNames }) =>
                   );
                 })}
               </div>
-              <span className="text-xs text-gray-400 mt-1 absolute -bottom-5">{bucket.time}</span>
+              <span className="text-[10px] md:text-xs text-gray-400 mt-1 absolute -bottom-5 transform -rotate-45 md:rotate-0 origin-top-left md:origin-center">{bucket.time}</span>
               {/* Tooltip */}
-              <div className="absolute bottom-full mb-2 w-32 bg-gray-900 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                <p className="font-bold">{bucket.time}</p>
-                 {sectorNames.map((sector, index) => (
-                    <p key={sector}><span className={sectorTextColors[index % sectorTextColors.length]}>{sector}:</span> {bucket.counts[sector] || 0}</p>
-                 ))}
+              <div className="absolute bottom-full mb-2 w-40 bg-gray-900 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg border border-gray-700">
+                <p className="font-bold mb-1">{bucket.time}</p>
+                 {sectorNames.map((sector, index) => {
+                     const count = bucket.counts[sector] || 0;
+                     if (count === 0) return null;
+                     return (
+                        <p key={sector} className="flex justify-between px-2">
+                            <span className={sectorTextColors[index % sectorTextColors.length]}>{sector}:</span> 
+                            <span>{count}</span>
+                        </p>
+                     );
+                 })}
                 <hr className="border-gray-600 my-1"/>
-                <p>Total: {bucket.total}</p>
+                <p className="font-bold">Total: {bucket.total}</p>
               </div>
             </div>
           );
         })}
       </div>
-      <div className="flex justify-end flex-wrap gap-x-4 gap-y-2 mt-4">
+      <div className="flex justify-end flex-wrap gap-x-4 gap-y-2 mt-8 md:mt-4">
           {sectorNames.map((sector, index) => (
             <div key={sector} className="flex items-center space-x-2">
                 <div className={`w-3 h-3 rounded-full ${sectorColors[index % sectorColors.length]}`}></div>

@@ -1,4 +1,3 @@
-
 // FIX: Implement the main App component, resolving "not a module" and other related errors.
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getDb } from './firebaseConfig';
@@ -10,12 +9,16 @@ import AdminView from './components/AdminView';
 import SetupInstructions from './components/SetupInstructions';
 import AlertBanner from './components/AlertBanner';
 import EventSelector from './components/EventSelector';
+// FIX: Import TicketList to resolve 'Cannot find name' error.
 import TicketList from './components/TicketList';
 import PublicStatsView from './components/PublicStatsView';
-import LoginModal from './components/LoginModal';
-import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon } from './components/Icons';
+import { CogIcon, QrCodeIcon, VideoCameraIcon } from './components/Icons';
 
-import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User } from './types';
+import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event } from './types';
+
+// NOTE: Sound hook is not implemented in the provided files.
+// To enable sounds, implement `hooks/useSound.ts`.
+// import useSound from './hooks/useSound';
 
 // Helper to get or create a unique ID for this browser/device
 const getDeviceId = () => {
@@ -31,114 +34,73 @@ const getDeviceId = () => {
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
-    
-    // Data State
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
     const [allTickets, setAllTickets] = useState<Ticket[]>([]);
     const [scanHistory, setScanHistory] = useState<DisplayableScanLog[]>([]);
     const [sectorNames, setSectorNames] = useState<string[]>(['Pista', 'VIP']);
-    
-    // Auth State
-    const [currentUser, setCurrentUser] = useState<User | null>(null);
-    const [showLoginModal, setShowLoginModal] = useState(false);
-    const [isAuthLoading, setIsAuthLoading] = useState(false);
-
-    // View State
     const [selectedSector, setSelectedSector] = useState<SectorFilter>('All');
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats'>('scanner');
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
-    const [ticketsLoaded, setTicketsLoaded] = useState(false); 
-    const [isCheckingUrl, setIsCheckingUrl] = useState(true); 
-    const [manualCode, setManualCode] = useState(''); 
+    const [ticketsLoaded, setTicketsLoaded] = useState(false); // New state to track if data is ready
+    const [isCheckingUrl, setIsCheckingUrl] = useState(true); // New state to prevent flashing login screen
+    const [manualCode, setManualCode] = useState(''); // State for manual code entry
     
-    // Sector Selection & Operator Flow
-    const [isOperatorStep, setIsOperatorStep] = useState(false); 
-    const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false); 
+    // New state for Operator Flow
+    const [operatorName, setOperatorName] = useState(localStorage.getItem('operatorName') || '');
+    const [isOperatorStep, setIsOperatorStep] = useState(false);
+    const [tempOperatorName, setTempOperatorName] = useState('');
+
+    // New state for Sector Selection Flow
+    const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
     const [lockedSector, setLockedSector] = useState<string | null>(null);
     const [activeSectors, setActiveSectors] = useState<string[]>([]);
-    const [operatorName, setOperatorName] = useState(() => localStorage.getItem('operatorName') || '');
 
-    // Inactivity Timer
+    // Inactivity Timer State
     const [isCameraActive, setIsCameraActive] = useState(true);
     const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     
-    // Online Validation Config
+    // Online Validation Config State
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
     const [onlineApiEndpoints, setOnlineApiEndpoints] = useState<{ url: string, token: string, eventId: string }[]>([{ url: '', token: '', eventId: '' }]);
     const [onlineSheetUrl, setOnlineSheetUrl] = useState('');
+    
+    // Admin Role State
+    const [adminRole, setAdminRole] = useState<'ADMIN' | 'SUPER_ADMIN' | null>(null);
 
     const cooldownRef = useRef<boolean>(false);
-    const selectedSectorRef = useRef<SectorFilter>('All');
     
-    useEffect(() => {
-        selectedSectorRef.current = selectedSector;
-    }, [selectedSector]);
-
+    // Get current device ID
     const deviceId = useMemo(() => getDeviceId(), []);
+
+    // const playSuccessSound = useSound('/sounds/success.mp3');
+    // const playErrorSound = useSound('/sounds/error.mp3');
 
     const ticketsMap = useMemo(() => {
         return new Map(allTickets.map(ticket => [ticket.id, ticket]));
     }, [allTickets]);
 
+    // Function to reset the inactivity timer
     const resetInactivityTimer = useCallback(() => {
-        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-        if (!isCameraActive) setIsCameraActive(true);
-        inactivityTimerRef.current = setTimeout(() => setIsCameraActive(false), 60000);
+        if (inactivityTimerRef.current) {
+            clearTimeout(inactivityTimerRef.current);
+        }
+        if (!isCameraActive) {
+             setIsCameraActive(true);
+        }
+        // Set timer for 60 seconds (60000 ms)
+        inactivityTimerRef.current = setTimeout(() => {
+            setIsCameraActive(false);
+        }, 60000);
     }, [isCameraActive]);
 
-    // Initial Database Connection & Super Admin Bootstrap
+    // Initial Database Connection
     useEffect(() => {
         getDb()
-            .then(async database => {
+            .then(database => {
                 setDb(database);
-                setFirebaseStatus('success');
-                
-                // BOOTSTRAP SUPER ADMIN (Force check/create)
-                try {
-                    const adminQuery = query(collection(database, 'users'), where('username', '==', 'admin'));
-                    const adminSnap = await getDocs(adminQuery);
-
-                    if (adminSnap.empty) {
-                        await addDoc(collection(database, 'users'), {
-                            username: 'admin',
-                            password: 'admin',
-                            role: 'SUPER_ADMIN',
-                            allowedEvents: []
-                        });
-                        console.log("Bootstrap: Super Admin created (admin/admin)");
-                    } else {
-                        // Safety Check: If admin exists but has wrong password/role, reset it
-                        const adminDocRef = adminSnap.docs[0];
-                        const adminData = adminDocRef.data();
-                        if (adminData.password !== 'admin' || adminData.role !== 'SUPER_ADMIN') {
-                            await updateDoc(doc(database, 'users', adminDocRef.id), {
-                                password: 'admin',
-                                role: 'SUPER_ADMIN'
-                            });
-                            console.log("Bootstrap: Admin credentials reset to default (admin/admin)");
-                        }
-                    }
-                } catch (e) {
-                    console.error("Auth Bootstrap failed", e);
-                }
-
-                // Restore Session from LocalStorage
-                const storedUser = localStorage.getItem('auth_user_session');
-                if (storedUser) {
-                    try {
-                        const userObj = JSON.parse(storedUser);
-                        // Check expiration
-                        if (userObj && userObj._expiry > Date.now()) {
-                             setCurrentUser(userObj);
-                             console.log("Session restored", userObj.username);
-                        } else {
-                            localStorage.removeItem('auth_user_session');
-                        }
-                    } catch (e) {}
-                }
-
+                setFirebaseStatus('success'); // Assume connection will succeed; listeners will handle errors.
             })
             .catch(error => {
                 console.error("Failed to initialize database:", error);
@@ -146,16 +108,20 @@ const App: React.FC = () => {
             });
     }, []);
 
-    // URL Check (Public Stats)
+    // Check for Public Stats Mode in URL - OPTIMIZED for Mobile
     useEffect(() => {
         const checkUrlParams = async () => {
             if (!db) return;
+            
             const params = new URLSearchParams(window.location.search);
             const mode = params.get('mode');
             const eventIdParam = params.get('eventId');
             
             if (mode === 'stats' && eventIdParam) {
+                // IMPORTANT: Set loading state immediately to prevent "blank screen" rendering on mobile
                 setTicketsLoaded(false); 
+                
+                // Direct fetch to avoid waiting for full event list
                 try {
                     const eventDoc = await getDoc(doc(db, 'events', eventIdParam));
                     if (eventDoc.exists()) {
@@ -163,15 +129,24 @@ const App: React.FC = () => {
                         setView('public_stats');
                         setIsSectorSelectionStep(false);
                         setIsOperatorStep(false);
+                    } else {
+                        console.error("Event not found for public stats");
                     }
-                } catch (e) { console.error("Error fetching event from URL", e); }
+                } catch (e) {
+                    console.error("Error fetching event from URL", e);
+                }
             }
+            
+            // Allow the app to render the view
             setIsCheckingUrl(false);
         };
-        if (db && firebaseStatus === 'success') checkUrlParams();
+
+        if (db && firebaseStatus === 'success') {
+            checkUrlParams();
+        }
     }, [db, firebaseStatus]);
 
-    // Fetch Events
+    // Effect for fetching the list of events (Only if NOT in public stats mode to save bandwidth)
     useEffect(() => {
         if (!db || view === 'public_stats') return;
 
@@ -183,43 +158,56 @@ const App: React.FC = () => {
             }));
             setEvents(eventsData);
             
+            // If a selected event is deleted elsewhere, deselect it.
             if (selectedEvent && !eventsData.some(e => e.id === selectedEvent.id)) {
                 setSelectedEvent(null);
                 localStorage.removeItem('selectedEventId');
             }
+        }, (error) => {
+            console.error("Firebase connection failed.", error);
+            setFirebaseStatus('error');
         });
+
         return () => eventsUnsubscribe();
     }, [db, selectedEvent, view]);
 
-    // Fetch Selected Event Data
+    // Effect for handling data subscriptions for the SELECTED event
     useEffect(() => {
         if (!db || !selectedEvent) {
             setAllTickets([]);
             setScanHistory([]);
-            setSectorNames(['Pista', 'VIP']);
+            setSectorNames(['Pista', 'VIP']); // Reset to default
             setValidationMode('OFFLINE');
             setTicketsLoaded(false);
             return;
         };
 
         const eventId = selectedEvent.id;
-        setTicketsLoaded(false);
+        setTicketsLoaded(false); // Reset loading state when event changes
 
+        // Load Event Settings (Sector Names & Validation Mode)
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
             snapshot.docs.forEach(docSnap => {
                 const data = docSnap.data();
                 if (docSnap.id === 'main') {
-                    if (data.sectorNames?.length > 0) setSectorNames(data.sectorNames);
-                    else setSectorNames(['Pista', 'VIP']);
+                    if (data.sectorNames && Array.isArray(data.sectorNames) && data.sectorNames.length > 0) {
+                        setSectorNames(data.sectorNames as string[]);
+                    } else {
+                        setSectorNames(['Pista', 'VIP']);
+                    }
                 } else if (docSnap.id === 'validation') {
                     if (data.mode) setValidationMode(data.mode);
-                    if (data.apiEndpoints) setOnlineApiEndpoints(data.apiEndpoints);
+                    else setValidationMode('OFFLINE'); // Default
+
+                    if (data.apiEndpoints && Array.isArray(data.apiEndpoints)) setOnlineApiEndpoints(data.apiEndpoints);
                     else if (data.apiUrl) setOnlineApiEndpoints([{ url: data.apiUrl, token: data.apiToken || '', eventId: data.apiEventId || '' }]);
+                    
                     if (data.sheetUrl) setOnlineSheetUrl(data.sheetUrl);
                 }
             });
         });
 
+        // Load Tickets
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
             const ticketsData = snapshot.docs.map(doc => {
                 const data = doc.data();
@@ -230,17 +218,21 @@ const App: React.FC = () => {
                     details: data.details ? { 
                         ownerName: data.details.ownerName, 
                         eventName: data.details.eventName,
-                        originalId: data.details.originalId
+                        originalId: data.details.originalId // Load original numeric ID if available
                     } : undefined,
                 };
-                if (data.usedAt instanceof Timestamp) ticket.usedAt = data.usedAt.toMillis();
-                else if (typeof data.usedAt === 'number') ticket.usedAt = data.usedAt;
+                if (data.usedAt instanceof Timestamp) {
+                    ticket.usedAt = data.usedAt.toMillis();
+                } else if (typeof data.usedAt === 'number') {
+                    ticket.usedAt = data.usedAt;
+                }
                 return ticket;
             });
             setAllTickets(ticketsData);
-            setTicketsLoaded(true);
+            setTicketsLoaded(true); // Data loaded - set to true to hide skeleton
         });
 
+        // Load Scan History
         const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(100));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
             const historyData = snapshot.docs.map(doc => {
@@ -252,12 +244,12 @@ const App: React.FC = () => {
                     timestamp: (data.timestamp as Timestamp)?.toMillis() || Date.now(),
                     ticketSector: data.sector ?? 'Desconhecido',
                     isPending: doc.metadata.hasPendingWrites,
-                    deviceId: data.deviceId,
-                    operator: data.operator
+                    deviceId: data.deviceId, // Ensure we capture who scanned it
+                    operatorName: data.operatorName // Who scanned it
                 };
             });
             setScanHistory(historyData);
-        });
+        }, console.error);
 
         return () => {
             ticketsUnsubscribe();
@@ -266,15 +258,23 @@ const App: React.FC = () => {
         };
     }, [db, selectedEvent]);
 
+
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
         const handleOffline = () => setIsOnline(false);
+
         window.addEventListener('online', handleOnline);
         window.addEventListener('offline', handleOffline);
+
+        // Start inactivity timer on mount
         resetInactivityTimer();
+
+        // Add event listeners for user activity to reset timer
         const events = ['mousemove', 'keydown', 'click', 'touchstart'];
         const activityHandler = () => resetInactivityTimer();
+        
         events.forEach(event => window.addEventListener(event, activityHandler));
+
         return () => {
             window.removeEventListener('online', handleOnline);
             window.removeEventListener('offline', handleOffline);
@@ -283,133 +283,55 @@ const App: React.FC = () => {
         };
     }, [resetInactivityTimer]);
 
-    // --- AUTH FUNCTIONS ---
-
-    const handleLogin = async (username: string, pass: string) => {
-        if (!db) return;
-        setIsAuthLoading(true);
-        try {
-            // Fetch all users to do case-insensitive match client-side (small collection)
-            const snap = await getDocs(collection(db, 'users'));
-            
-            const normalizedInputName = username.trim().toLowerCase();
-            let foundUser: User | null = null;
-            
-            snap.forEach(doc => {
-                const data = doc.data();
-                // Compare username lowercase
-                if ((data.username || '').toLowerCase() === normalizedInputName) {
-                    // Check password (case sensitive usually, but user didn't specify, standard is case sensitive password, insensitive username)
-                    if (data.password === pass) { 
-                        foundUser = { id: doc.id, ...data } as User;
-                    }
-                }
-            });
-
-            if (foundUser) {
-                const user = foundUser as User;
-                const expiry = Date.now() + (24 * 60 * 60 * 1000);
-                const sessionObj = { ...user, _expiry: expiry };
-                localStorage.setItem('auth_user_session', JSON.stringify(sessionObj));
-                setCurrentUser(user);
-                setShowLoginModal(false);
-                
-                // Auto navigate to admin if requested context
-                setView('admin');
-                
-                // If admin has limited events and currently selected is not allowed, deselect
-                if (user.role !== 'SUPER_ADMIN' && selectedEvent) {
-                    if (!user.allowedEvents.includes(selectedEvent.id)) {
-                        setSelectedEvent(null);
-                    }
-                }
-            } else {
-                alert("Usuário ou senha incorretos.");
-            }
-        } catch (e) {
-            console.error(e);
-            alert("Erro no login.");
-        } finally {
-            setIsAuthLoading(false);
-        }
-    };
-
-    const handleLogout = () => {
-        setCurrentUser(null);
-        localStorage.removeItem('auth_user_session');
-        setSelectedEvent(null);
-        setView('scanner');
-        setIsOperatorStep(false);
-        setIsSectorSelectionStep(false);
-        setLockedSector(null);
-        setActiveSectors([]);
-        localStorage.removeItem('selectedEventId');
-    };
-
-    const handleAdminRequest = () => {
-        if (currentUser) {
-            setView('admin');
-        } else {
-            setShowLoginModal(true);
-        }
-    };
-    
-    // Filter events for the logged in user
-    const getAllowedEvents = () => {
-        if (!currentUser) return events; // Should not happen in admin view usually
-        if (currentUser.role === 'SUPER_ADMIN') return events;
-        return events.filter(e => currentUser.allowedEvents.includes(e.id));
-    };
-
-    // --- NAVIGATION ---
-
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
-        setIsOperatorStep(true);
+        
+        // Flow: Event -> Operator -> Sector -> Scanner
+        // Check if operator name is already set
+        if (!operatorName) {
+             setIsOperatorStep(true);
+             setTempOperatorName('');
+        } else {
+             setIsOperatorStep(false);
+             setIsSectorSelectionStep(true);
+        }
+        
         setLockedSector(null);
         setActiveSectors([]);
         localStorage.setItem('selectedEventId', event.id);
     };
 
-    const handleAdminSelectEvent = (event: Event) => {
-        setSelectedEvent(event);
-        setView('admin');
-        localStorage.setItem('selectedEventId', event.id);
-    };
-
-    const handleOperatorConfirm = () => {
-        if (!operatorName.trim()) return alert("Por favor, digite o nome do operador.");
-        localStorage.setItem('operatorName', operatorName);
+    const handleConfirmOperator = () => {
+        if (!tempOperatorName.trim()) {
+            alert("Por favor, insira seu nome.");
+            return;
+        }
+        const name = tempOperatorName.trim();
+        setOperatorName(name);
+        localStorage.setItem('operatorName', name);
         setIsOperatorStep(false);
         setIsSectorSelectionStep(true);
     };
 
-    const handleBackToEvents = () => {
-        // If in Admin mode, we just clear selection but stay in admin (handled by AdminView logic usually, but here for safety)
-        if (view === 'admin') {
-             setSelectedEvent(null);
-             localStorage.removeItem('selectedEventId');
-             return;
-        }
-
-        setSelectedEvent(null);
+    const handleChangeOperator = () => {
         setView('scanner');
-        setLockedSector(null);
-        setActiveSectors([]);
         setIsSectorSelectionStep(false);
-        setIsOperatorStep(false);
-        localStorage.removeItem('selectedEventId');
+        setIsOperatorStep(true);
+        setTempOperatorName(operatorName);
     };
 
     const handleToggleSectorSelection = (sector: string) => {
-        if (activeSectors.includes(sector)) setActiveSectors(activeSectors.filter(s => s !== sector));
-        else setActiveSectors([...activeSectors, sector]);
+        if (activeSectors.includes(sector)) {
+            setActiveSectors(activeSectors.filter(s => s !== sector));
+        } else {
+            setActiveSectors([...activeSectors, sector]);
+        }
     };
 
     const handleConfirmSectorSelection = () => {
         if (activeSectors.length > 0) {
-            setLockedSector('Multiple');
-            setSelectedSector('All');
+            setLockedSector('Multiple'); // We use 'Multiple' as a flag, actual filtering uses activeSectors
+            setSelectedSector('All'); // For UI display purposes
         } else {
             setLockedSector(null);
             setSelectedSector('All');
@@ -417,47 +339,73 @@ const App: React.FC = () => {
         setIsSectorSelectionStep(false);
     };
 
+    const handleSwitchEvent = () => {
+        setSelectedEvent(null);
+        setView('scanner');
+        setLockedSector(null);
+        setActiveSectors([]);
+        setIsSectorSelectionStep(false);
+        setIsOperatorStep(false);
+        localStorage.removeItem('selectedEventId');
+    };
+
     const handleUpdateSectorNames = async (newNames: string[]) => {
-        if (!db || !selectedEvent) return;
+        if (!db || !selectedEvent) throw new Error("Database or event not selected");
         await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: newNames }, { merge: true });
     };
     
     const showScanResult = (status: ScanStatus, message: string) => {
         setScanResult({ status, message });
+        // if (status === 'VALID') playSuccessSound();
+        // else playErrorSound();
         setTimeout(() => setScanResult(null), 3000);
-        resetInactivityTimer();
+        resetInactivityTimer(); // Reset timer on scan result
     };
 
-    // --- SCAN LOGIC ---
     const handleScanSuccess = useCallback(async (decodedText: string) => {
         if (cooldownRef.current || !db || !selectedEvent) return;
         resetInactivityTimer();
-        const currentSelectedSector = selectedSectorRef.current;
 
         cooldownRef.current = true;
         setTimeout(() => { cooldownRef.current = false; }, 2000);
+
         const eventId = selectedEvent.id;
         
-        // --- ONLINE VALIDATION ---
+        // --- ONLINE VALIDATION LOGIC ---
         if (validationMode !== 'OFFLINE') {
+            
+            // 1. Google Sheets Validation
+            if (validationMode === 'ONLINE_SHEETS' && onlineSheetUrl) {
+                // ... (Google Sheets logic logic)
+                 showScanResult('ERROR', 'Validação Online via Planilha não implementada completamente neste passo.');
+                 return;
+            }
+
+            // 2. API Validation
             if (validationMode === 'ONLINE_API') {
-                 const endpoints = onlineApiEndpoints.filter(ep => ep.url);
+                const endpoints = onlineApiEndpoints.filter(ep => ep.url);
+                
                 if (endpoints.length === 0) {
-                    showScanResult('ERROR', 'Nenhuma API configurada.');
+                    showScanResult('ERROR', 'Nenhuma API configurada para modo online.');
                     return;
                 }
-                showScanResult('VALID', 'Validando online...');
+
+                showScanResult('VALID', 'Validando online...'); // Temporary loading state
+
+                // Extract code from URL if it's a URL
                 let codeToValidate = decodedText.trim();
                 let urlCode = '';
                 try {
                     if (codeToValidate.startsWith('http')) {
                         const urlObj = new URL(codeToValidate);
                         const segments = urlObj.pathname.split('/');
-                        urlCode = segments[segments.length - 1]; 
+                        urlCode = segments[segments.length - 1]; // Get last part of path
                         if (urlObj.searchParams.get('code')) urlCode = urlObj.searchParams.get('code')!;
                         if (urlObj.searchParams.get('id')) urlCode = urlObj.searchParams.get('id')!;
                     }
                 } catch (e) {}
+
+                // Priority: extracted URL code, then raw text
                 const codesToSend = [];
                 if (urlCode && urlCode !== codeToValidate) codesToSend.push(urlCode);
                 codesToSend.push(codeToValidate);
@@ -467,45 +415,101 @@ const App: React.FC = () => {
                         let response = null;
                         let foundCode = '';
                         const numericEventId = parseInt(endpoint.eventId || '0', 10);
-                        if (!numericEventId) { showScanResult('ERROR', 'ID Evento inválido.'); return; }
                         
+                        if (!numericEventId) {
+                             showScanResult('ERROR', 'ID do Evento não configurado nas opções (Necessário p/ API).');
+                             return;
+                        }
+                        
+                        // ROBUST URL SANITIZATION
+                        // Remove trailing slash
                         let apiBase = endpoint.url.trim();
                         if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
-                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '');
+                        
+                        // Remove known endpoints to get the root or parent if user pasted something specific
+                        // ST Ingressos works best with base url ending in nothing specific or just host
+                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '')
+                                         .replace(/\/participants(\/.*)?$/, '')
+                                         .replace(/\/buyers(\/.*)?$/, '')
+                                         .replace(/\/checkins(\/.*)?$/, '');
+                        
                         const checkinUrl = `${apiBase}/checkins`;
 
+                        // Try each extracted code variant
                         for (const code of codesToSend) {
-                            const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
+                            const headers = {
+                                'Accept': 'application/json',
+                                'Authorization': `Bearer ${endpoint.token}`
+                            };
+
+                            // STRATEGY 1: POST to /checkins/{code} with JSON body (Best for ST Ingressos)
                             try {
-                                const res = await fetch(`${checkinUrl}/${code}?event_id=${numericEventId}`, {
+                                const pathUrl = `${checkinUrl}/${code}`;
+                                const urlWithQuery = `${pathUrl}?event_id=${numericEventId}`; // Some APIs check query
+                                
+                                const res = await fetch(urlWithQuery, {
                                     method: 'POST',
                                     headers: { ...headers, 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ event_id: numericEventId, qr_code: code })
+                                    body: JSON.stringify({ 
+                                        event_id: numericEventId,
+                                        qr_code: code 
+                                    })
                                 });
-                                if (res.status !== 404 && res.status !== 405) { response = res; foundCode = code; break; }
-                            } catch(e) {}
+                                
+                                // 200, 201 = Valid/Recorded. 409, 422 = Already Used/Logical Error
+                                if (res.status !== 404 && res.status !== 405) {
+                                    response = res; foundCode = code; break;
+                                }
+                            } catch(e) { console.warn('Strat 1 fail', e); }
+
+                            // STRATEGY 2: POST to /checkins (Body only)
                             if (!response) {
                                 try {
+                                    const bodyPayload = {
+                                        event_id: numericEventId,
+                                        code: code,
+                                        qr_code: code,
+                                        ticket_code: code,
+                                        uuid: code
+                                    };
                                     const res = await fetch(checkinUrl, {
                                         method: 'POST',
                                         headers: { ...headers, 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ event_id: numericEventId, code: code, qr_code: code, ticket_code: code, uuid: code })
+                                        body: JSON.stringify(bodyPayload)
                                     });
-                                    if (res.status !== 404) { response = res; foundCode = code; break; }
+                                    if (res.status !== 404) {
+                                        response = res; foundCode = code; break;
+                                    }
                                 } catch (e) {}
                             }
-                             if (!response) {
+                            
+                            // STRATEGY 3: POST to /checkins/{code} with FormData (PHP Fallback)
+                            if (!response) {
                                 try {
                                     const formData = new FormData();
                                     formData.append('event_id', String(numericEventId));
                                     formData.append('qr_code', code);
-                                    const res = await fetch(`${checkinUrl}/${code}`, { method: 'POST', headers: headers, body: formData });
-                                    if (res.status !== 404) { response = res; foundCode = code; break; }
+                                    
+                                    const pathUrl = `${checkinUrl}/${code}`;
+                                    const res = await fetch(pathUrl, {
+                                        method: 'POST',
+                                        headers: headers, // Content-Type is automatic
+                                        body: formData
+                                    });
+                                     if (res.status !== 404) {
+                                        response = res; foundCode = code; break;
+                                    }
                                 } catch(e) {}
                             }
+
+                            // STRATEGY 4: GET /tickets/{code} (Last resort - Read Only)
                             if (!response) {
                                 try {
-                                     const res = await fetch(`${apiBase}/tickets/${code}?event_id=${numericEventId}`, { method: 'GET', headers: headers });
+                                     const ticketsUrl = `${apiBase}/tickets/${code}?event_id=${numericEventId}`;
+                                     const res = await fetch(ticketsUrl, {
+                                        method: 'GET',
+                                        headers: headers
+                                     });
                                      if (res.ok) { response = res; foundCode = code; break; }
                                 } catch (e) {}
                             }
@@ -513,174 +517,357 @@ const App: React.FC = () => {
 
                         if (response) {
                             const data = await response.json();
-                            const apiName = 'API';
-                            if (data.message && (data.message.includes('belongs to another event') || data.message.includes('not found'))) continue;
+                            const apiHost = new URL(endpoint.url).hostname;
+                            const apiName = apiHost.replace('public-api.', '').replace('.com.br', '');
+
+                            // Handle Error Messages explicitly from JSON body even if HTTP 200
+                            if (data.message && (data.message.includes('belongs to another event') || data.message.includes('not found'))) {
+                                continue; // Try next API
+                            }
 
                             if (response.status === 200 || response.status === 201) {
+                                // Double check success flag often used in JSON responses even with 200 OK
                                 if (data.success === false || data.error === true) {
+                                     // Treat as used or invalid based on message
                                       if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
-                                          showScanResult('USED', `Ingresso já utilizado!`);
+                                          showScanResult('USED', `Ingresso já utilizado! (${apiName})`);
                                           return;
                                       } else {
                                            if (data.message.toLowerCase().includes('not found')) continue;
-                                           showScanResult('INVALID', `${data.message || 'Erro na validação'}`);
+                                           showScanResult('INVALID', `${data.message || 'Erro na validação'} (${apiName})`);
                                            return;
                                       }
                                 }
+
                                 const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
-                                const sectorLower = sector.toLowerCase();
-                                const currentTabLower = currentSelectedSector.toLowerCase();
+                                
+                                // SECTOR VALIDATION LOGIC FOR ONLINE API
                                 if (activeSectors.length > 0) {
-                                    if (!activeSectors.some(s => s.trim().toLowerCase() === sectorLower)) {
-                                         showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é: "${sector}".`);
-                                         await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+                                    const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === sector.toLowerCase());
+                                    if (!isAllowed) {
+                                         showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é do setor "${sector}".`);
+                                         await addDoc(collection(db, 'events', eventId, 'scans'), {
+                                            ticketId: foundCode, 
+                                            status: 'WRONG_SECTOR', 
+                                            timestamp: serverTimestamp(), 
+                                            sector: sector,
+                                            deviceId: deviceId,
+                                            operatorName: operatorName // Add operator
+                                        });
                                         return;
                                     }
                                 }
-                                if (currentSelectedSector !== 'All' && sectorLower !== currentTabLower) {
-                                    showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${currentSelectedSector}). Ingresso: ${sector}`);
-                                    await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
-                                    return;
-                                }
-                                showScanResult('VALID', `Acesso Liberado! - ${sector}`);
-                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'VALID', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+
+                                showScanResult('VALID', `Acesso Liberado! (${apiName}) - ${sector}`);
+                                
+                                await addDoc(collection(db, 'events', eventId, 'scans'), {
+                                    ticketId: foundCode, 
+                                    status: 'VALID', 
+                                    timestamp: serverTimestamp(), 
+                                    sector: sector,
+                                    deviceId: deviceId,
+                                    operatorName: operatorName // Add operator
+                                });
                                 return;
                             } else if (response.status === 409 || response.status === 422) {
-                                showScanResult('USED', `Ingresso já utilizado!`);
-                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'USED', timestamp: serverTimestamp(), sector: 'Externo', deviceId, operator: operatorName });
+                                showScanResult('USED', `Ingresso já utilizado! (${apiName})`);
+                                await addDoc(collection(db, 'events', eventId, 'scans'), {
+                                    ticketId: foundCode, 
+                                    status: 'USED', 
+                                    timestamp: serverTimestamp(), 
+                                    sector: 'Externo',
+                                    deviceId: deviceId,
+                                    operatorName: operatorName // Add operator
+                                });
                                 return;
                             } else {
+                                // Other error status
                                 showScanResult('INVALID', `Erro: ${data.message || response.statusText}`);
                                 return;
                             }
                         }
-                    } catch (error) { console.error("API error", error); }
+                    } catch (error) {
+                        console.error("API error", error);
+                    }
                 }
-                showScanResult('INVALID', 'Não encontrado em nenhuma API.');
-                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: decodedText, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Externo', deviceId, operator: operatorName });
+
+                showScanResult('INVALID', 'Não encontrado em nenhuma API configurada.');
+                await addDoc(collection(db, 'events', eventId, 'scans'), {
+                    ticketId: decodedText, 
+                    status: 'INVALID', 
+                    timestamp: serverTimestamp(), 
+                    sector: 'Externo',
+                    deviceId: deviceId,
+                    operatorName: operatorName // Add operator
+                });
                 return;
             }
         }
 
-        // --- OFFLINE VALIDATION ---
+        // --- OFFLINE VALIDATION LOGIC (Standard) ---
+        
         const ticketId = decodedText.trim();
         const ticket = ticketsMap.get(ticketId);
         
+        const logScan = async (status: ScanStatus, sector: string) => {
+            try {
+                await addDoc(collection(db, 'events', eventId, 'scans'), {
+                    ticketId, status, timestamp: serverTimestamp(), sector, deviceId, operatorName
+                });
+            } catch (error) { console.error(`Failed to log ${status} scan:`, error); }
+        };
+
         if (!ticket) {
             showScanResult('INVALID', `Ingresso não encontrado: ${ticketId}`);
-            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Desconhecido', deviceId, operator: operatorName });
+            await logScan('INVALID', 'Desconhecido');
             return;
-        }
-        const ticketSectorLower = ticket.sector.trim().toLowerCase();
-        if (activeSectors.length > 0) {
-            if (!activeSectors.some(s => s.trim().toLowerCase() === ticketSectorLower)) {
-                showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é: "${ticket.sector}".`);
-                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
-                return;
-            }
-        }
-        const currentTabLower = currentSelectedSector.toLowerCase();
-        if (currentSelectedSector !== 'All' && ticketSectorLower !== currentTabLower) {
-             showScanResult('WRONG_SECTOR', `Setor incorreto! Filtro: "${currentSelectedSector}". Ingresso: "${ticket.sector}".`);
-             await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
-             return;
         }
 
         if (ticket.status === 'USED') {
             const usedAtDate = ticket.usedAt ? new Date(ticket.usedAt) : null;
-            showScanResult('USED', `Ingresso já utilizado${usedAtDate ? ` em ${usedAtDate.toLocaleString('pt-BR')}` : ''}`);
-            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
+            const message = `Ingresso já utilizado${usedAtDate ? ` em ${usedAtDate.toLocaleString('pt-BR')}` : ''}`;
+            showScanResult('USED', message);
+            await logScan('USED', ticket.sector);
+            return;
+        }
+
+        // Logic check: if we have locked sectors (Multi-sector selection), ensure the ticket matches one of them
+        if (activeSectors.length > 0 && !activeSectors.includes(ticket.sector)) {
+            const message = `Setor incorreto! Ingresso é do setor "${ticket.sector}".`;
+            showScanResult('WRONG_SECTOR', message);
+            await logScan('WRONG_SECTOR', ticket.sector);
             return;
         }
 
         try {
             const batch = writeBatch(db);
-            batch.update(doc(db, 'events', eventId, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
-            batch.set(doc(collection(db, 'events', eventId, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
+            const ticketRef = doc(db, 'events', eventId, 'tickets', ticketId);
+            batch.update(ticketRef, { status: 'USED', usedAt: serverTimestamp() });
+
+            const logRef = doc(collection(db, 'events', eventId, 'scans'));
+            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operatorName });
+
             await batch.commit();
-            showScanResult('VALID', `Acesso liberado para ${ticket.sector}!`);
-        } catch (error) { showScanResult('ERROR', 'Falha ao atualizar BD.'); }
+            showScanResult('VALID', `Acesso liberado para o setor ${ticket.sector}!`);
 
-    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, deviceId, operatorName]);
-
+        } catch (error) {
+            console.error("Failed to update ticket status:", error);
+            showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
+        }
+    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId, operatorName]);
+    
     const handleManualSubmit = () => {
         if (!manualCode.trim()) return;
         handleScanSuccess(manualCode);
         setManualCode('');
     };
 
-    // --- RENDER ---
+    const handleScanError = (errorMessage: string) => {
+        // This is called frequently when no QR code is in view. Can be used for debugging.
+    };
+
+    const checkAdminAuth = () => {
+        const storedAuth = localStorage.getItem('admin_auth_expiry');
+        const storedRole = localStorage.getItem('admin_role');
+        
+        if (storedAuth) {
+            const expiry = parseInt(storedAuth, 10);
+            if (Date.now() < expiry) {
+                if (storedRole === 'SUPER_ADMIN') setAdminRole('SUPER_ADMIN');
+                else setAdminRole('ADMIN');
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const loginAdmin = () => {
+        const password = prompt("Digite a senha para acessar o painel administrativo:");
+        if (password === "123654") {
+            // Save persistence for 24 hours
+            const expiry = Date.now() + (24 * 60 * 60 * 1000);
+            localStorage.setItem('admin_auth_expiry', expiry.toString());
+            localStorage.setItem('admin_role', 'ADMIN');
+            setAdminRole('ADMIN');
+            return true;
+        } else if (password === "987654") {
+            // SUPER ADMIN
+            const expiry = Date.now() + (24 * 60 * 60 * 1000);
+            localStorage.setItem('admin_auth_expiry', expiry.toString());
+            localStorage.setItem('admin_role', 'SUPER_ADMIN');
+            setAdminRole('SUPER_ADMIN');
+            return true;
+        } else if (password !== null) {
+            alert("Senha incorreta!");
+        }
+        return false;
+    };
+
+    const handleAdminAccess = () => {
+        if (checkAdminAuth() || loginAdmin()) {
+            setView('admin');
+        }
+    };
+    
+    const handleAdminAccessFromSelector = useCallback(() => {
+        const storedAuth = localStorage.getItem('admin_auth_expiry');
+        const storedRole = localStorage.getItem('admin_role');
+        let isAuthenticated = false;
+
+        if (storedAuth && Date.now() < parseInt(storedAuth, 10)) {
+            isAuthenticated = true;
+            if (storedRole === 'SUPER_ADMIN') setAdminRole('SUPER_ADMIN');
+            else setAdminRole('ADMIN');
+        } else {
+             const password = prompt("Digite a senha para acessar o painel administrativo:");
+             if (password === "123654") {
+                const expiry = Date.now() + (24 * 60 * 60 * 1000);
+                localStorage.setItem('admin_auth_expiry', expiry.toString());
+                localStorage.setItem('admin_role', 'ADMIN');
+                setAdminRole('ADMIN');
+                isAuthenticated = true;
+             } else if (password === "987654") {
+                const expiry = Date.now() + (24 * 60 * 60 * 1000);
+                localStorage.setItem('admin_auth_expiry', expiry.toString());
+                localStorage.setItem('admin_role', 'SUPER_ADMIN');
+                setAdminRole('SUPER_ADMIN');
+                isAuthenticated = true;
+             } else if (password !== null) {
+                alert("Senha incorreta!");
+             }
+        }
+
+        if (isAuthenticated) {
+            if (events.length > 0 && !selectedEvent) {
+                const visibleEvents = events.filter(e => !e.isHidden);
+                if (visibleEvents.length > 0) {
+                    // We select it but skip sector selection step for admin view
+                    setSelectedEvent(visibleEvents[0]);
+                    setIsSectorSelectionStep(false);
+                    setIsOperatorStep(false);
+                }
+            }
+            setView('admin');
+        }
+    }, [events, selectedEvent]);
 
     if (!db || firebaseStatus === 'loading' || isCheckingUrl) {
         return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white text-2xl animate-pulse">Carregando...</div>;
     }
 
-    if (firebaseStatus === 'error') return <SetupInstructions />;
+    if (firebaseStatus === 'error') {
+        return <SetupInstructions />;
+    }
 
+    // Public Stats View (No login required)
     if (view === 'public_stats' && selectedEvent) {
-        return <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} isLoading={!ticketsLoaded} />;
-    }
-    
-    // LOGIN MODAL
-    if (showLoginModal) {
-        return <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />;
-    }
-
-    if (!selectedEvent && view !== 'admin') {
         return (
-            <div className="relative">
-                <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={handleSelectEvent} onAccessAdmin={handleAdminRequest} />
-                {currentUser && (
-                     <div className="fixed top-4 right-4 z-50 bg-gray-800 p-2 rounded-lg flex items-center shadow-xl border border-gray-700">
-                        <div className="mr-3 text-right hidden md:block">
-                            <p className="text-xs text-gray-400">Logado como</p>
-                            <p className="text-sm font-bold text-orange-500">{currentUser.username}</p>
-                        </div>
-                        <button onClick={handleLogout} className="bg-red-600 hover:bg-red-700 p-2 rounded text-white" title="Sair">
-                            <LogoutIcon className="w-5 h-5" />
-                        </button>
-                    </div>
-                )}
-            </div>
+            <PublicStatsView 
+                event={selectedEvent}
+                allTickets={allTickets || []} // Safeguard for mobile
+                scanHistory={scanHistory || []} // Safeguard for mobile
+                sectorNames={sectorNames || []} // Safeguard for mobile
+                isLoading={!ticketsLoaded} // Pass loading state
+            />
         );
     }
 
-    // OPERATOR & SECTOR STEPS [SAME AS BEFORE]
+    if (!selectedEvent && view !== 'admin') {
+        return <EventSelector events={events} onSelectEvent={handleSelectEvent} onAccessAdmin={handleAdminAccessFromSelector} />;
+    }
+
+    // Operator Input Screen
     if (selectedEvent && view === 'scanner' && isOperatorStep) {
         return (
-             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
-                <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
-                    <h2 className="text-2xl font-bold text-center mb-6 text-orange-500">{selectedEvent.name}</h2>
-                    <div className="mb-6">
-                        <h3 className="text-lg font-semibold mb-2">Identificação</h3>
-                        <input type="text" value={operatorName} onChange={(e) => setOperatorName(e.target.value)} placeholder="Nome do Operador / Portaria" className="w-full bg-gray-700 p-4 rounded text-white border border-gray-600 focus:border-orange-500 text-lg" />
+            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div className="w-full max-w-md bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
+                     <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
+                     <h3 className="text-xl font-semibold text-center mb-6">Identificação do Operador</h3>
+                     
+                     <div className="mb-6">
+                         <label className="block text-sm text-gray-400 mb-2">Qual seu nome?</label>
+                         <input 
+                             type="text" 
+                             value={tempOperatorName}
+                             onChange={(e) => setTempOperatorName(e.target.value)}
+                             placeholder="Ex: João Silva"
+                             className="w-full bg-gray-700 border border-gray-600 rounded-lg p-3 text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                             onKeyDown={(e) => e.key === 'Enter' && handleConfirmOperator()}
+                             autoFocus
+                         />
+                     </div>
+
+                     <button 
+                         onClick={handleConfirmOperator}
+                         className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition-transform transform active:scale-95"
+                     >
+                         Continuar
+                     </button>
+
+                     <div className="mt-6 text-center">
+                        <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
+                            Voltar para seleção de eventos
+                        </button>
                     </div>
-                    <button onClick={handleOperatorConfirm} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg text-lg">Continuar</button>
-                    <div className="mt-8 text-center"><button onClick={handleBackToEvents} className="text-gray-400 underline">Voltar</button></div>
                 </div>
             </div>
         );
     }
 
+    // Sector Selection Screen
     if (selectedEvent && view === 'scanner' && isSectorSelectionStep) {
-         return (
+        return (
             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
                 <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
-                    <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
-                    <p className="text-center text-gray-400 text-sm mb-6">Op: <b>{operatorName}</b></p>
-                    <button onClick={() => { setActiveSectors([]); handleConfirmSectorSelection(); }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg text-lg mb-6">Validar Todos (Geral)</button>
-                    <p className="text-center text-gray-500 mb-4 text-xs">OU SELECIONE:</p>
-                    <div className="grid grid-cols-2 gap-4">
+                    <h2 className="text-2xl font-bold text-center mb-1 text-orange-500">{selectedEvent.name}</h2>
+                    <p className="text-center text-gray-400 mb-6 text-sm">
+                        Operador: <strong className="text-white">{operatorName}</strong> 
+                        <button onClick={handleChangeOperator} className="ml-2 text-orange-400 hover:underline text-xs">(Trocar)</button>
+                    </p>
+                    <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
+                    
+                    <button 
+                        onClick={() => { setActiveSectors([]); handleConfirmSectorSelection(); }}
+                        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-6 rounded-lg text-lg mb-6 shadow-md transition-transform transform hover:scale-105"
+                    >
+                        Validar Todos os Setores (Geral)
+                    </button>
+
+                    <div className="border-t border-gray-600 my-4 relative">
+                        <span className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 px-2 text-gray-400 text-sm">OU SELECIONE SETORES</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mt-6">
                         {sectorNames.map(sector => (
-                            <button key={sector} onClick={() => handleToggleSectorSelection(sector)} className={`font-semibold py-3 rounded-lg border ${activeSectors.includes(sector) ? 'bg-orange-500 text-white border-orange-400' : 'bg-gray-700 text-white border-gray-600'}`}>{sector}</button>
+                            <button
+                                key={sector}
+                                onClick={() => handleToggleSectorSelection(sector)}
+                                className={`font-semibold py-3 px-4 rounded-lg border transition-colors ${
+                                    activeSectors.includes(sector)
+                                    ? 'bg-orange-500 text-white border-orange-400'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-white border-gray-600'
+                                }`}
+                            >
+                                {sector}
+                            </button>
                         ))}
                     </div>
+
                     {activeSectors.length > 0 && (
-                        <div className="mt-6"><button onClick={handleConfirmSectorSelection} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg">Confirmar {activeSectors.length} Setores</button></div>
+                        <div className="mt-6">
+                            <button 
+                                onClick={handleConfirmSectorSelection}
+                                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md animate-fade-in"
+                            >
+                                Validar {activeSectors.length} Setores Selecionados
+                            </button>
+                        </div>
                     )}
-                    <div className="mt-8 text-center flex justify-between px-4">
-                         <button onClick={() => { setIsSectorSelectionStep(false); setIsOperatorStep(true); }} className="text-gray-400 underline">&larr; Voltar</button>
-                        <button onClick={handleBackToEvents} className="text-gray-400 underline">Trocar Evento</button>
+
+                    <div className="mt-8 text-center">
+                        <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
+                            Voltar para seleção de eventos
+                        </button>
                     </div>
                 </div>
             </div>
@@ -688,7 +875,12 @@ const App: React.FC = () => {
     }
 
     const TABS: SectorFilter[] = ['All', ...sectorNames];
+    
+    // Filter history logic:
+    // 1. Filter by device ID (Local Scans Only for the list)
     const myScans = scanHistory.filter(s => s.deviceId === deviceId);
+
+    // 2. Apply Sector Filters and Error Logic
     const displayHistory = (lockedSector && activeSectors.length > 0)
         ? myScans.filter(s => activeSectors.includes(s.ticketSector) || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
         : myScans;
@@ -696,37 +888,58 @@ const App: React.FC = () => {
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
             <div className="w-full max-w-6xl mx-auto space-y-6">
-                {!isOnline && <AlertBanner message="Offline. Validações salvas localmente." type="warning" />}
+                {!isOnline && <AlertBanner message="Você está offline. As validações estão sendo salvas localmente e serão sincronizadas." type="warning" />}
                 <header className="flex justify-between items-center w-full">
                     {selectedEvent ? (
                         <div>
                             <h1 className="text-3xl font-bold text-orange-500">{selectedEvent.name}</h1>
                              <div className="flex flex-col md:flex-row md:items-center space-y-1 md:space-y-0 md:space-x-2">
-                                <span className="text-xs text-gray-400">{validationMode === 'OFFLINE' ? 'Modo Offline' : 'Modo Online'}</span>
+                                <span className="text-xs text-gray-400">
+                                    {validationMode === 'OFFLINE' ? 'Modo Offline' : 'Modo Online'}
+                                </span>
                                 {lockedSector && activeSectors.length > 0 ? (
                                     <div className="flex items-center space-x-2">
-                                        <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30">Validando: {activeSectors.join(', ')}</span>
-                                        <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline">Alterar</button>
+                                        <span className="text-sm font-semibold bg-gray-800 px-2 py-1 rounded text-orange-300 border border-orange-500/30">
+                                            Validando: {activeSectors.join(', ')}
+                                        </span>
+                                        <button onClick={() => setIsSectorSelectionStep(true)} className="text-xs text-gray-400 hover:text-white underline">
+                                            Alterar
+                                        </button>
                                     </div>
                                 ) : (
-                                    <button onClick={handleBackToEvents} className="text-sm text-orange-400 hover:underline">Trocar Evento</button>
+                                    <button onClick={handleSwitchEvent} className="text-sm text-orange-400 hover:underline">
+                                        Trocar Evento
+                                    </button>
                                 )}
+                            </div>
+                            <div className="flex items-center mt-1">
+                                 <span className="text-xs text-gray-400 mr-2">Operador: <strong className="text-gray-300">{operatorName}</strong></span>
+                                 <button onClick={handleChangeOperator} className="text-[10px] bg-gray-800 px-1 rounded text-gray-500 hover:text-white border border-gray-700">Trocar</button>
                             </div>
                         </div>
                     ) : (
                         <div>
-                            <h1 className="text-3xl font-bold text-orange-500">Painel Administrativo</h1>
-                            <p className="text-sm text-gray-400">Bem-vindo, {currentUser?.username}</p>
+                            <h1 className="text-3xl font-bold text-orange-500">Gerenciamento Geral</h1>
+                            <p className="text-sm text-gray-400">Crie ou gerencie seus eventos.</p>
                         </div>
                     )}
                     <div className="flex items-center space-x-2">
                          {selectedEvent && (
-                             <button onClick={() => setView('scanner')} className={`p-2 rounded-full transition-colors ${view === 'scanner' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><QrCodeIcon className="w-6 h-6" /></button>
+                             <button
+                                onClick={() => setView('scanner')}
+                                className={`p-2 rounded-full transition-colors ${view === 'scanner' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+                                aria-label="Scanner View"
+                             >
+                                 <QrCodeIcon className="w-6 h-6" />
+                             </button>
                          )}
-                         <button onClick={handleAdminRequest} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><CogIcon className="w-6 h-6" /></button>
-                         {currentUser && (
-                            <button onClick={handleLogout} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>
-                         )}
+                         <button
+                            onClick={handleAdminAccess}
+                            className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+                            aria-label="Admin View"
+                         >
+                             <CogIcon className="w-6 h-6" />
+                         </button>
                     </div>
                 </header>
 
@@ -734,48 +947,94 @@ const App: React.FC = () => {
                     {view === 'scanner' && selectedEvent ? (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
+                                {/* Only show sector tabs if NO specific sector is locked */}
                                 {!lockedSector && (
                                     <div className="bg-gray-800 p-2 rounded-lg overflow-hidden">
                                         <div className="flex space-x-2 overflow-x-auto pb-1">
                                             {TABS.map(sector => (
-                                                <button key={sector} onClick={() => setSelectedSector(sector)} className={`flex-shrink-0 py-2 px-3 text-sm font-bold rounded-md whitespace-nowrap ${selectedSector === sector ? 'bg-orange-600 text-white' : 'bg-gray-700'}`}>{sector === 'All' ? 'Todos' : sector}</button>
+                                                <button 
+                                                    key={sector}
+                                                    onClick={() => setSelectedSector(sector)}
+                                                    className={`flex-shrink-0 py-2 px-3 text-sm font-bold rounded-md transition-colors whitespace-nowrap ${selectedSector === sector ? 'bg-orange-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                                                >
+                                                    {sector === 'All' ? 'Todos os Setores' : sector}
+                                                </button>
                                             ))}
                                         </div>
                                     </div>
                                 )}
+                                
+                                {validationMode !== 'OFFLINE' && !onlineApiEndpoints[0]?.eventId && (
+                                     <div className="bg-red-600/20 border border-red-500 p-2 rounded text-center text-sm text-red-200">
+                                        ⚠️ ID do Evento não configurado. Validação Online falhará.
+                                     </div>
+                                )}
+
                                 <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-lg overflow-hidden border-4 border-gray-700 shadow-xl">
                                     {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} />}
+                                    
                                     {isCameraActive ? (
-                                        <Scanner onScanSuccess={handleScanSuccess} onScanError={() => {}} />
+                                        <Scanner onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
                                     ) : (
                                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-gray-400">
                                             <VideoCameraIcon className="w-16 h-16 mb-4 text-gray-600" />
                                             <p className="text-lg font-semibold">Câmera em repouso</p>
-                                            <button onClick={resetInactivityTimer} className="bg-orange-600 text-white font-bold py-3 px-8 rounded-full mt-4">Ativar</button>
+                                            <p className="text-sm mb-6">Toque abaixo para reativar</p>
+                                            <button 
+                                                onClick={resetInactivityTimer}
+                                                className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-8 rounded-full shadow-lg transition-transform transform active:scale-95"
+                                            >
+                                                Ativar Câmera
+                                            </button>
                                         </div>
                                     )}
                                 </div>
-                                <div className="mt-4 bg-gray-800 p-4 rounded-lg flex space-x-2">
-                                    <input type="text" value={manualCode} onChange={(e) => setManualCode(e.target.value)} placeholder="Digite código..." className="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-3 text-white" />
-                                    <button onClick={handleManualSubmit} className="bg-gray-700 text-white font-bold py-3 px-6 rounded border border-gray-600">Validar</button>
+                                {!isCameraActive && (
+                                     <p className="text-center text-xs text-gray-500 mt-2">Modo economia de energia ativo</p>
+                                )}
+
+                                {/* Manual Input */}
+                                <div className="mt-4 bg-gray-800 p-4 rounded-lg shadow-lg border border-gray-700">
+                                    <p className="text-sm text-gray-400 mb-2 font-bold">Problemas com a câmera?</p>
+                                    <div className="flex space-x-2">
+                                        <input
+                                            type="text"
+                                            value={manualCode}
+                                            onChange={(e) => setManualCode(e.target.value)}
+                                            placeholder="Digite o código do ingresso..."
+                                            className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-orange-500 transition-colors"
+                                            onKeyDown={(e) => e.key === 'Enter' && handleManualSubmit()}
+                                        />
+                                        <button
+                                            onClick={handleManualSubmit}
+                                            className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-6 rounded-lg border border-gray-600 transition-colors"
+                                        >
+                                            Validar
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                            <div className="space-y-6">
-                                 <TicketList tickets={displayHistory} sectorNames={sectorNames} hideTabs={!!lockedSector} />
+
+                             <div className="space-y-6">
+                                 {/* Pass only local device history to the TicketList */}
+                                 <TicketList 
+                                    tickets={displayHistory} 
+                                    sectorNames={sectorNames} 
+                                    hideTabs={!!lockedSector}
+                                 />
                              </div>
                         </div>
                     ) : (
                         <AdminView 
                             db={db}
-                            events={getAllowedEvents()}
+                            events={events}
                             selectedEvent={selectedEvent}
                             allTickets={allTickets}
-                            scanHistory={scanHistory}
+                            scanHistory={scanHistory} // Admin sees ALL history
                             sectorNames={sectorNames}
                             onUpdateSectorNames={handleUpdateSectorNames}
                             isOnline={isOnline}
-                            onSelectEvent={handleAdminSelectEvent}
-                            currentUser={currentUser}
+                            adminRole={adminRole}
                         />
                     )}
                 </main>
