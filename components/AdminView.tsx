@@ -54,7 +54,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
-    const [ignoreExisting, setIgnoreExisting] = useState(false); // New state for skipping existing tickets
+    const [ignoreExisting, setIgnoreExisting] = useState(true); // Default to true
 
     // Presets State
     const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
