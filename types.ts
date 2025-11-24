@@ -29,7 +29,7 @@ export interface ScanLog {
     status: ScanStatus;
     timestamp: Timestamp | FieldValue;
     deviceId?: string; // ID of the device that performed the scan
-    operatorName?: string; // Name of the person scanning
+    operator?: string; // Name of the operator/gate
 }
 
 export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
@@ -38,7 +38,7 @@ export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
     ticketSector: Sector;
     isPending?: boolean;
     deviceId?: string;
-    operatorName?: string;
+    operator?: string;
 }
 
 export interface TimeBucket {
@@ -57,7 +57,12 @@ export interface AnalyticsData {
     };
 }
 
-export interface SectorGroup {
-  name: string;
-  sectors: string[];
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN';
+
+export interface User {
+    id: string;
+    username: string;
+    password?: string; // Only used for creation/auth, prefer not to store plainly in prod but per request
+    role: UserRole;
+    allowedEvents: string[]; // Array of Event IDs
 }
