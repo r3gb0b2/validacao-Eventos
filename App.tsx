@@ -289,17 +289,34 @@ const App: React.FC = () => {
         if (!db) return;
         setIsAuthLoading(true);
         try {
-            // Fetch all users to do case-insensitive match client-side (small collection)
-            const snap = await getDocs(collection(db, 'users'));
+            // Hardcoded Master Passwords for quick roles
+            let hardcodedUser: User | null = null;
             
+            if (pass === '123654') {
+                hardcodedUser = { id: 'admin_master', username: 'Administrador', role: 'ADMIN', allowedEvents: [] };
+            } else if (pass === '987654') {
+                hardcodedUser = { id: 'super_admin_master', username: 'Super Admin', role: 'SUPER_ADMIN', allowedEvents: [] };
+            }
+
+            if (hardcodedUser) {
+                 const expiry = Date.now() + (24 * 60 * 60 * 1000);
+                 const sessionObj = { ...hardcodedUser, _expiry: expiry };
+                 localStorage.setItem('auth_user_session', JSON.stringify(sessionObj));
+                 setCurrentUser(hardcodedUser);
+                 setShowLoginModal(false);
+                 setView('admin');
+                 setIsAuthLoading(false);
+                 return;
+            }
+
+            // Fallback to Database Users
+            const snap = await getDocs(collection(db, 'users'));
             const normalizedInputName = username.trim().toLowerCase();
             let foundUser: User | null = null;
             
             snap.forEach(doc => {
                 const data = doc.data();
-                // Compare username lowercase
                 if ((data.username || '').toLowerCase() === normalizedInputName) {
-                    // Check password (case sensitive usually, but user didn't specify, standard is case sensitive password, insensitive username)
                     if (data.password === pass) { 
                         foundUser = { id: doc.id, ...data } as User;
                     }
@@ -314,11 +331,9 @@ const App: React.FC = () => {
                 setCurrentUser(user);
                 setShowLoginModal(false);
                 
-                // Auto navigate to admin if requested context
                 setView('admin');
                 
-                // If admin has limited events and currently selected is not allowed, deselect
-                if (user.role !== 'SUPER_ADMIN' && selectedEvent) {
+                if (user.role !== 'SUPER_ADMIN' && user.role !== 'ADMIN' && selectedEvent) {
                     if (!user.allowedEvents.includes(selectedEvent.id)) {
                         setSelectedEvent(null);
                     }
@@ -356,8 +371,8 @@ const App: React.FC = () => {
     
     // Filter events for the logged in user
     const getAllowedEvents = () => {
-        if (!currentUser) return events; // Should not happen in admin view usually
-        if (currentUser.role === 'SUPER_ADMIN') return events;
+        if (!currentUser) return events; 
+        if (currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'ADMIN') return events;
         return events.filter(e => currentUser.allowedEvents.includes(e.id));
     };
 

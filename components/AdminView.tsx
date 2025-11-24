@@ -4,6 +4,8 @@
 
 
 
+
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User } from '../types';
 import Stats from './Stats';
@@ -62,8 +64,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
-    // Force ignoreExisting to true always for logic, UI will be disabled
-    const ignoreExisting = true; 
+    
+    // Ignore Existing State (Locked for normal admins)
+    const [ignoreExisting, setIgnoreExisting] = useState(true);
 
     // Presets State
     const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
@@ -83,6 +86,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [showScanner, setShowScanner] = useState(false); // Scanner Modal State
 
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+    const canManageEvents = currentUser?.role === 'ADMIN' || isSuperAdmin;
+
+    // Enforce Ignore Existing for non-super admins
+    useEffect(() => {
+        if (!isSuperAdmin) {
+            setIgnoreExisting(true);
+        }
+    }, [isSuperAdmin]);
 
     // Load validation settings (Online Mode)
     useEffect(() => {
@@ -253,22 +264,55 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         const lastAccess = validScans[validScans.length - 1].timestamp;
 
         const buckets = new Map<string, { [sector: string]: number }>();
-        const TEN_MINUTES_MS = 10 * 60 * 1000;
+        const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
+
+        // Load groups locally to use in chart aggregation if needed
+        // Note: Ideally groups should be passed down or stored in a higher context, 
+        // but for now we'll calculate basic buckets here. 
+        // Stats.tsx handles group aggregation for the table, but the Chart also needs group awareness?
+        // Let's assume groups are stored in localStorage for now as implemented previously.
+        let localGroups: any[] = [];
+        try {
+             const saved = localStorage.getItem('stats_sector_groups');
+             if (saved) localGroups = JSON.parse(saved);
+        } catch(e) {}
 
         for (const scan of validScans) {
-            const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
+            const bucketStart = Math.floor(scan.timestamp / INTERVAL_MS) * INTERVAL_MS;
             const date = new Date(bucketStart);
-            // Check if date is valid
             if (isNaN(date.getTime())) continue;
 
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
-                const initialCounts = sectorNames.reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
+                // Initial counts: use groups if available
+                const initialCounts: Record<string, number> = {};
+                
+                // Add group names
+                localGroups.forEach(g => initialCounts[g.name] = 0);
+                
+                // Add individual sectors that are NOT in any group
+                sectorNames.forEach(name => {
+                    const isGrouped = localGroups.some(g => g.includedSectors.some((s: string) => s.toLowerCase() === name.toLowerCase()));
+                    if (!isGrouped) initialCounts[name] = 0;
+                });
+                
                 buckets.set(key, initialCounts);
             }
+            
             const currentBucket = buckets.get(key)!;
-            currentBucket[scan.ticketSector] = (currentBucket[scan.ticketSector] || 0) + 1;
+            const sector = scan.ticketSector || 'Desconhecido';
+            
+            // Find which key to increment (Group Name or Sector Name)
+            const group = localGroups.find(g => g.includedSectors.some((s: string) => s.toLowerCase() === sector.toLowerCase()));
+            const targetKey = group ? group.name : sector;
+            
+            if (currentBucket[targetKey] !== undefined) {
+                 currentBucket[targetKey]++;
+            } else {
+                // If it's a sector that appeared but wasn't in sectorNames init list
+                currentBucket[targetKey] = 1;
+            }
         }
 
         let peak = { time: '-', count: 0 };
@@ -290,16 +334,28 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         const usedTickets = allTickets.filter(t => t.status === 'USED');
         if (usedTickets.length === 0) return [];
         
-        const counts = sectorNames.reduce((acc, sector) => {
-            acc[sector] = usedTickets.filter(t => t.sector === sector).length;
-            return acc;
-        }, {} as Record<string, number>);
+        let localGroups: any[] = [];
+        try {
+             const saved = localStorage.getItem('stats_sector_groups');
+             if (saved) localGroups = JSON.parse(saved);
+        } catch(e) {}
+        
+        const counts: Record<string, number> = {};
+        
+        usedTickets.forEach(t => {
+            const sector = t.sector || 'Desconhecido';
+            const group = localGroups.find(g => g.includedSectors.some((s: string) => s.toLowerCase() === sector.toLowerCase()));
+            const targetKey = group ? group.name : sector;
+            counts[targetKey] = (counts[targetKey] || 0) + 1;
+        });
 
-        return sectorNames.map((name, index) => ({
+        const keys = Object.keys(counts);
+        return keys.map((name, index) => ({
             name: name,
             value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
+
     }, [allTickets, sectorNames]);
 
     const handleSaveSectorNames = async () => {
@@ -1452,7 +1508,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     <div><label className="text-xs text-gray-400">Tipo de Importação</label><select value={importType} onChange={(e) => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm mb-2"><option value="tickets">Ingressos (API Padrão)</option><option value="participants">Participantes (API)</option><option value="buyers">Compradores (API)</option><option value="checkins">Sincronizar Check-ins (API)</option><option value="google_sheets">Google Sheets (Link CSV)</option></select></div>
                                     <input type="text" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://..." className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" />
                                     {importType !== 'google_sheets' && (<div className="grid grid-cols-2 gap-2"><div className="relative"><label className="text-xs text-gray-400">Token</label><input type={showImportToken ? "text" : "password"} value={apiToken} onChange={(e) => setApiToken(e.target.value)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm pr-8" /><button onClick={() => setShowImportToken(!showImportToken)} className="absolute right-2 top-6 text-gray-400">{showImportToken ? <EyeSlashIcon className="w-3 h-3"/> : <EyeIcon className="w-3 h-3"/>}</button></div><div><label className="text-xs text-gray-400">ID Evento</label><input type="text" value={apiEventId} onChange={(e) => setApiEventId(e.target.value)} className="w-full bg-gray-700 p-2 rounded border border-gray-600 text-sm" /></div></div>)}
-                                    <div className="flex items-center my-2 bg-gray-700/50 p-2 rounded border border-gray-600"><input type="checkbox" id="ignoreExisting" checked={true} disabled className="w-4 h-4 text-orange-600 rounded bg-gray-600 border-gray-500 cursor-not-allowed opacity-50" /><label htmlFor="ignoreExisting" className="ml-2 text-xs text-gray-400 cursor-not-allowed select-none flex items-center">Ignorar ingressos já importados (Bloqueado pelo Admin)<LockClosedIcon className="w-3 h-3 ml-1" /></label></div>
+                                    <div className="flex items-center my-2 bg-gray-700/50 p-2 rounded border border-gray-600">
+                                        <input 
+                                            type="checkbox" 
+                                            id="ignoreExisting" 
+                                            checked={ignoreExisting} 
+                                            onChange={(e) => setIgnoreExisting(e.target.checked)} 
+                                            disabled={!isSuperAdmin}
+                                            className={`w-4 h-4 text-orange-600 rounded bg-gray-600 border-gray-500 ${!isSuperAdmin ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`} 
+                                        />
+                                        <label htmlFor="ignoreExisting" className={`ml-2 text-xs text-gray-400 flex items-center ${!isSuperAdmin ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                                            Ignorar ingressos já importados
+                                            {!isSuperAdmin ? (
+                                                <span className="flex items-center ml-1 text-gray-500" title="Apenas Super Admin pode alterar">
+                                                    (Bloqueado) <LockClosedIcon className="w-3 h-3 ml-1" />
+                                                </span>
+                                            ) : (
+                                                <span className="ml-1 text-green-400 text-[10px] uppercase font-bold border border-green-500/50 px-1 rounded">Editável</span>
+                                            )}
+                                        </label>
+                                    </div>
                                     <div className="flex space-x-2 pt-2"><button onClick={handleImportFromApi} disabled={isLoading} className="flex-grow bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 flex justify-center items-center text-sm">{isLoading ? (loadingMessage || 'Processando...') : 'Importar Agora'}</button>{importType !== 'google_sheets' && (<button onClick={handleSavePreset} className="px-3 bg-gray-600 hover:bg-gray-500 rounded text-xs font-bold" title="Salvar na Lista">Salvar Lista</button>)}</div>
                                     <div className="mt-4 pt-4 border-t border-gray-700"><button onClick={handleSyncExport} disabled={isLoading} className="w-full bg-gray-700 hover:bg-gray-600 text-orange-400 py-2 rounded text-sm font-bold flex items-center justify-center border border-orange-500/30"><CloudUploadIcon className="w-4 h-4 mr-2" /> Enviar Validações para ST / API</button></div>
                                 </div>
@@ -1467,7 +1542,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return (
                      <div className="space-y-6 animate-fade-in">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            {isSuperAdmin && (
+                            {canManageEvents && (
                                 <div className="bg-gray-800 p-5 rounded-lg shadow-lg">
                                     <h3 className="text-lg font-bold mb-3">Criar Novo Evento</h3>
                                     <div className="space-y-3">
@@ -1477,7 +1552,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 </div>
                             )}
                             
-                            <div className={`bg-gray-800 p-5 rounded-lg shadow-lg ${!isSuperAdmin ? 'col-span-2' : ''}`}>
+                            <div className={`bg-gray-800 p-5 rounded-lg shadow-lg ${!canManageEvents ? 'col-span-2' : ''}`}>
                                 <h3 className="text-lg font-bold mb-3">Lista de Eventos Disponíveis</h3>
                                 <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
                                     {events.map(event => (
@@ -1487,15 +1562,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                 <button onClick={() => { onSelectEvent(event); setActiveTab('stats'); }} className="text-xs px-3 py-1 bg-green-600 hover:bg-green-500 rounded font-bold text-white shadow-sm">
                                                     Gerenciar
                                                 </button>
+                                                {canManageEvents && (
+                                                    <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden || false)} className="text-xs px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded border border-gray-500">
+                                                        {event.isHidden ? 'Mostrar' : 'Ocultar'}
+                                                    </button>
+                                                )}
                                                 {isSuperAdmin && (
-                                                    <>
-                                                        <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden || false)} className="text-xs px-3 py-1 bg-gray-600 hover:bg-gray-500 rounded border border-gray-500">
-                                                            {event.isHidden ? 'Mostrar' : 'Ocultar'}
-                                                        </button>
-                                                        <button onClick={() => handleDeleteEvent(event.id, event.name)} className="text-xs px-3 py-1 bg-red-600 hover:bg-red-500 rounded">
-                                                            Apagar
-                                                        </button>
-                                                    </>
+                                                    <button onClick={() => handleDeleteEvent(event.id, event.name)} className="text-xs px-3 py-1 bg-red-600 hover:bg-red-500 rounded">
+                                                        Apagar
+                                                    </button>
                                                 )}
                                             </div>
                                         </div>
@@ -1504,7 +1579,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 </div>
                             </div>
 
-                             {selectedEvent && isSuperAdmin && (
+                             {selectedEvent && canManageEvents && (
                                 <div className="bg-gray-800 p-5 rounded-lg md:col-span-2 border border-gray-700">
                                     <h3 className="text-lg font-bold mb-3">Editar Evento: <span className="text-orange-400">{selectedEvent.name}</span></h3>
                                     <div className="flex space-x-2">
