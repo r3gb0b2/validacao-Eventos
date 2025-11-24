@@ -54,7 +54,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
-    const [ignoreExisting, setIgnoreExisting] = useState(false); // New state for skipping existing tickets
+    const [ignoreExisting, setIgnoreExisting] = useState(true); // DEFAULT TRUE as requested
 
     // Presets State
     const [importPresets, setImportPresets] = useState<ImportPreset[]>([]);
@@ -1549,7 +1549,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                              log.status === 'WRONG_SECTOR' ? 'Setor Incorreto' : 'Inválido'}
                                                         </p>
                                                         <p className="text-xs text-gray-500">
-                                                            Setor Lido: {log.ticketSector} | Device: {log.deviceId ? log.deviceId.substr(0,8) : 'N/A'}
+                                                            Setor Lido: {log.ticketSector} | Device: {log.deviceId ? log.deviceId.substr(0,8) : 'N/A'} {log.operator ? `| Op: ${log.operator}` : ''}
                                                         </p>
                                                     </div>
                                                 </div>

@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { DisplayableScanLog, Sector, ScanStatus } from '../types';
 import { ClockIcon } from './Icons';
@@ -83,7 +84,8 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
               <p className="font-medium text-white">{ticket.ticketId}</p>
               <div className="flex items-center text-xs text-gray-500 mt-1">
                  <p>
-                    Validado em: {new Date(ticket.timestamp).toLocaleString('pt-BR')}
+                    {new Date(ticket.timestamp).toLocaleString('pt-BR')} 
+                    {ticket.operator ? ` | ${ticket.operator}` : ''}
                  </p>
                  {ticket.isPending && (
                     <span title="Esta validação foi feita offline e será sincronizada." className="ml-2 flex items-center text-yellow-400 font-semibold">

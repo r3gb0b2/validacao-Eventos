@@ -1,3 +1,4 @@
+
 // FIX: Implement the main App component, resolving "not a module" and other related errors.
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getDb } from './firebaseConfig';
@@ -47,10 +48,11 @@ const App: React.FC = () => {
     const [isCheckingUrl, setIsCheckingUrl] = useState(true); // New state to prevent flashing login screen
     const [manualCode, setManualCode] = useState(''); // State for manual code entry
     
-    // New state for Sector Selection Flow
+    // New state for Sector Selection Flow & Operator
     const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
     const [lockedSector, setLockedSector] = useState<string | null>(null);
     const [activeSectors, setActiveSectors] = useState<string[]>([]);
+    const [operatorName, setOperatorName] = useState(() => localStorage.getItem('operatorName') || '');
 
     // Inactivity Timer State
     const [isCameraActive, setIsCameraActive] = useState(true);
@@ -243,7 +245,8 @@ const App: React.FC = () => {
                     timestamp: (data.timestamp as Timestamp)?.toMillis() || Date.now(),
                     ticketSector: data.sector ?? 'Desconhecido',
                     isPending: doc.metadata.hasPendingWrites,
-                    deviceId: data.deviceId // Ensure we capture who scanned it
+                    deviceId: data.deviceId, // Ensure we capture who scanned it
+                    operator: data.operator // Operator name
                 };
             });
             setScanHistory(historyData);
@@ -298,6 +301,9 @@ const App: React.FC = () => {
     };
 
     const handleConfirmSectorSelection = () => {
+        // Save operator name
+        localStorage.setItem('operatorName', operatorName);
+
         if (activeSectors.length > 0) {
             setLockedSector('Multiple'); // We use 'Multiple' as a flag, actual filtering uses activeSectors
             setSelectedSector('All'); // For UI display purposes
@@ -526,7 +532,8 @@ const App: React.FC = () => {
                                             status: 'WRONG_SECTOR', 
                                             timestamp: serverTimestamp(), 
                                             sector: sector,
-                                            deviceId: deviceId
+                                            deviceId: deviceId,
+                                            operator: operatorName || 'Sem Nome'
                                         });
                                         return;
                                     }
@@ -540,7 +547,8 @@ const App: React.FC = () => {
                                         status: 'WRONG_SECTOR',
                                         timestamp: serverTimestamp(),
                                         sector: sector,
-                                        deviceId: deviceId
+                                        deviceId: deviceId,
+                                        operator: operatorName || 'Sem Nome'
                                     });
                                     return;
                                 }
@@ -552,7 +560,8 @@ const App: React.FC = () => {
                                     status: 'VALID', 
                                     timestamp: serverTimestamp(), 
                                     sector: sector,
-                                    deviceId: deviceId
+                                    deviceId: deviceId,
+                                    operator: operatorName || 'Sem Nome'
                                 });
                                 return;
                             } else if (response.status === 409 || response.status === 422) {
@@ -562,7 +571,8 @@ const App: React.FC = () => {
                                     status: 'USED', 
                                     timestamp: serverTimestamp(), 
                                     sector: 'Externo',
-                                    deviceId: deviceId
+                                    deviceId: deviceId,
+                                    operator: operatorName || 'Sem Nome'
                                 });
                                 return;
                             } else {
@@ -582,7 +592,8 @@ const App: React.FC = () => {
                     status: 'INVALID', 
                     timestamp: serverTimestamp(), 
                     sector: 'Externo',
-                    deviceId: deviceId
+                    deviceId: deviceId,
+                    operator: operatorName || 'Sem Nome'
                 });
                 return;
             }
@@ -596,7 +607,7 @@ const App: React.FC = () => {
         const logScan = async (status: ScanStatus, sector: string) => {
             try {
                 await addDoc(collection(db, 'events', eventId, 'scans'), {
-                    ticketId, status, timestamp: serverTimestamp(), sector, deviceId
+                    ticketId, status, timestamp: serverTimestamp(), sector, deviceId, operator: operatorName || 'Sem Nome'
                 });
             } catch (error) { console.error(`Failed to log ${status} scan:`, error); }
         };
@@ -643,7 +654,7 @@ const App: React.FC = () => {
             batch.update(ticketRef, { status: 'USED', usedAt: serverTimestamp() });
 
             const logRef = doc(collection(db, 'events', eventId, 'scans'));
-            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId });
+            batch.set(logRef, { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName || 'Sem Nome' });
 
             await batch.commit();
             showScanResult('VALID', `Acesso liberado para o setor ${ticket.sector}!`);
@@ -652,7 +663,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
         }
-    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId]); // selectedSector removed from dep array, using ref instead
+    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId, operatorName]); // selectedSector removed from dep array, using ref instead
     
     const handleManualSubmit = () => {
         if (!manualCode.trim()) return;
@@ -755,6 +766,18 @@ const App: React.FC = () => {
             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
                 <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
                     <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
+                    
+                    <div className="mb-6">
+                        <label className="block text-sm text-gray-400 mb-2 font-bold uppercase">Nome do Operador / Portaria</label>
+                        <input 
+                            type="text" 
+                            value={operatorName}
+                            onChange={(e) => setOperatorName(e.target.value)}
+                            placeholder="Ex: Portaria 1, João..."
+                            className="w-full bg-gray-700 p-3 rounded text-white border border-gray-600 focus:outline-none focus:border-orange-500"
+                        />
+                    </div>
+
                     <h3 className="text-xl font-semibold text-center mb-8">O que você vai validar?</h3>
                     
                     <button 

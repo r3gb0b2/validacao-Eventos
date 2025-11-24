@@ -29,6 +29,7 @@ export interface ScanLog {
     status: ScanStatus;
     timestamp: Timestamp | FieldValue;
     deviceId?: string; // ID of the device that performed the scan
+    operator?: string; // Name of the operator/gate
 }
 
 export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
@@ -37,6 +38,7 @@ export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
     ticketSector: Sector;
     isPending?: boolean;
     deviceId?: string;
+    operator?: string;
 }
 
 export interface TimeBucket {
