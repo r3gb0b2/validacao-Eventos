@@ -427,9 +427,18 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     
     // Import tickets from a specific buyer found in search
     const handleImportSingleBuyer = async (buyer: any) => {
-        if (!selectedEvent || !buyer.tickets || buyer.tickets.length === 0) return;
+        if (!selectedEvent || !buyer.tickets) {
+            alert("Nenhum ingresso encontrado neste comprador.");
+            return;
+        }
         
-        const confirmMsg = `Deseja importar ${buyer.tickets.length} ingressos de "${buyer.name || 'Comprador'}" para o sistema local?`;
+        const ticketsList = Array.isArray(buyer.tickets) ? buyer.tickets : [];
+        if (ticketsList.length === 0) {
+            alert("A lista de ingressos deste comprador está vazia.");
+            return;
+        }
+        
+        const confirmMsg = `Deseja importar ${ticketsList.length} ingressos de "${buyer.name || buyer.buyer_name || 'Comprador'}" para o sistema local?`;
         if (!window.confirm(confirmMsg)) return;
 
         setIsLoading(true);
@@ -453,20 +462,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return null;
             };
 
-            const HIGH_PRIORITY_CODE_KEYS = ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode'];
-            const LOW_PRIORITY_CODE_KEYS = ['ticket_id', 'id'];
+            const HIGH_PRIORITY_CODE_KEYS = ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'ticket_id', 'locator', 'identifier', 'friendly_id', 'hash', 'serial'];
+            const LOW_PRIORITY_CODE_KEYS = ['id', 'pk'];
             
             const SECTOR_KEYS = ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor'];
             const STATUS_KEYS = ['status', 'state'];
             const DATE_KEYS = ['updated_at', 'checked_in_at', 'used_at', 'created_at'];
 
-            buyer.tickets.forEach((t: any) => {
-                // Objects to inspect in order of priority (root, nested ticket, pivot data)
+            ticketsList.forEach((t: any) => {
+                // Objects to inspect in order of priority (root, nested ticket, pivot data, attributes, item)
                 const candidates = [
                     t, 
                     t.ticket, 
                     t.data, 
-                    t.pivot
+                    t.pivot,
+                    t.attributes,
+                    t.item
                 ].filter(c => c && typeof c === 'object');
 
                 let code = null;
@@ -570,8 +581,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             });
 
             if (ticketsToSave.length === 0) {
-                console.log("Debug Buyer Tickets Data:", buyer.tickets);
-                alert("Nenhum código de ingresso válido encontrado para importar. (Erro de Formato)");
+                console.log("Debug Buyer Tickets Data (Dump):", ticketsList);
+                alert("Nenhum código de ingresso válido encontrado para importar.\n\nPossíveis causas:\n1. A estrutura da API mudou.\n2. O campo de código (qr_code/code) está vazio.\n3. O ingresso não tem ID identificável.");
                 return;
             }
 
