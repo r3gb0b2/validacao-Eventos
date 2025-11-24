@@ -5,9 +5,10 @@ import Stats from './Stats';
 import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
+import Scanner from './Scanner';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
-import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon } from './Icons';
+import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon } from './Icons';
 import Papa from 'papaparse';
 
 interface AdminViewProps {
@@ -70,6 +71,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResult, setSearchResult] = useState<{ ticket: Ticket | undefined, logs: DisplayableScanLog[] } | null>(null);
     const [buyerSearchResults, setBuyerSearchResults] = useState<any[]>([]);
+    const [showScanner, setShowScanner] = useState(false); // Scanner Modal State
 
 
     // Load validation settings (Online Mode)
@@ -363,15 +365,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
     
     // Search handler
-    const handleSearch = async () => {
-        if (!searchQuery.trim()) return;
+    const handleSearch = async (overrideQuery?: string) => {
+        const queryToUse = overrideQuery || searchQuery;
+        
+        if (!queryToUse.trim()) return;
 
         if (searchType === 'TICKET_LOCAL') {
             // Find ticket info
-            const ticket = allTickets.find(t => t.id === searchQuery.trim());
+            const ticket = allTickets.find(t => t.id === queryToUse.trim());
             
             // Find scan logs for this ticket
-            const logs = scanHistory.filter(l => l.ticketId === searchQuery.trim());
+            const logs = scanHistory.filter(l => l.ticketId === queryToUse.trim());
             logs.sort((a,b) => b.timestamp - a.timestamp); // Newest first
             
             setSearchResult({ ticket, logs });
@@ -395,7 +399,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
                 
                 // Append Query
-                const searchUrl = `${buyersUrl}?search=${encodeURIComponent(searchQuery)}${apiEventId ? `&event_id=${apiEventId}` : ''}`;
+                const searchUrl = `${buyersUrl}?search=${encodeURIComponent(queryToUse)}${apiEventId ? `&event_id=${apiEventId}` : ''}`;
                 
                 const res = await fetch(searchUrl, {
                     headers: {
@@ -423,6 +427,16 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 setIsLoading(false);
             }
         }
+    };
+    
+    // Scan in Admin
+    const handleScanInAdmin = (decodedText: string) => {
+        // Stop scanning UI
+        setShowScanner(false);
+        // Set text
+        setSearchQuery(decodedText);
+        // Trigger search immediately
+        handleSearch(decodedText);
     };
     
     // Import tickets from a specific buyer found in search
@@ -1427,7 +1441,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                                 />
                                 <button 
-                                    onClick={handleSearch}
+                                    onClick={() => setShowScanner(true)}
+                                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 rounded border border-gray-600"
+                                    title="Escanear QR Code"
+                                >
+                                    <QrCodeIcon className="w-6 h-6" />
+                                </button>
+                                <button 
+                                    onClick={() => handleSearch()}
                                     disabled={isLoading}
                                     className={`${searchType === 'TICKET_LOCAL' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'} text-white font-bold px-6 rounded transition-colors disabled:opacity-50`}
                                 >
@@ -1438,6 +1459,30 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 <p className="text-[10px] text-gray-500 mt-2">* Requer Token da API configurado na aba de Importação.</p>
                             )}
                         </div>
+
+                        {/* Scanner Modal Overlay */}
+                        {showScanner && (
+                            <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4">
+                                <div className="w-full max-w-md bg-gray-800 rounded-lg overflow-hidden relative shadow-2xl border border-gray-700">
+                                    <button 
+                                        onClick={() => setShowScanner(false)} 
+                                        className="absolute top-2 right-2 z-10 text-white bg-black/50 rounded-full p-1 hover:bg-red-600 transition-colors"
+                                    >
+                                        <XCircleIcon className="w-8 h-8" />
+                                    </button>
+                                    <div className="p-4 text-center">
+                                        <h3 className="text-lg font-bold text-white mb-2">Escanear para Consultar</h3>
+                                        <div className="aspect-square w-full bg-black rounded overflow-hidden">
+                                            <Scanner 
+                                                onScanSuccess={handleScanInAdmin} 
+                                                onScanError={() => {}} 
+                                            />
+                                        </div>
+                                        <p className="text-sm text-gray-400 mt-2">Aponte para o QR Code do ingresso</p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Local Search Result */}
                         {searchType === 'TICKET_LOCAL' && searchResult && (
