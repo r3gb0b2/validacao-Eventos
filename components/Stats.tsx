@@ -9,7 +9,7 @@ interface StatsProps {
 }
 
 const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
-    const [isGrouped, setIsGrouped] = useState(true);
+    const [isGrouped, setIsGrouped] = useState(false); // Default to FALSE to show raw data
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const filterRef = useRef<HTMLDivElement>(null);
@@ -55,13 +55,8 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
         if (!allTickets) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
         
         // Filter tickets that belong to the selected sectors
-        // We need to match ticket.sector with the selected list.
-        // Be careful with casing/trimming if data is messy.
-        
         const filteredTickets = allTickets.filter(t => {
             if (!t.sector) return false;
-            // We check if the ticket's sector matches any of the selected sectors
-            // Use loose matching if isGrouped is on, or strict if not
             const ticketSectorNorm = normalize(t.sector);
             return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
         });
@@ -73,36 +68,39 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
         return { total, scanned, remaining, percentage };
     }, [allTickets, selectedSectors]);
 
-    // 2. Calculate Sector Stats (Grouped or Raw)
+    // 2. Calculate Sector Stats
     const tableStats = useMemo(() => {
-        // Map to store stats: Key -> { total, scanned, originalName }
+        // --- MANUAL GROUPING MODE ---
+        // If "Group Selected" is ON, we show ONE row combining everything selected.
+        if (isGrouped && selectedSectors.length > 1) {
+             const combined = { total: 0, scanned: 0, displayName: 'Total Selecionado (Agrupado)' };
+             
+             allTickets.forEach(ticket => {
+                 const rawSector = ticket.sector || 'Desconhecido';
+                 const normSector = normalize(rawSector);
+                 // Is this ticket in the selected list?
+                 const isSelected = selectedSectors.some(s => normalize(s) === normSector);
+                 
+                 if (isSelected) {
+                     combined.total += 1;
+                     if (ticket.status === 'USED') combined.scanned += 1;
+                 }
+             });
+             
+             return [combined];
+        }
+
+        // --- NORMAL MODE (List Individual Sectors) ---
         const statsMap: Record<string, { total: number; scanned: number; displayName: string }> = {};
         const safeSectorNames = sectorNames || [];
 
-        // Helper to get the key based on grouping setting
-        const getKey = (name: string) => {
-            if (!name) return 'Desconhecido';
-            return isGrouped ? name.trim().toLowerCase() : name;
-        };
-
-        // Helper to formatting display name (capitalize first letter if grouped)
-        const formatName = (name: string) => {
-            if (!isGrouped) return name;
-            return name.charAt(0).toUpperCase() + name.slice(1);
-        };
+        // Helper to get key (just explicit name here)
+        const getKey = (name: string) => name;
 
         // 1. Initialize with Configured Sectors (so they appear even if empty)
         safeSectorNames.forEach(name => {
-            // ONLY if this sector is selected in the filter
             if (selectedSectors.includes(name)) {
-                const key = getKey(name);
-                if (!statsMap[key]) {
-                    statsMap[key] = { 
-                        total: 0, 
-                        scanned: 0, 
-                        displayName: isGrouped ? name.trim() : name // Prefer the configured casing
-                    };
-                }
+                statsMap[name] = { total: 0, scanned: 0, displayName: name };
             }
         });
 
@@ -112,17 +110,18 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
             const normSector = normalize(rawSector);
             
             // Only process if this ticket's sector corresponds to a selected sector filter
-            const isSelected = selectedSectors.some(s => normalize(s) === normSector);
+            const matchedFilter = selectedSectors.find(s => normalize(s) === normSector);
             
-            if (isSelected) {
-                const key = getKey(rawSector);
-
+            if (matchedFilter) {
+                // Use the filter name as the key to group minor differences (e.g. casing) 
+                // IF the filter logic allowed fuzzy matching. But here we stick to configured names.
+                // If a ticket has a sector not in config but manually added, we might miss it if we strictly use statsMap keys.
+                // So let's use the Raw Sector name as key if not found.
+                
+                const key = matchedFilter; // Map to the configured name if found
+                
                 if (!statsMap[key]) {
-                    statsMap[key] = { 
-                        total: 0, 
-                        scanned: 0, 
-                        displayName: isGrouped ? formatName(rawSector.trim()) : rawSector 
-                    };
+                    statsMap[key] = { total: 0, scanned: 0, displayName: key };
                 }
 
                 statsMap[key].total += 1;
@@ -133,15 +132,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
         });
 
         // 3. Convert to Array and Sort
-        // We try to respect the order of sectorNames config if possible
         const result = Object.values(statsMap).sort((a, b) => {
-            // Sort logic: Configured sectors first, then others alphabetically
-            const idxA = safeSectorNames.findIndex(s => getKey(s) === getKey(a.displayName));
-            const idxB = safeSectorNames.findIndex(s => getKey(s) === getKey(b.displayName));
-            
-            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-            if (idxA !== -1) return -1;
-            if (idxB !== -1) return 1;
             return a.displayName.localeCompare(b.displayName);
         });
 
@@ -232,7 +223,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                           <div className={`dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full transition-transform ${isGrouped ? 'transform translate-x-4' : ''}`}></div>
                       </div>
                       <div className="ml-3 text-sm text-gray-300 font-medium select-none hidden md:block">
-                          Agrupar Semelhantes
+                          Agrupar na Tabela
                       </div>
                   </label>
               </div>
@@ -256,7 +247,14 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                           
                           return (
                               <tr key={stats.displayName} className="hover:bg-gray-700/50 transition-colors">
-                                  <td className="px-6 py-4 font-medium text-white">{stats.displayName}</td>
+                                  <td className="px-6 py-4 font-medium text-white">
+                                    {stats.displayName}
+                                    {isGrouped && selectedSectors.length > 1 && (
+                                        <span className="block text-xs text-gray-500 font-normal">
+                                            (Soma de {selectedSectors.length} setores)
+                                        </span>
+                                    )}
+                                  </td>
                                   <td className="px-6 py-4 w-1/3 min-w-[150px]">
                                       <div className="w-full bg-gray-900 rounded-full h-2">
                                           <div 

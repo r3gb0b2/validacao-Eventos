@@ -49,7 +49,8 @@ const App: React.FC = () => {
     const [manualCode, setManualCode] = useState(''); // State for manual code entry
     
     // New state for Sector Selection Flow & Operator
-    const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false);
+    const [isOperatorStep, setIsOperatorStep] = useState(false); // NEW STEP 1
+    const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false); // NEW STEP 2
     const [lockedSector, setLockedSector] = useState<string | null>(null);
     const [activeSectors, setActiveSectors] = useState<string[]>([]);
     const [operatorName, setOperatorName] = useState(() => localStorage.getItem('operatorName') || '');
@@ -130,6 +131,7 @@ const App: React.FC = () => {
                         setSelectedEvent({ id: eventDoc.id, name: eventDoc.data().name, isHidden: eventDoc.data().isHidden });
                         setView('public_stats');
                         setIsSectorSelectionStep(false);
+                        setIsOperatorStep(false);
                     } else {
                         console.error("Event not found for public stats");
                     }
@@ -286,10 +288,30 @@ const App: React.FC = () => {
 
     const handleSelectEvent = (event: Event) => {
         setSelectedEvent(event);
-        setIsSectorSelectionStep(true);
+        setIsOperatorStep(true); // START STEP 1
         setLockedSector(null);
         setActiveSectors([]);
         localStorage.setItem('selectedEventId', event.id);
+    };
+
+    const handleOperatorConfirm = () => {
+        if (!operatorName.trim()) {
+            alert("Por favor, digite o nome do operador ou portaria.");
+            return;
+        }
+        localStorage.setItem('operatorName', operatorName);
+        setIsOperatorStep(false);
+        setIsSectorSelectionStep(true); // GO TO STEP 2
+    };
+
+    const handleBackToEvents = () => {
+        setSelectedEvent(null);
+        setView('scanner');
+        setLockedSector(null);
+        setActiveSectors([]);
+        setIsSectorSelectionStep(false);
+        setIsOperatorStep(false);
+        localStorage.removeItem('selectedEventId');
     };
 
     const handleToggleSectorSelection = (sector: string) => {
@@ -301,9 +323,6 @@ const App: React.FC = () => {
     };
 
     const handleConfirmSectorSelection = () => {
-        // Save operator name
-        localStorage.setItem('operatorName', operatorName);
-
         if (activeSectors.length > 0) {
             setLockedSector('Multiple'); // We use 'Multiple' as a flag, actual filtering uses activeSectors
             setSelectedSector('All'); // For UI display purposes
@@ -312,15 +331,6 @@ const App: React.FC = () => {
             setSelectedSector('All');
         }
         setIsSectorSelectionStep(false);
-    };
-
-    const handleSwitchEvent = () => {
-        setSelectedEvent(null);
-        setView('scanner');
-        setLockedSector(null);
-        setActiveSectors([]);
-        setIsSectorSelectionStep(false);
-        localStorage.removeItem('selectedEventId');
     };
 
     const handleUpdateSectorNames = async (newNames: string[]) => {
@@ -760,34 +770,59 @@ const App: React.FC = () => {
         return <EventSelector events={events} onSelectEvent={handleSelectEvent} onAccessAdmin={handleAdminAccessFromSelector} />;
     }
 
-    // Sector Selection Screen
-    if (selectedEvent && view === 'scanner' && isSectorSelectionStep) {
+    // NEW STEP 1: Operator Name Screen
+    if (selectedEvent && view === 'scanner' && isOperatorStep) {
         return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+             <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
                 <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
                     <h2 className="text-2xl font-bold text-center mb-6 text-orange-500">{selectedEvent.name}</h2>
                     
-                    {/* STEP 1: Identification */}
-                    <div className="mb-8 border-b border-gray-700 pb-6">
-                         <div className="flex items-center mb-3">
-                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded mr-2">PASSO 1</span>
-                            <h3 className="text-lg font-semibold">Identificação</h3>
+                    <div className="mb-6">
+                        <div className="flex items-center mb-4">
+                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded mr-2">PASSO 1/2</span>
+                            <h3 className="text-lg font-semibold">Identificação do Operador</h3>
                         </div>
-                        <label className="block text-sm text-gray-400 mb-2 uppercase font-bold">Nome do Operador / Portaria</label>
+                        <p className="text-gray-400 text-sm mb-4">
+                            Informe seu nome ou a portaria onde está trabalhando. Isso será registrado no histórico de validação.
+                        </p>
                         <input 
                             type="text" 
                             value={operatorName}
                             onChange={(e) => setOperatorName(e.target.value)}
-                            placeholder="Ex: Portaria 1, João..."
-                            className="w-full bg-gray-700 p-3 rounded text-white border border-gray-600 focus:outline-none focus:border-orange-500 placeholder-gray-500"
+                            placeholder="Ex: Portaria 1, João Silva..."
+                            className="w-full bg-gray-700 p-4 rounded text-white border border-gray-600 focus:outline-none focus:border-orange-500 placeholder-gray-500 text-lg"
                         />
                     </div>
 
-                    {/* STEP 2: Selection */}
+                    <button 
+                        onClick={handleOperatorConfirm}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-lg text-lg shadow-md transition-transform transform hover:scale-105"
+                    >
+                        Continuar
+                    </button>
+
+                    <div className="mt-8 text-center">
+                        <button onClick={handleBackToEvents} className="text-gray-400 hover:text-white text-sm underline">
+                            Voltar para seleção de eventos
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // NEW STEP 2: Sector Selection Screen
+    if (selectedEvent && view === 'scanner' && isSectorSelectionStep) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div className="w-full max-w-lg bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
+                    <h2 className="text-2xl font-bold text-center mb-2 text-orange-500">{selectedEvent.name}</h2>
+                    <p className="text-center text-gray-400 text-sm mb-6">Operador: <span className="text-white font-bold">{operatorName}</span></p>
+                    
                     <div>
                         <div className="flex items-center mb-4">
-                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded mr-2">PASSO 2</span>
-                            <h3 className="text-lg font-semibold">O que validar?</h3>
+                            <span className="bg-orange-600 text-white text-xs font-bold px-2 py-1 rounded mr-2">PASSO 2/2</span>
+                            <h3 className="text-lg font-semibold">O que você vai validar?</h3>
                         </div>
                         
                         <button 
@@ -829,9 +864,12 @@ const App: React.FC = () => {
                         )}
                     </div>
 
-                    <div className="mt-8 text-center">
-                        <button onClick={handleSwitchEvent} className="text-gray-400 hover:text-white text-sm underline">
-                            Voltar para seleção de eventos
+                    <div className="mt-8 text-center flex justify-between px-4">
+                         <button onClick={() => { setIsSectorSelectionStep(false); setIsOperatorStep(true); }} className="text-gray-400 hover:text-white text-sm underline">
+                            &larr; Voltar (Operador)
+                        </button>
+                        <button onClick={handleBackToEvents} className="text-gray-400 hover:text-white text-sm underline">
+                            Trocar Evento
                         </button>
                     </div>
                 </div>
@@ -872,7 +910,7 @@ const App: React.FC = () => {
                                         </button>
                                     </div>
                                 ) : (
-                                    <button onClick={handleSwitchEvent} className="text-sm text-orange-400 hover:underline">
+                                    <button onClick={handleBackToEvents} className="text-sm text-orange-400 hover:underline">
                                         Trocar Evento
                                     </button>
                                 )}
