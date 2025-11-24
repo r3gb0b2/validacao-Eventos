@@ -95,10 +95,12 @@ const App: React.FC = () => {
                 setDb(database);
                 setFirebaseStatus('success');
                 
-                // BOOTSTRAP SUPER ADMIN
+                // BOOTSTRAP SUPER ADMIN (Force check/create)
                 try {
-                    const usersSnap = await getDocs(collection(database, 'users'));
-                    if (usersSnap.empty) {
+                    const adminQuery = query(collection(database, 'users'), where('username', '==', 'admin'));
+                    const adminSnap = await getDocs(adminQuery);
+
+                    if (adminSnap.empty) {
                         await addDoc(collection(database, 'users'), {
                             username: 'admin',
                             password: 'admin',
@@ -106,6 +108,17 @@ const App: React.FC = () => {
                             allowedEvents: []
                         });
                         console.log("Bootstrap: Super Admin created (admin/admin)");
+                    } else {
+                        // Safety Check: If admin exists but has wrong password/role, reset it
+                        const adminDocRef = adminSnap.docs[0];
+                        const adminData = adminDocRef.data();
+                        if (adminData.password !== 'admin' || adminData.role !== 'SUPER_ADMIN') {
+                            await updateDoc(doc(database, 'users', adminDocRef.id), {
+                                password: 'admin',
+                                role: 'SUPER_ADMIN'
+                            });
+                            console.log("Bootstrap: Admin credentials reset to default (admin/admin)");
+                        }
                     }
                 } catch (e) {
                     console.error("Auth Bootstrap failed", e);
@@ -283,7 +296,7 @@ const App: React.FC = () => {
             let foundUser: User | null = null;
             snap.forEach(doc => {
                 const data = doc.data();
-                if (data.password === pass) {
+                if (data.password === pass) { // Plain text comparison
                     foundUser = { id: doc.id, ...data } as User;
                 }
             });
