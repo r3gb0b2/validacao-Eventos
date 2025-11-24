@@ -332,8 +332,13 @@ const App: React.FC = () => {
     const handleLogout = () => {
         setCurrentUser(null);
         localStorage.removeItem('auth_user_session');
+        setSelectedEvent(null);
         setView('scanner');
-        // If we are in scanner view and no event is selected, we are fine.
+        setIsOperatorStep(false);
+        setIsSectorSelectionStep(false);
+        setLockedSector(null);
+        setActiveSectors([]);
+        localStorage.removeItem('selectedEventId');
     };
 
     const handleAdminRequest = () => {
@@ -375,8 +380,15 @@ const App: React.FC = () => {
     };
 
     const handleBackToEvents = () => {
+        // If in Admin mode, we just clear selection but stay in admin (handled by AdminView logic usually, but here for safety)
+        if (view === 'admin') {
+             setSelectedEvent(null);
+             localStorage.removeItem('selectedEventId');
+             return;
+        }
+
         setSelectedEvent(null);
-        if (view !== 'admin') setView('scanner');
+        setView('scanner');
         setLockedSector(null);
         setActiveSectors([]);
         setIsSectorSelectionStep(false);
@@ -420,11 +432,6 @@ const App: React.FC = () => {
         cooldownRef.current = true;
         setTimeout(() => { cooldownRef.current = false; }, 2000);
         const eventId = selectedEvent.id;
-        
-        // ... (Keep existing Scan Logic mostly identical, just ensure db/event exists)
-        
-        // [LOGIC OMITTED FOR BREVITY - IT IS IDENTICAL TO PREVIOUS VERSION]
-        // RE-INSERTING CORE SCAN LOGIC TO ENSURE FUNCTIONALITY
         
         // --- ONLINE VALIDATION ---
         if (validationMode !== 'OFFLINE') {
@@ -711,7 +718,7 @@ const App: React.FC = () => {
                          {selectedEvent && (
                              <button onClick={() => setView('scanner')} className={`p-2 rounded-full transition-colors ${view === 'scanner' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><QrCodeIcon className="w-6 h-6" /></button>
                          )}
-                         <button onClick={() => setView('admin')} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><CogIcon className="w-6 h-6" /></button>
+                         <button onClick={handleAdminRequest} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><CogIcon className="w-6 h-6" /></button>
                          <button onClick={handleLogout} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>
                     </div>
                 </header>
