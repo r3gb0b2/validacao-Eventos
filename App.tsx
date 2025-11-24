@@ -63,6 +63,14 @@ const App: React.FC = () => {
 
     const cooldownRef = useRef<boolean>(false);
     
+    // REF for Selected Sector to ensure Scanner always sees the latest value without stale closures
+    const selectedSectorRef = useRef<SectorFilter>('All');
+    
+    // Update ref whenever state changes
+    useEffect(() => {
+        selectedSectorRef.current = selectedSector;
+    }, [selectedSector]);
+
     // Get current device ID
     const deviceId = useMemo(() => getDeviceId(), []);
 
@@ -326,6 +334,9 @@ const App: React.FC = () => {
         if (cooldownRef.current || !db || !selectedEvent) return;
         resetInactivityTimer();
 
+        // Retrieve the CURRENT selected sector from ref to avoid stale closures
+        const currentSelectedSector = selectedSectorRef.current;
+
         cooldownRef.current = true;
         setTimeout(() => { cooldownRef.current = false; }, 2000);
 
@@ -502,9 +513,12 @@ const App: React.FC = () => {
                                 const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
                                 
                                 // SECTOR VALIDATION LOGIC FOR ONLINE API
+                                const sectorLower = sector.toLowerCase();
+                                const currentTabLower = currentSelectedSector.toLowerCase();
+
                                 // 1. Global Check (Active Sectors from Setup)
                                 if (activeSectors.length > 0) {
-                                    const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === sector.toLowerCase());
+                                    const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === sectorLower);
                                     if (!isAllowed) {
                                          showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é do setor "${sector}".`);
                                          await addDoc(collection(db, 'events', eventId, 'scans'), {
@@ -518,9 +532,9 @@ const App: React.FC = () => {
                                     }
                                 }
 
-                                // 2. Local Check (Active Tab Selection)
-                                if (selectedSector !== 'All' && sector.toLowerCase() !== selectedSector.toLowerCase()) {
-                                    showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${selectedSector}). Ingresso é: ${sector}`);
+                                // 2. Local Check (Active Tab Selection via REF)
+                                if (currentSelectedSector !== 'All' && sectorLower !== currentTabLower) {
+                                    showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${currentSelectedSector}). Ingresso é: ${sector}`);
                                     await addDoc(collection(db, 'events', eventId, 'scans'), {
                                         ticketId: foundCode,
                                         status: 'WRONG_SECTOR',
@@ -594,16 +608,22 @@ const App: React.FC = () => {
         }
 
         // 1. Global Sector Check
-        if (activeSectors.length > 0 && !activeSectors.includes(ticket.sector)) {
-            const message = `Setor incorreto! Ingresso é do setor "${ticket.sector}".`;
-            showScanResult('WRONG_SECTOR', message);
-            await logScan('WRONG_SECTOR', ticket.sector);
-            return;
+        const ticketSectorLower = ticket.sector.trim().toLowerCase();
+        
+        if (activeSectors.length > 0) {
+            const isAllowed = activeSectors.some(s => s.trim().toLowerCase() === ticketSectorLower);
+            if (!isAllowed) {
+                const message = `Setor incorreto! Ingresso é do setor "${ticket.sector}".`;
+                showScanResult('WRONG_SECTOR', message);
+                await logScan('WRONG_SECTOR', ticket.sector);
+                return;
+            }
         }
 
-        // 2. Local Tab Check (If a specific tab is selected)
-        if (selectedSector !== 'All' && ticket.sector !== selectedSector) {
-             const message = `Setor incorreto! Filtro ativo: "${selectedSector}". Ingresso é do setor: "${ticket.sector}".`;
+        // 2. Local Tab Check (If a specific tab is selected) - USING REF
+        const currentTabLower = currentSelectedSector.toLowerCase();
+        if (currentSelectedSector !== 'All' && ticketSectorLower !== currentTabLower) {
+             const message = `Setor incorreto! Filtro ativo: "${currentSelectedSector}". Ingresso é do setor: "${ticket.sector}".`;
              showScanResult('WRONG_SECTOR', message);
              await logScan('WRONG_SECTOR', ticket.sector);
              return;
@@ -632,7 +652,7 @@ const App: React.FC = () => {
             console.error("Failed to update ticket status:", error);
             showScanResult('ERROR', 'Falha ao atualizar o banco de dados. Tente novamente.');
         }
-    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId, selectedSector]);
+    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, onlineSheetUrl, deviceId]); // selectedSector removed from dep array, using ref instead
     
     const handleManualSubmit = () => {
         if (!manualCode.trim()) return;
