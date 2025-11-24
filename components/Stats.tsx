@@ -1,30 +1,36 @@
 
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { Ticket } from '../types';
+import { Ticket, SectorGroup } from '../types';
 import { TableCellsIcon, FunnelIcon, PlusCircleIcon, TrashIcon, CogIcon } from './Icons';
 
 interface StatsProps {
   allTickets: Ticket[];
   sectorNames: string[];
+  // New props for controlled mode
+  viewMode: 'raw' | 'grouped';
+  onViewModeChange?: (mode: 'raw' | 'grouped') => void;
+  groups: SectorGroup[];
+  onGroupsChange?: (groups: SectorGroup[]) => void;
+  isReadOnly?: boolean; // If true, hides controls
 }
 
-interface SectorGroup {
-    id: string;
-    name: string;
-    includedSectors: string[];
-}
-
-const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
-    // --- STATE ---
-    const [viewMode, setViewMode] = useState<'raw' | 'grouped'>('raw');
+const Stats: React.FC<StatsProps> = ({ 
+    allTickets = [], 
+    sectorNames = [], 
+    viewMode, 
+    onViewModeChange, 
+    groups, 
+    onGroupsChange,
+    isReadOnly = false 
+}) => {
+    // --- LOCAL STATE (UI Only) ---
     const [isConfiguringGroups, setIsConfiguringGroups] = useState(false);
-    const [customGroups, setCustomGroups] = useState<SectorGroup[]>([]);
     
     // Config Form State
     const [newGroupName, setNewGroupName] = useState('');
     const [newGroupSectors, setNewGroupSectors] = useState<string[]>([]);
 
-    // Filter State (for displaying specific data, works on top of grouping)
+    // Filter State (UI Only - Viewer can filter locally if they want, or we can hide it too. Usually filtering is fine for viewers)
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const filterRef = useRef<HTMLDivElement>(null);
@@ -32,25 +38,9 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
     // Initialize selected sectors when sectorNames changes
     useEffect(() => {
         if (sectorNames.length > 0) {
-            // Default select all
             setSelectedSectors(sectorNames);
         }
     }, [sectorNames]);
-
-    // Load Groups from LocalStorage on mount
-    useEffect(() => {
-        const saved = localStorage.getItem('stats_sector_groups');
-        if (saved) {
-            try {
-                setCustomGroups(JSON.parse(saved));
-            } catch (e) { console.error("Failed to load groups", e); }
-        }
-    }, []);
-
-    // Save Groups to LocalStorage
-    useEffect(() => {
-        localStorage.setItem('stats_sector_groups', JSON.stringify(customGroups));
-    }, [customGroups]);
 
     // Close filter dropdown on outside click
     useEffect(() => {
@@ -95,14 +85,18 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
             includedSectors: newGroupSectors
         };
 
-        setCustomGroups([...customGroups, newGroup]);
+        if (onGroupsChange) {
+            onGroupsChange([...groups, newGroup]);
+        }
         setNewGroupName('');
         setNewGroupSectors([]);
     };
 
     const handleDeleteGroup = (id: string) => {
         if (confirm("Excluir este grupo?")) {
-            setCustomGroups(customGroups.filter(g => g.id !== id));
+            if (onGroupsChange) {
+                onGroupsChange(groups.filter(g => g.id !== id));
+            }
         }
     };
 
@@ -116,11 +110,10 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
 
     // --- STATS CALCULATION ---
 
-    // 1. Calculate General Stats (KPIs) based on SELECTED filters (ignoring grouping mode, just raw filter)
+    // 1. Calculate General Stats (KPIs) based on SELECTED filters
     const generalStats = useMemo(() => {
         if (!allTickets) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
         
-        // Filter tickets that belong to the selected sectors (from the filter dropdown)
         const filteredTickets = allTickets.filter(t => {
             if (!t.sector) return false;
             const ticketSectorNorm = normalize(t.sector);
@@ -142,7 +135,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
         // If Grouped Mode is ON
         if (viewMode === 'grouped') {
             // Process Groups first
-            customGroups.forEach(group => {
+            groups.forEach(group => {
                 let groupTotal = 0;
                 let groupScanned = 0;
                 
@@ -177,8 +170,6 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
             : sectorNames.filter(s => !handledSectors.has(normalize(s)));
 
         sectorsToProcess.forEach(sectorName => {
-             // Only if selected in filter (or if we want to show everything regardless of filter in the table? 
-             // Usually table follows filter. Let's make table follow filter)
              if (!selectedSectors.includes(sectorName)) return;
 
              let total = 0;
@@ -199,14 +190,8 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
              };
         });
         
-        // Filter out groups that might have 0 tickets if desired, or keep them.
-        // Let's keep groups visible even if empty so user knows they exist.
-        // But for individual sectors, we only added those in `sectorNames`.
-
-        // Convert to array
         let result = Object.values(statsMap);
         
-        // Sort: Groups first, then alphabetical sectors
         result.sort((a, b) => {
             if (a.isGroup && !b.isGroup) return -1;
             if (!a.isGroup && b.isGroup) return 1;
@@ -215,7 +200,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
 
         return result;
 
-    }, [allTickets, sectorNames, viewMode, customGroups, selectedSectors]);
+    }, [allTickets, sectorNames, viewMode, groups, selectedSectors]);
 
   return (
     <div className="space-y-6">
@@ -251,34 +236,38 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                     {/* View Mode Toggle */}
-                    <div className="bg-gray-700 p-1 rounded-lg flex text-sm font-bold">
-                        <button 
-                            onClick={() => setViewMode('raw')}
-                            className={`px-3 py-1 rounded transition-colors ${viewMode === 'raw' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-                        >
-                            Detalhado
-                        </button>
-                        <button 
-                            onClick={() => setViewMode('grouped')}
-                            className={`px-3 py-1 rounded transition-colors ${viewMode === 'grouped' ? 'bg-orange-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
-                        >
-                            Agrupado
-                        </button>
-                    </div>
+                     {/* View Mode Toggle - ONLY IF NOT READ ONLY */}
+                    {!isReadOnly && onViewModeChange && (
+                        <div className="bg-gray-700 p-1 rounded-lg flex text-sm font-bold">
+                            <button 
+                                onClick={() => onViewModeChange('raw')}
+                                className={`px-3 py-1 rounded transition-colors ${viewMode === 'raw' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                            >
+                                Detalhado
+                            </button>
+                            <button 
+                                onClick={() => onViewModeChange('grouped')}
+                                className={`px-3 py-1 rounded transition-colors ${viewMode === 'grouped' ? 'bg-orange-600 text-white shadow' : 'text-gray-400 hover:text-white'}`}
+                            >
+                                Agrupado
+                            </button>
+                        </div>
+                    )}
 
-                    {/* Manage Groups Button */}
-                    <button 
-                        onClick={() => setIsConfiguringGroups(!isConfiguringGroups)}
-                        className={`flex items-center px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
-                            isConfiguringGroups ? 'bg-gray-600 text-white border-gray-500' : 'bg-gray-800 text-gray-300 border-gray-600 hover:bg-gray-700'
-                        }`}
-                    >
-                        <CogIcon className="w-4 h-4 mr-2" />
-                        {isConfiguringGroups ? 'Fechar Configuração' : 'Gerenciar Grupos'}
-                    </button>
+                    {/* Manage Groups Button - ONLY IF NOT READ ONLY */}
+                    {!isReadOnly && onGroupsChange && (
+                        <button 
+                            onClick={() => setIsConfiguringGroups(!isConfiguringGroups)}
+                            className={`flex items-center px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                                isConfiguringGroups ? 'bg-gray-600 text-white border-gray-500' : 'bg-gray-800 text-gray-300 border-gray-600 hover:bg-gray-700'
+                            }`}
+                        >
+                            <CogIcon className="w-4 h-4 mr-2" />
+                            {isConfiguringGroups ? 'Fechar Configuração' : 'Gerenciar Grupos'}
+                        </button>
+                    )}
 
-                    {/* Filter Button */}
+                    {/* Filter Button - Allowed for Public View too (local filter) */}
                     <div className="relative" ref={filterRef}>
                         <button 
                             onClick={() => setIsFilterOpen(!isFilterOpen)}
@@ -316,8 +305,8 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
                 </div>
             </div>
 
-            {/* GROUP CONFIGURATION UI */}
-            {isConfiguringGroups && (
+            {/* GROUP CONFIGURATION UI - ONLY IF NOT READ ONLY */}
+            {isConfiguringGroups && !isReadOnly && (
                 <div className="mt-4 p-4 bg-gray-700/50 rounded-lg border border-gray-600 animate-fade-in">
                     <h4 className="font-bold text-white mb-3">Criar/Editar Grupos de Setores</h4>
                     
@@ -362,12 +351,12 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
 
                     {/* List of Existing Groups */}
                     <div className="border-t border-gray-600 pt-4">
-                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({customGroups.length})</h5>
-                        {customGroups.length === 0 ? (
+                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({groups.length})</h5>
+                        {groups.length === 0 ? (
                             <p className="text-xs text-gray-500 italic">Nenhum grupo criado ainda.</p>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                {customGroups.map(group => (
+                                {groups.map(group => (
                                     <div key={group.id} className="bg-gray-800 p-3 rounded border border-gray-600 flex justify-between items-start">
                                         <div>
                                             <p className="font-bold text-orange-400 text-sm">{group.name}</p>

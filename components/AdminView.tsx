@@ -1,13 +1,6 @@
 
-
-
-
-
-
-
-
 import React, { useState, useEffect, useMemo } from 'react';
-import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User } from '../types';
+import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorGroup } from '../types';
 import Stats from './Stats';
 import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
@@ -85,6 +78,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [buyerSearchResults, setBuyerSearchResults] = useState<any[]>([]);
     const [showScanner, setShowScanner] = useState(false); // Scanner Modal State
 
+    // Stats Configuration State
+    const [statsViewMode, setStatsViewMode] = useState<'raw' | 'grouped'>('raw');
+    const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
+
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
     const canManageEvents = currentUser?.role === 'ADMIN' || isSuperAdmin;
 
@@ -94,6 +91,48 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setIgnoreExisting(true);
         }
     }, [isSuperAdmin]);
+
+    // Load Stats Configuration (Groups & ViewMode) from Firestore
+    useEffect(() => {
+        if (!selectedEvent) return;
+        const loadStatsConfig = async () => {
+            try {
+                const docRef = doc(db, 'events', selectedEvent.id, 'settings', 'stats');
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data();
+                    if (data.viewMode) setStatsViewMode(data.viewMode);
+                    if (data.groups) setSectorGroups(data.groups);
+                } else {
+                    // Try to migrate from localStorage if Firestore is empty (for backward compatibility)
+                    const savedLocal = localStorage.getItem('stats_sector_groups');
+                    if (savedLocal) {
+                        const localGroups = JSON.parse(savedLocal);
+                        setSectorGroups(localGroups);
+                        // Save to Firestore to complete migration
+                         await setDoc(docRef, { viewMode: 'raw', groups: localGroups }, { merge: true });
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load stats config", e);
+            }
+        };
+        loadStatsConfig();
+    }, [db, selectedEvent]);
+
+    const handleStatsViewModeChange = async (mode: 'raw' | 'grouped') => {
+        setStatsViewMode(mode);
+        if (selectedEvent) {
+             await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), { viewMode: mode }, { merge: true });
+        }
+    };
+
+    const handleSectorGroupsChange = async (newGroups: SectorGroup[]) => {
+        setSectorGroups(newGroups);
+        if (selectedEvent) {
+             await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), { groups: newGroups }, { merge: true });
+        }
+    };
 
     // Load validation settings (Online Mode)
     useEffect(() => {
@@ -247,116 +286,116 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const analyticsData: AnalyticsData = useMemo(() => {
-        // Safeguard: Filter valid scans with valid timestamps
-        const validScans = scanHistory.filter(s => s.status === 'VALID' && s.timestamp && !isNaN(Number(s.timestamp)));
-        if (validScans.length === 0) {
-            return {
-                timeBuckets: [],
-                firstAccess: null,
-                lastAccess: null,
-                peak: { time: '-', count: 0 },
-            };
-        }
-
-        validScans.sort((a, b) => a.timestamp - b.timestamp);
-
-        const firstAccess = validScans[0].timestamp;
-        const lastAccess = validScans[validScans.length - 1].timestamp;
-
-        const buckets = new Map<string, { [sector: string]: number }>();
-        const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
-
-        // Load groups locally to use in chart aggregation if needed
-        // Note: Ideally groups should be passed down or stored in a higher context, 
-        // but for now we'll calculate basic buckets here. 
-        // Stats.tsx handles group aggregation for the table, but the Chart also needs group awareness?
-        // Let's assume groups are stored in localStorage for now as implemented previously.
-        let localGroups: any[] = [];
         try {
-             const saved = localStorage.getItem('stats_sector_groups');
-             if (saved) localGroups = JSON.parse(saved);
-        } catch(e) {}
-
-        for (const scan of validScans) {
-            const bucketStart = Math.floor(scan.timestamp / INTERVAL_MS) * INTERVAL_MS;
-            const date = new Date(bucketStart);
-            if (isNaN(date.getTime())) continue;
-
-            const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-            
-            if (!buckets.has(key)) {
-                // Initial counts: use groups if available
-                const initialCounts: Record<string, number> = {};
-                
-                // Add group names
-                localGroups.forEach(g => initialCounts[g.name] = 0);
-                
-                // Add individual sectors that are NOT in any group
-                sectorNames.forEach(name => {
-                    const isGrouped = localGroups.some(g => g.includedSectors.some((s: string) => s.toLowerCase() === name.toLowerCase()));
-                    if (!isGrouped) initialCounts[name] = 0;
-                });
-                
-                buckets.set(key, initialCounts);
+            // Safeguard: Filter valid scans with valid timestamps
+            const validScans = scanHistory.filter(s => s && s.status === 'VALID' && s.timestamp && !isNaN(Number(s.timestamp)));
+            if (validScans.length === 0) {
+                return {
+                    timeBuckets: [],
+                    firstAccess: null,
+                    lastAccess: null,
+                    peak: { time: '-', count: 0 },
+                };
             }
-            
-            const currentBucket = buckets.get(key)!;
-            const sector = scan.ticketSector || 'Desconhecido';
-            
-            // Find which key to increment (Group Name or Sector Name)
-            const group = localGroups.find(g => g.includedSectors.some((s: string) => s.toLowerCase() === sector.toLowerCase()));
-            const targetKey = group ? group.name : sector;
-            
-            if (currentBucket[targetKey] !== undefined) {
-                 currentBucket[targetKey]++;
-            } else {
-                // If it's a sector that appeared but wasn't in sectorNames init list
-                currentBucket[targetKey] = 1;
-            }
-        }
 
-        let peak = { time: '-', count: 0 };
+            validScans.sort((a, b) => a.timestamp - b.timestamp);
 
-        const timeBuckets = Array.from(buckets.entries())
-            .map(([time, counts]) => {
-                const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
-                if (total > peak.count) {
-                    peak = { time, count: total };
+            const firstAccess = validScans[0].timestamp;
+            const lastAccess = validScans[validScans.length - 1].timestamp;
+
+            const buckets = new Map<string, { [sector: string]: number }>();
+            const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
+
+            for (const scan of validScans) {
+                const bucketStart = Math.floor(scan.timestamp / INTERVAL_MS) * INTERVAL_MS;
+                const date = new Date(bucketStart);
+                if (isNaN(date.getTime())) continue;
+
+                const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+                
+                if (!buckets.has(key)) {
+                    // Initial counts: use groups if in grouped mode
+                    const initialCounts: Record<string, number> = {};
+                    
+                    if (statsViewMode === 'grouped') {
+                         sectorGroups.forEach(g => initialCounts[g.name] = 0);
+                         // Also add sectors not in any group
+                         sectorNames.forEach(name => {
+                            const isGrouped = sectorGroups.some(g => g.includedSectors.some(s => s.toLowerCase() === name.toLowerCase()));
+                            if (!isGrouped) initialCounts[name] = 0;
+                        });
+                    } else {
+                         sectorNames.forEach(name => initialCounts[name] = 0);
+                    }
+                    
+                    buckets.set(key, initialCounts);
                 }
-                return { time, counts, total };
-            })
-            .sort((a, b) => a.time.localeCompare(b.time));
+                
+                const currentBucket = buckets.get(key)!;
+                const sector = scan.ticketSector || 'Desconhecido';
+                
+                let targetKey = sector;
+                if (statsViewMode === 'grouped') {
+                     const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
+                     if (group) targetKey = group.name;
+                }
+                
+                if (currentBucket[targetKey] !== undefined) {
+                     currentBucket[targetKey]++;
+                } else {
+                    currentBucket[targetKey] = 1;
+                }
+            }
 
-        return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [scanHistory, sectorNames]);
+            let peak = { time: '-', count: 0 };
+
+            const timeBuckets = Array.from(buckets.entries())
+                .map(([time, counts]) => {
+                    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+                    if (total > peak.count) {
+                        peak = { time, count: total };
+                    }
+                    return { time, counts, total };
+                })
+                .sort((a, b) => a.time.localeCompare(b.time));
+
+            return { timeBuckets, firstAccess, lastAccess, peak };
+        } catch (e) {
+            console.error("Analytics Calculation Error", e);
+            return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
+        }
+    }, [scanHistory, sectorNames, statsViewMode, sectorGroups]);
 
      const pieChartData = useMemo(() => {
-        const usedTickets = allTickets.filter(t => t.status === 'USED');
-        if (usedTickets.length === 0) return [];
-        
-        let localGroups: any[] = [];
         try {
-             const saved = localStorage.getItem('stats_sector_groups');
-             if (saved) localGroups = JSON.parse(saved);
-        } catch(e) {}
-        
-        const counts: Record<string, number> = {};
-        
-        usedTickets.forEach(t => {
-            const sector = t.sector || 'Desconhecido';
-            const group = localGroups.find(g => g.includedSectors.some((s: string) => s.toLowerCase() === sector.toLowerCase()));
-            const targetKey = group ? group.name : sector;
-            counts[targetKey] = (counts[targetKey] || 0) + 1;
-        });
+            const usedTickets = allTickets.filter(t => t && t.status === 'USED');
+            if (usedTickets.length === 0) return [];
+            
+            const counts: Record<string, number> = {};
+            
+            usedTickets.forEach(t => {
+                const sector = t.sector || 'Desconhecido';
+                let targetKey = sector;
+                
+                if (statsViewMode === 'grouped') {
+                    const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
+                    if (group) targetKey = group.name;
+                }
+                counts[targetKey] = (counts[targetKey] || 0) + 1;
+            });
 
-        const keys = Object.keys(counts);
-        return keys.map((name, index) => ({
-            name: name,
-            value: counts[name],
-            color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
-        })).filter(item => item.value > 0);
+            const keys = Object.keys(counts);
+            return keys.map((name, index) => ({
+                name: name,
+                value: counts[name],
+                color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
+            })).filter(item => item.value > 0);
+        } catch (e) {
+            console.error("Pie Chart Calculation Error", e);
+            return [];
+        }
 
-    }, [allTickets, sectorNames]);
+    }, [allTickets, sectorNames, statsViewMode, sectorGroups]);
 
     const handleSaveSectorNames = async () => {
         if (editableSectorNames.some(name => name.trim() === '')) {
@@ -1302,7 +1341,18 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 </button>
                             </div>
                         </div>
-                        <Stats allTickets={allTickets} sectorNames={sectorNames} />
+                        
+                        {/* PASS CONTROLLED PROPS TO STATS */}
+                        <Stats 
+                            allTickets={allTickets} 
+                            sectorNames={sectorNames} 
+                            viewMode={statsViewMode}
+                            onViewModeChange={handleStatsViewModeChange}
+                            groups={sectorGroups}
+                            onGroupsChange={handleSectorGroupsChange}
+                            isReadOnly={false}
+                        />
+
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                              <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                                 <PieChart data={pieChartData} title="Distribuição por Setor"/>
@@ -1447,6 +1497,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                  if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* SETTINGS CONTENT (VALIDATION, SECTOR NAMES, ETC) - UNCHANGED BUT RE-RENDERED */}
                         <div className="space-y-6">
                              <div className="bg-gray-800 p-5 rounded-lg border border-orange-500/30 shadow-lg">
                                 <h3 className="text-lg font-bold mb-4 text-orange-400 flex items-center"><CogIcon className="w-5 h-5 mr-2" /> Modo de Operação (Validação)</h3>

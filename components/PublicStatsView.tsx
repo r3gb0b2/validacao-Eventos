@@ -1,8 +1,11 @@
-import React, { useMemo } from 'react';
-import { Event, Ticket, DisplayableScanLog, AnalyticsData } from '../types';
+
+import React, { useMemo, useState, useEffect } from 'react';
+import { Event, Ticket, DisplayableScanLog, AnalyticsData, SectorGroup } from '../types';
 import Stats from './Stats';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
+import { getDb } from '../firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
 
 interface PublicStatsViewProps {
   event: Event;
@@ -16,11 +19,32 @@ const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316',
 
 const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [], scanHistory = [], sectorNames = [], isLoading = false }) => {
     
-    // Logic extracted from AdminView to calculate charts data
+    // Config State (Loaded from Firestore to match Admin view)
+    const [viewMode, setViewMode] = useState<'raw' | 'grouped'>('raw');
+    const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
+
+    useEffect(() => {
+        if (!event) return;
+        const loadConfig = async () => {
+             try {
+                 const db = await getDb();
+                 const docRef = doc(db, 'events', event.id, 'settings', 'stats');
+                 const snap = await getDoc(docRef);
+                 if (snap.exists()) {
+                     const data = snap.data();
+                     if (data.viewMode) setViewMode(data.viewMode);
+                     if (data.groups) setSectorGroups(data.groups);
+                 }
+             } catch(e) { console.error("Error loading public stats config", e); }
+        };
+        loadConfig();
+    }, [event]);
+
+    // Logic extracted from AdminView to calculate charts data with GROUPING support
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        // Safeguard: Filter out valid scans with invalid timestamps which crash Safari
+        // Safeguard: Filter out valid scans with invalid timestamps
         const validScans = (scanHistory || []).filter(s => 
             s && 
             s.status === 'VALID' && 
@@ -43,24 +67,44 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         const lastAccess = validScans[validScans.length - 1].timestamp;
 
         const buckets = new Map<string, { [sector: string]: number }>();
-        const TEN_MINUTES_MS = 10 * 60 * 1000;
+        const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
 
         for (const scan of validScans) {
-            const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
+            const bucketStart = Math.floor(scan.timestamp / INTERVAL_MS) * INTERVAL_MS;
             const date = new Date(bucketStart);
             
-            // Skip invalid dates to prevent crash
             if (isNaN(date.getTime())) continue;
 
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
-                const initialCounts = (sectorNames || []).reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
+                // Initial counts logic respecting grouping
+                const initialCounts: Record<string, number> = {};
+                 if (viewMode === 'grouped') {
+                     sectorGroups.forEach(g => initialCounts[g.name] = 0);
+                     // Also add sectors not in any group
+                     sectorNames.forEach(name => {
+                        const isGrouped = sectorGroups.some(g => g.includedSectors.some(s => s.toLowerCase() === name.toLowerCase()));
+                        if (!isGrouped) initialCounts[name] = 0;
+                    });
+                } else {
+                     sectorNames.forEach(name => initialCounts[name] = 0);
+                }
                 buckets.set(key, initialCounts);
             }
             const currentBucket = buckets.get(key)!;
-            if (scan.ticketSector) {
-                currentBucket[scan.ticketSector] = (currentBucket[scan.ticketSector] || 0) + 1;
+            
+            const sector = scan.ticketSector || 'Desconhecido';
+            let targetKey = sector;
+            if (viewMode === 'grouped') {
+                 const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
+                 if (group) targetKey = group.name;
+            }
+
+            if (currentBucket[targetKey] !== undefined) {
+                 currentBucket[targetKey]++;
+            } else {
+                currentBucket[targetKey] = 1;
             }
         }
 
@@ -77,24 +121,33 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             .sort((a, b) => a.time.localeCompare(b.time));
 
         return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [scanHistory, sectorNames, isLoading]);
+    }, [scanHistory, sectorNames, isLoading, viewMode, sectorGroups]);
 
      const pieChartData = useMemo(() => {
         if (isLoading) return [];
         const usedTickets = (allTickets || []).filter(t => t && t.status === 'USED');
         if (usedTickets.length === 0) return [];
         
-        const counts = (sectorNames || []).reduce((acc, sector) => {
-            acc[sector] = usedTickets.filter(t => t.sector === sector).length;
-            return acc;
-        }, {} as Record<string, number>);
+        const counts: Record<string, number> = {};
 
-        return (sectorNames || []).map((name, index) => ({
+        usedTickets.forEach(t => {
+            const sector = t.sector || 'Desconhecido';
+            let targetKey = sector;
+            
+            if (viewMode === 'grouped') {
+                const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
+                if (group) targetKey = group.name;
+            }
+            counts[targetKey] = (counts[targetKey] || 0) + 1;
+        });
+
+        const keys = Object.keys(counts);
+        return keys.map((name, index) => ({
             name: name,
-            value: counts[name] || 0,
+            value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
-    }, [allTickets, sectorNames, isLoading]);
+    }, [allTickets, sectorNames, isLoading, viewMode, sectorGroups]);
 
     // Helper for safe date formatting
     const safeFormatTime = (timestamp: number | null) => {
@@ -144,8 +197,14 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                     </div>
                 ) : (
                     <div className="space-y-6 animate-fade-in">
-                        {/* Main Stats Component (KPIs + Table) */}
-                        <Stats allTickets={allTickets || []} sectorNames={sectorNames || []} />
+                        {/* Main Stats Component (KPIs + Table) - Read Only Mode with Config from DB */}
+                        <Stats 
+                            allTickets={allTickets || []} 
+                            sectorNames={sectorNames || []}
+                            viewMode={viewMode}
+                            groups={sectorGroups}
+                            isReadOnly={true}
+                        />
 
                         {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

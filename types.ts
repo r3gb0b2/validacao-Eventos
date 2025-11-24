@@ -66,3 +66,9 @@ export interface User {
     role: UserRole;
     allowedEvents: string[]; // Array of Event IDs
 }
+
+export interface SectorGroup {
+    id: string;
+    name: string;
+    includedSectors: string[];
+}
