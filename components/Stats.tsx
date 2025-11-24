@@ -1,39 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { Ticket } from '../types';
+import React, { useState } from 'react';
+import { Ticket, SectorGroup } from '../types';
 import { CogIcon, TrashIcon, PlusCircleIcon } from './Icons';
 
 interface StatsProps {
   allTickets: Ticket[];
   sectorNames: string[];
+  groups: SectorGroup[];
+  onUpdateGroups?: (groups: SectorGroup[]) => void;
 }
 
-interface SectorGroup {
-  name: string;
-  sectors: string[];
-}
-
-const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
+const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [], groups = [], onUpdateGroups }) => {
     const [isConfiguringGroups, setIsConfiguringGroups] = useState(false);
-    const [groups, setGroups] = useState<SectorGroup[]>([]);
     const [newGroupName, setNewGroupName] = useState('');
     const [selectedSectorsForGroup, setSelectedSectorsForGroup] = useState<string[]>([]);
-
-    // Load groups from local storage on mount
-    useEffect(() => {
-        try {
-            const savedGroups = localStorage.getItem('stats_sector_groups');
-            if (savedGroups) {
-                setGroups(JSON.parse(savedGroups));
-            }
-        } catch (e) {
-            console.error("Failed to load sector groups", e);
-        }
-    }, []);
-
-    // Save groups to local storage whenever they change
-    useEffect(() => {
-        localStorage.setItem('stats_sector_groups', JSON.stringify(groups));
-    }, [groups]);
 
     const calculateStats = (filter?: string | string[]) => {
         if (!allTickets) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
@@ -66,6 +45,7 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
     const individualSectors = safeSectorNames.filter(s => !sectorsInGroups.has(s));
 
     const handleCreateGroup = () => {
+        if (!onUpdateGroups) return;
         if (!newGroupName.trim()) {
             alert("Digite um nome para o grupo.");
             return;
@@ -80,16 +60,17 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
             sectors: selectedSectorsForGroup
         };
 
-        setGroups([...groups, newGroup]);
+        onUpdateGroups([...groups, newGroup]);
         setNewGroupName('');
         setSelectedSectorsForGroup([]);
     };
 
     const handleDeleteGroup = (index: number) => {
+        if (!onUpdateGroups) return;
         if (confirm("Desagrupar estes setores?")) {
             const newGroups = [...groups];
             newGroups.splice(index, 1);
-            setGroups(newGroups);
+            onUpdateGroups(newGroups);
         }
     };
 
@@ -130,17 +111,19 @@ const Stats: React.FC<StatsProps> = ({ allTickets = [], sectorNames = [] }) => {
       <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-700">
           <div className="bg-gray-700 px-6 py-4 border-b border-gray-600 flex justify-between items-center">
               <h3 className="text-lg font-bold text-white">Detalhamento por Setor</h3>
-              <button 
-                onClick={() => setIsConfiguringGroups(!isConfiguringGroups)}
-                className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-600 transition"
-                title="Configurar Agrupamento de Setores"
-              >
-                  <CogIcon className="w-5 h-5" />
-              </button>
+              {onUpdateGroups && (
+                <button 
+                    onClick={() => setIsConfiguringGroups(!isConfiguringGroups)}
+                    className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-600 transition"
+                    title="Configurar Agrupamento de Setores"
+                >
+                    <CogIcon className="w-5 h-5" />
+                </button>
+              )}
           </div>
 
           {/* Group Configuration Panel */}
-          {isConfiguringGroups && (
+          {isConfiguringGroups && onUpdateGroups && (
               <div className="bg-gray-900/50 p-4 border-b border-gray-600 animate-fade-in">
                   <h4 className="text-sm font-bold text-orange-400 mb-3">Criar Novo Grupo de Visualização</h4>
                   <div className="flex flex-col space-y-3">

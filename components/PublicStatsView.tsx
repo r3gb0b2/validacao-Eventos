@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { Event, Ticket, DisplayableScanLog, AnalyticsData } from '../types';
+import React, { useMemo, useEffect, useState } from 'react';
+import { Event, Ticket, DisplayableScanLog, AnalyticsData, SectorGroup } from '../types';
 import Stats from './Stats';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
@@ -12,13 +12,42 @@ interface PublicStatsViewProps {
   isLoading?: boolean;
 }
 
-const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
+const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981', '#f43f5e', '#84cc16', '#a855f7', '#06b6d4'];
 
 const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [], scanHistory = [], sectorNames = [], isLoading = false }) => {
     
+    // Load Sector Groups from LocalStorage (Read Only)
+    const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
+    
+    useEffect(() => {
+        try {
+            const savedGroups = localStorage.getItem('stats_sector_groups');
+            if (savedGroups) {
+                setSectorGroups(JSON.parse(savedGroups));
+            }
+        } catch (e) {
+            console.error("Failed to load sector groups", e);
+        }
+    }, []);
+
     // Logic extracted from AdminView to calculate charts data
-    const analyticsData: AnalyticsData = useMemo(() => {
-        if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
+    const chartDisplayData = useMemo(() => {
+        if (isLoading) {
+             return {
+                analyticsData: { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } },
+                displaySectors: [],
+                pieData: []
+            };
+        }
+
+        // Prepare list of display names (Groups + Ungrouped Sectors)
+        const groupedSectorNames = new Set<string>();
+        sectorGroups.forEach(g => g.sectors.forEach(s => groupedSectorNames.add(s)));
+        
+        const displaySectors = [
+            ...sectorGroups.map(g => g.name),
+            ...(sectorNames || []).filter(s => !groupedSectorNames.has(s))
+        ];
 
         // Safeguard: Filter out valid scans with invalid timestamps which crash Safari
         const validScans = (scanHistory || []).filter(s => 
@@ -30,10 +59,14 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
 
         if (validScans.length === 0) {
             return {
-                timeBuckets: [],
-                firstAccess: null,
-                lastAccess: null,
-                peak: { time: '-', count: 0 },
+                analyticsData: {
+                    timeBuckets: [],
+                    firstAccess: null,
+                    lastAccess: null,
+                    peak: { time: '-', count: 0 },
+                },
+                displaySectors,
+                pieData: []
             };
         }
 
@@ -43,10 +76,10 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         const lastAccess = validScans[validScans.length - 1].timestamp;
 
         const buckets = new Map<string, { [sector: string]: number }>();
-        const TEN_MINUTES_MS = 10 * 60 * 1000;
+        const THIRTY_MINUTES_MS = 30 * 60 * 1000;
 
         for (const scan of validScans) {
-            const bucketStart = Math.floor(scan.timestamp / TEN_MINUTES_MS) * TEN_MINUTES_MS;
+            const bucketStart = Math.floor(scan.timestamp / THIRTY_MINUTES_MS) * THIRTY_MINUTES_MS;
             const date = new Date(bucketStart);
             
             // Skip invalid dates to prevent crash
@@ -55,12 +88,20 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
-                const initialCounts = (sectorNames || []).reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
+                const initialCounts = displaySectors.reduce((acc, name) => ({ ...acc, [name]: 0 }), {});
                 buckets.set(key, initialCounts);
             }
             const currentBucket = buckets.get(key)!;
-            if (scan.ticketSector) {
-                currentBucket[scan.ticketSector] = (currentBucket[scan.ticketSector] || 0) + 1;
+            
+            // Determine if sector belongs to a group
+            let sectorKey = scan.ticketSector;
+            const foundGroup = sectorGroups.find(g => g.sectors.includes(scan.ticketSector));
+            if (foundGroup) {
+                sectorKey = foundGroup.name;
+            }
+
+            if (currentBucket[sectorKey] !== undefined) {
+                currentBucket[sectorKey]++;
             }
         }
 
@@ -76,25 +117,32 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             })
             .sort((a, b) => a.time.localeCompare(b.time));
 
-        return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [scanHistory, sectorNames, isLoading]);
-
-     const pieChartData = useMemo(() => {
-        if (isLoading) return [];
+        // PIE CHART DATA (Grouped)
         const usedTickets = (allTickets || []).filter(t => t && t.status === 'USED');
-        if (usedTickets.length === 0) return [];
+        const counts: Record<string, number> = {};
         
-        const counts = (sectorNames || []).reduce((acc, sector) => {
-            acc[sector] = usedTickets.filter(t => t.sector === sector).length;
-            return acc;
-        }, {} as Record<string, number>);
+        displaySectors.forEach(ds => counts[ds] = 0);
+        
+        usedTickets.forEach(t => {
+            let key = t.sector;
+            const grp = sectorGroups.find(g => g.sectors.includes(t.sector));
+            if (grp) key = grp.name;
+            
+            if (counts[key] !== undefined) counts[key]++;
+        });
 
-        return (sectorNames || []).map((name, index) => ({
+        const pieData = displaySectors.map((name, index) => ({
             name: name,
-            value: counts[name] || 0,
+            value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
-    }, [allTickets, sectorNames, isLoading]);
+
+        return { 
+            analyticsData: { timeBuckets, firstAccess, lastAccess, peak },
+            displaySectors,
+            pieData
+        };
+    }, [scanHistory, sectorNames, isLoading, sectorGroups, allTickets]);
 
     // Helper for safe date formatting
     const safeFormatTime = (timestamp: number | null) => {
@@ -145,15 +193,20 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                 ) : (
                     <div className="space-y-6 animate-fade-in">
                         {/* Main Stats Component (KPIs + Table) */}
-                        <Stats allTickets={allTickets || []} sectorNames={sectorNames || []} />
+                        <Stats 
+                            allTickets={allTickets || []} 
+                            sectorNames={sectorNames || []} 
+                            groups={sectorGroups}
+                            // Public View does not allow editing groups
+                        />
 
                         {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <PieChart data={pieChartData} title="Distribuição por Setor"/>
+                                <PieChart data={chartDisplayData.pieData} title="Distribuição por Setor"/>
                             </div>
                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames || []} />
+                                <AnalyticsChart data={chartDisplayData.analyticsData} sectorNames={chartDisplayData.displaySectors} />
                             </div>
                         </div>
 
@@ -164,19 +217,19 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
                                     <p className="text-2xl font-bold text-green-400">
-                                        {safeFormatTime(analyticsData.firstAccess)}
+                                        {safeFormatTime(chartDisplayData.analyticsData.firstAccess)}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
                                     <p className="text-2xl font-bold text-red-400">
-                                        {safeFormatTime(analyticsData.lastAccess)}
+                                        {safeFormatTime(chartDisplayData.analyticsData.lastAccess)}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
-                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({analyticsData.peak.time})</p>
+                                    <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Horário de Pico ({chartDisplayData.analyticsData.peak.time})</p>
                                     <p className="text-2xl font-bold text-orange-400">
-                                        {analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
+                                        {chartDisplayData.analyticsData.peak.count} <span className="text-sm font-normal text-gray-400">entradas</span>
                                     </p>
                                 </div>
                             </div>

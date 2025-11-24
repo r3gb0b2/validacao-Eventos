@@ -56,3 +56,8 @@ export interface AnalyticsData {
         count: number;
     };
 }
+
+export interface SectorGroup {
+  name: string;
+  sectors: string[];
+}
