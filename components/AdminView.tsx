@@ -439,41 +439,72 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const newSectors = new Set<string>();
             const ownerName = buyer.name || buyer.buyer_name || '';
 
+            // Helper to find property case-insensitive or specific keys
+            const findProp = (obj: any, keys: string[]) => {
+                if (!obj) return null;
+                for (const k of keys) {
+                    if (obj[k]) return obj[k];
+                }
+                return null;
+            };
+
+            const CODE_KEYS = ['code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'ticket_id', 'id'];
+            const SECTOR_KEYS = ['sector', 'sector_name', 'section', 'product_name', 'category', 'setor'];
+            const STATUS_KEYS = ['status', 'state'];
+            const DATE_KEYS = ['updated_at', 'checked_in_at', 'used_at', 'created_at'];
+
             buyer.tickets.forEach((t: any) => {
-                // ROBUST EXTRACTION STRATEGY
-                // 1. Try to find code in the item itself (t)
-                // 2. Try to find code in t.ticket (nested object)
-                // 3. Fallback to ID if present and looks like a code
-                
-                const nestedTicket = t.ticket || {};
-                
-                // Search for code everywhere
-                let code = t.code || t.qr_code || t.ticket_code || t.uuid || t.barcode;
-                if (!code) {
-                    code = nestedTicket.code || nestedTicket.qr_code || nestedTicket.ticket_code || nestedTicket.uuid || nestedTicket.barcode;
+                // Objects to inspect in order of priority (root, nested ticket, pivot data)
+                const candidates = [
+                    t, 
+                    t.ticket, 
+                    t.data, 
+                    t.pivot
+                ].filter(c => c && typeof c === 'object');
+
+                let code = null;
+                let sector = null;
+                let statusRaw = null;
+                let originalId = null;
+                let dateStr = null;
+
+                // 1. Find Code & Original ID
+                for (const candidate of candidates) {
+                    if (!code) code = findProp(candidate, CODE_KEYS);
+                    if (candidate.id) originalId = candidate.id; // Capture ID if present
                 }
-                
-                // Fallback to 'id' if specific code fields are missing
-                if (!code) {
-                    // Avoid small numeric IDs if they seem like DB IDs, but accept them if nothing else
-                    if (t.id) code = t.id; 
-                    else if (nestedTicket.id) code = nestedTicket.id;
-                }
-                
-                // Search for sector everywhere
-                let sector = t.sector || t.sector_name || t.section || t.product_name;
-                if (!sector || sector === 'Geral') {
-                     sector = nestedTicket.sector || nestedTicket.sector_name || nestedTicket.section || nestedTicket.product_name || 'Geral';
-                }
-                if (typeof sector === 'object' && sector && sector.name) sector = sector.name;
-                
-                // Search for status
-                let statusRaw = t.status || nestedTicket.status;
-                
-                // Search for Original ID (for Sync)
-                let originalId = t.id || nestedTicket.id;
 
                 if (code) {
+                    // 2. Find Sector (if not found with code)
+                    for (const candidate of candidates) {
+                        const s = findProp(candidate, SECTOR_KEYS);
+                        if (s) {
+                             sector = s;
+                             break;
+                        }
+                    }
+                    
+                    // 3. Find Status
+                    for (const candidate of candidates) {
+                        const st = findProp(candidate, STATUS_KEYS);
+                        if (st) {
+                            statusRaw = st;
+                            break;
+                        }
+                    }
+
+                    // 4. Find Date
+                    for (const candidate of candidates) {
+                        const d = findProp(candidate, DATE_KEYS);
+                        if (d) {
+                            dateStr = d;
+                            break;
+                        }
+                    }
+
+                    // Normalize Sector Object
+                    if (typeof sector === 'object' && sector && (sector as any).name) sector = (sector as any).name;
+
                     const idStr = String(code).trim();
                     const sectorStr = String(sector || 'Geral').trim();
                     
@@ -485,17 +516,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         status: (statusRaw === 'used' || statusRaw === 'checked_in') ? 'USED' : 'AVAILABLE',
                         details: { 
                             ownerName: ownerName,
-                            originalId: originalId // Capture numeric ID if available for sync
+                            originalId: originalId || idStr
                         },
                     };
                     
                     // Handle Used At date
-                    let dateStr = t.updated_at || t.checked_in_at || nestedTicket.updated_at || nestedTicket.checked_in_at;
                     if ((ticketData.status === 'USED') && dateStr) {
                          // Fix date format for Safari if needed
                          dateStr = String(dateStr).replace(' ', 'T');
                          const ts = new Date(dateStr).getTime();
                          if (!isNaN(ts)) ticketData.usedAt = ts;
+                         else ticketData.usedAt = Date.now();
                     }
                     
                     ticketsToSave.push(ticketData);
@@ -509,7 +540,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             });
 
             if (ticketsToSave.length === 0) {
-                console.log("Debug Buyer Tickets:", buyer.tickets); // Debug log
+                console.log("Debug Buyer Tickets Data:", buyer.tickets);
                 alert("Nenhum código de ingresso válido encontrado para importar. (Erro de Formato)");
                 return;
             }
