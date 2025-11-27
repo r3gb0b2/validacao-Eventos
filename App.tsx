@@ -38,6 +38,7 @@ const App: React.FC = () => {
     const [allTickets, setAllTickets] = useState<Ticket[]>([]);
     const [scanHistory, setScanHistory] = useState<DisplayableScanLog[]>([]);
     const [sectorNames, setSectorNames] = useState<string[]>(['Pista', 'VIP']);
+    const [hiddenSectors, setHiddenSectors] = useState<string[]>([]); // New state for hidden sectors
     
     // Auth State
     const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -81,6 +82,11 @@ const App: React.FC = () => {
     const ticketsMap = useMemo(() => {
         return new Map(allTickets.map(ticket => [ticket.id, ticket]));
     }, [allTickets]);
+
+    // Derived state for visible sectors (UI only)
+    const visibleSectors = useMemo(() => {
+        return sectorNames.filter(s => !hiddenSectors.includes(s));
+    }, [sectorNames, hiddenSectors]);
 
     const resetInactivityTimer = useCallback(() => {
         if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
@@ -197,6 +203,7 @@ const App: React.FC = () => {
             setAllTickets([]);
             setScanHistory([]);
             setSectorNames(['Pista', 'VIP']);
+            setHiddenSectors([]);
             setValidationMode('OFFLINE');
             setTicketsLoaded(false);
             return;
@@ -211,6 +218,14 @@ const App: React.FC = () => {
                 if (docSnap.id === 'main') {
                     if (data.sectorNames?.length > 0) setSectorNames(data.sectorNames);
                     else setSectorNames(['Pista', 'VIP']);
+                    
+                    // Load hidden sectors
+                    if (data.hiddenSectors && Array.isArray(data.hiddenSectors)) {
+                        setHiddenSectors(data.hiddenSectors);
+                    } else {
+                        setHiddenSectors([]);
+                    }
+
                 } else if (docSnap.id === 'validation') {
                     if (data.mode) setValidationMode(data.mode);
                     if (data.apiEndpoints) setOnlineApiEndpoints(data.apiEndpoints);
@@ -372,8 +387,21 @@ const App: React.FC = () => {
     // Filter events for the logged in user
     const getAllowedEvents = () => {
         if (!currentUser) return events; 
-        if (currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'ADMIN') return events;
+        if (currentUser.role === 'SUPER_ADMIN' || (currentUser.role === 'ADMIN' && currentUser.username === 'Administrador')) return events; // Allow master admin
         return events.filter(e => currentUser.allowedEvents.includes(e.id));
+    };
+
+    const handleUpdateCurrentUser = (updatedData: Partial<User>) => {
+        if (currentUser) {
+            const newUser = { ...currentUser, ...updatedData };
+            setCurrentUser(newUser);
+            // Update storage if using master session or db session
+            const stored = localStorage.getItem('auth_user_session');
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                localStorage.setItem('auth_user_session', JSON.stringify({ ...parsed, ...updatedData }));
+            }
+        }
     };
 
     // --- NAVIGATION ---
@@ -432,9 +460,12 @@ const App: React.FC = () => {
         setIsSectorSelectionStep(false);
     };
 
-    const handleUpdateSectorNames = async (newNames: string[]) => {
+    const handleUpdateSectorNames = async (newNames: string[], newHiddenSectors?: string[]) => {
         if (!db || !selectedEvent) return;
-        await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: newNames }, { merge: true });
+        const payload: any = { sectorNames: newNames };
+        if (newHiddenSectors) payload.hiddenSectors = newHiddenSectors;
+        
+        await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), payload, { merge: true });
     };
     
     const showScanResult = (status: ScanStatus, message: string) => {
@@ -686,7 +717,7 @@ const App: React.FC = () => {
                     <button onClick={() => { setActiveSectors([]); handleConfirmSectorSelection(); }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-lg text-lg mb-6">Validar Todos (Geral)</button>
                     <p className="text-center text-gray-500 mb-4 text-xs">OU SELECIONE:</p>
                     <div className="grid grid-cols-2 gap-4">
-                        {sectorNames.map(sector => (
+                        {visibleSectors.map(sector => (
                             <button key={sector} onClick={() => handleToggleSectorSelection(sector)} className={`font-semibold py-3 rounded-lg border ${activeSectors.includes(sector) ? 'bg-orange-500 text-white border-orange-400' : 'bg-gray-700 text-white border-gray-600'}`}>{sector}</button>
                         ))}
                     </div>
@@ -702,7 +733,7 @@ const App: React.FC = () => {
         );
     }
 
-    const TABS: SectorFilter[] = ['All', ...sectorNames];
+    const TABS: SectorFilter[] = ['All', ...visibleSectors];
     const myScans = scanHistory.filter(s => s.deviceId === deviceId);
     const displayHistory = (lockedSector && activeSectors.length > 0)
         ? myScans.filter(s => activeSectors.includes(s.ticketSector) || s.status === 'INVALID' || s.status === 'WRONG_SECTOR')
@@ -776,7 +807,7 @@ const App: React.FC = () => {
                                 </div>
                             </div>
                             <div className="space-y-6">
-                                 <TicketList tickets={displayHistory} sectorNames={sectorNames} hideTabs={!!lockedSector} />
+                                 <TicketList tickets={displayHistory} sectorNames={visibleSectors} hideTabs={!!lockedSector} />
                              </div>
                         </div>
                     ) : (
@@ -787,10 +818,12 @@ const App: React.FC = () => {
                             allTickets={allTickets}
                             scanHistory={scanHistory}
                             sectorNames={sectorNames}
+                            hiddenSectors={hiddenSectors}
                             onUpdateSectorNames={handleUpdateSectorNames}
                             isOnline={isOnline}
                             onSelectEvent={handleAdminSelectEvent}
                             currentUser={currentUser}
+                            onUpdateCurrentUser={handleUpdateCurrentUser}
                         />
                     )}
                 </main>

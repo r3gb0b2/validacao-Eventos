@@ -19,10 +19,12 @@ interface AdminViewProps {
   allTickets: Ticket[];
   scanHistory: DisplayableScanLog[];
   sectorNames: string[];
-  onUpdateSectorNames: (newNames: string[]) => Promise<void>;
+  hiddenSectors?: string[];
+  onUpdateSectorNames: (newNames: string[], hiddenSectors?: string[]) => Promise<void>;
   isOnline: boolean;
   onSelectEvent: (event: Event) => void;
   currentUser: User | null; // Added current user prop
+  onUpdateCurrentUser?: (user: Partial<User>) => void;
 }
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
@@ -38,9 +40,10 @@ interface ImportPreset {
     eventId: string;
 }
 
-const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
+const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser, onUpdateCurrentUser }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search' | 'users'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
+    const [sectorVisibility, setSectorVisibility] = useState<boolean[]>([]); // Track visibility locally during edit
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState('');
@@ -195,7 +198,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     useEffect(() => {
         setEditableSectorNames(sectorNames);
-    }, [sectorNames]);
+        // Map visibility based on hiddenSectors prop
+        const visibility = sectorNames.map(name => !hiddenSectors.includes(name));
+        setSectorVisibility(visibility);
+    }, [sectorNames, hiddenSectors]);
 
     useEffect(() => {
         setRenameEventName(selectedEvent?.name ?? '');
@@ -404,8 +410,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
         setIsSavingSectors(true);
         try {
-            await onUpdateSectorNames(editableSectorNames);
-            alert('Nomes dos setores salvos com sucesso!');
+            // Build hidden list based on visibility map
+            const newHiddenSectors = editableSectorNames.filter((_, index) => !sectorVisibility[index]);
+            await onUpdateSectorNames(editableSectorNames, newHiddenSectors);
+            alert('Nomes dos setores e visibilidade salvos com sucesso!');
         } catch (error) {
             console.error("Failed to save sector names:", error);
             alert("Falha ao salvar nomes dos setores.");
@@ -420,8 +428,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setEditableSectorNames(updatedNames);
     };
 
+    const handleToggleSectorVisibility = (index: number) => {
+        const updatedVisibility = [...sectorVisibility];
+        updatedVisibility[index] = !updatedVisibility[index];
+        setSectorVisibility(updatedVisibility);
+    };
+
     const handleAddSector = () => {
         setEditableSectorNames([...editableSectorNames, `Novo Setor ${editableSectorNames.length + 1}`]);
+        setSectorVisibility([...sectorVisibility, true]); // New sectors default to visible
     };
 
     const handleRemoveSector = (indexToRemove: number) => {
@@ -436,6 +451,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
         }
         setEditableSectorNames(editableSectorNames.filter((_, index) => index !== indexToRemove));
+        setSectorVisibility(sectorVisibility.filter((_, index) => index !== indexToRemove));
     };
     
     const handleTicketCodeChange = (sector: string, codes: string) => {
@@ -1222,6 +1238,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         try {
             const eventRef = await addDoc(collection(db, 'events'), { name: newEventName.trim(), isHidden: false });
             await setDoc(doc(db, 'events', eventRef.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
+            
+            // Auto-grant permission to the creator if regular admin
+            if (currentUser && currentUser.role === 'ADMIN' && onUpdateCurrentUser) {
+                const newAllowed = [...(currentUser.allowedEvents || []), eventRef.id];
+                // Update in DB (assuming we can write to users if we are admin, or through cloud function ideally, but client-side restricted here)
+                try {
+                     if (currentUser.id.startsWith('admin_master')) {
+                         // Master admin session update local only as it's not in DB
+                         onUpdateCurrentUser({ allowedEvents: newAllowed });
+                     } else {
+                         await updateDoc(doc(db, 'users', currentUser.id), { allowedEvents: newAllowed });
+                         onUpdateCurrentUser({ allowedEvents: newAllowed });
+                     }
+                } catch(e) { console.error("Failed to self-grant permission", e); }
+            }
+
             alert(`Evento "${newEventName.trim()}" criado!`);
             setNewEventName('');
         } catch (error) { alert("Falha ao criar evento."); } finally { setIsLoading(false); }
@@ -1535,7 +1567,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                              </div>
                             <div className="bg-gray-800 p-5 rounded-lg shadow-lg">
                                 <h3 className="text-lg font-bold mb-3">Nomes dos Setores</h3>
-                                 <div className="space-y-3 mb-4">{editableSectorNames.map((name, index) => ( <div key={index} className="flex items-center space-x-2"> <input type="text" value={name} onChange={(e) => handleSectorNameChange(index, e.target.value)} className="flex-grow bg-gray-700 p-2 rounded border border-gray-600" /> <button onClick={() => handleRemoveSector(index)} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded disabled:bg-gray-500" disabled={editableSectorNames.length <= 1}>&times;</button> </div> ))}</div>
+                                 <div className="space-y-3 mb-4">
+                                     {editableSectorNames.map((name, index) => ( 
+                                         <div key={index} className="flex items-center space-x-2"> 
+                                            <input type="text" value={name} onChange={(e) => handleSectorNameChange(index, e.target.value)} className="flex-grow bg-gray-700 p-2 rounded border border-gray-600" /> 
+                                            <button onClick={() => handleToggleSectorVisibility(index)} className="p-2 text-gray-400 hover:text-white" title={sectorVisibility[index] ? "Visível na validação" : "Oculto na validação"}>
+                                                {sectorVisibility[index] ? <EyeIcon className="w-5 h-5 text-green-500"/> : <EyeSlashIcon className="w-5 h-5 text-gray-500"/>}
+                                            </button>
+                                            <button onClick={() => handleRemoveSector(index)} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded disabled:bg-gray-500" disabled={editableSectorNames.length <= 1}>&times;</button> 
+                                        </div> 
+                                    ))}
+                                </div>
                                 <div className="flex space-x-2"><button onClick={handleAddSector} className="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded font-bold text-sm">+ Setor</button><button onClick={handleSaveSectorNames} disabled={isSavingSectors || isLoading} className="flex-1 bg-orange-600 hover:bg-orange-700 py-2 rounded font-bold disabled:bg-gray-500 text-sm">Salvar</button></div>
                             </div>
                             {/* Manual Code Entry Block */}
