@@ -285,6 +285,8 @@ const App: React.FC = () => {
                     if (data.sheetUrl) setOnlineSheetUrl(data.sheetUrl);
                 }
             });
+        }, (error) => {
+            console.error("Settings snapshot error:", error);
         });
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
@@ -305,6 +307,10 @@ const App: React.FC = () => {
                 return ticket;
             });
             setAllTickets(ticketsData);
+            setTicketsLoaded(true);
+        }, (error) => {
+            console.error("Tickets snapshot error:", error);
+            // Ensure we stop loading state even on error so UI doesn't hang
             setTicketsLoaded(true);
         });
 
@@ -338,9 +344,20 @@ const App: React.FC = () => {
                 };
             });
             setScanHistory(historyData);
+        }, (error) => {
+            console.error("Scans snapshot error:", error);
         });
 
+        // Safety timer: If data takes too long (e.g. 15s), force loading to true to show what we have
+        const safetyTimer = setTimeout(() => {
+            setTicketsLoaded(prev => {
+                if (!prev) console.warn("Forcing tickets loaded state due to timeout.");
+                return true;
+            });
+        }, 15000);
+
         return () => {
+            clearTimeout(safetyTimer);
             ticketsUnsubscribe();
             scansUnsubscribe();
             settingsUnsubscribe();

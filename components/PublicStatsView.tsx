@@ -41,18 +41,20 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
     }, [event]);
 
     // Logic extracted from AdminView to calculate charts data with GROUPING support
+    // UPDATED: Now uses allTickets (looking for USED status) instead of just scanHistory
+    // This provides a full historical view, including imported usage data.
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        // Safeguard: Filter out valid scans with invalid timestamps
-        const validScans = (scanHistory || []).filter(s => 
-            s && 
-            s.status === 'VALID' && 
-            s.timestamp && 
-            !isNaN(Number(s.timestamp))
+        // 1. Extract valid used tickets with timestamps
+        const validUsedTickets = (allTickets || []).filter(t => 
+            t && 
+            t.status === 'USED' && 
+            t.usedAt && 
+            !isNaN(Number(t.usedAt))
         );
 
-        if (validScans.length === 0) {
+        if (validUsedTickets.length === 0) {
             return {
                 timeBuckets: [],
                 firstAccess: null,
@@ -61,16 +63,18 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             };
         }
 
-        validScans.sort((a, b) => a.timestamp - b.timestamp);
+        // Sort by usage time
+        validUsedTickets.sort((a, b) => (a.usedAt || 0) - (b.usedAt || 0));
 
-        const firstAccess = validScans[0].timestamp;
-        const lastAccess = validScans[validScans.length - 1].timestamp;
+        const firstAccess = validUsedTickets[0].usedAt || null;
+        const lastAccess = validUsedTickets[validUsedTickets.length - 1].usedAt || null;
 
         const buckets = new Map<string, { [sector: string]: number }>();
         const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
 
-        for (const scan of validScans) {
-            const bucketStart = Math.floor(scan.timestamp / INTERVAL_MS) * INTERVAL_MS;
+        for (const ticket of validUsedTickets) {
+            const ts = ticket.usedAt || 0;
+            const bucketStart = Math.floor(ts / INTERVAL_MS) * INTERVAL_MS;
             const date = new Date(bucketStart);
             
             if (isNaN(date.getTime())) continue;
@@ -94,7 +98,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             }
             const currentBucket = buckets.get(key)!;
             
-            const sector = scan.ticketSector || 'Desconhecido';
+            const sector = ticket.sector || 'Desconhecido';
             let targetKey = sector;
             if (viewMode === 'grouped') {
                  const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
@@ -121,7 +125,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             .sort((a, b) => a.time.localeCompare(b.time));
 
         return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [scanHistory, sectorNames, isLoading, viewMode, sectorGroups]);
+    }, [allTickets, sectorNames, isLoading, viewMode, sectorGroups]);
 
      const pieChartData = useMemo(() => {
         if (isLoading) return [];
@@ -209,8 +213,8 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                         {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <PieChart data={pieChartData} title="Distribuição por Setor"/>
-                            </div>
+                                    <PieChart data={pieChartData} title="Distribuição por Setor"/>
+                                </div>
                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                                 <AnalyticsChart data={analyticsData} sectorNames={sectorNames || []} />
                             </div>
