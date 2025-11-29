@@ -941,6 +941,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             return;
         }
 
+        const startTime = Date.now(); // Start Timer
         setIsLoading(true);
         setLoadingMessage('Iniciando...');
         
@@ -1164,10 +1165,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             }
 
+            // Calculate duration
+            const endTime = Date.now();
+            const durationMs = endTime - startTime;
+            const durationSeconds = (durationMs / 1000).toFixed(1);
+            let timeString = `${durationSeconds}s`;
+            if (durationMs > 60000) {
+                const minutes = Math.floor(durationMs / 60000);
+                const seconds = ((durationMs % 60000) / 1000).toFixed(0);
+                timeString = `${minutes}m ${seconds}s`;
+            }
+
             let msg = 'Processo concluído!\n';
             if (savedCount > 0) msg += `- ${savedCount} novos ingressos importados.\n`;
             else if (ticketsToSave.length === 0 && ticketsToUpdateStatus.length === 0) msg += `- Nenhum dado novo encontrado.\n`;
             if (updatedCount > 0) msg += `- ${updatedCount} ingressos marcados como utilizados.\n`;
+            msg += `\nTempo total: ${timeString}`; // Show total time
+
             alert(msg);
             
         } catch (error) {
