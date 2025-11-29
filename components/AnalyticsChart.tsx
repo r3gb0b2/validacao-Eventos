@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AnalyticsData } from '../types';
 
@@ -9,7 +10,7 @@ interface AnalyticsChartProps {
 const AnalyticsChart: React.FC<AnalyticsChartProps> = ({ data, sectorNames }) => {
   const { timeBuckets, peak } = data;
 
-  if (timeBuckets.length === 0) {
+  if (!timeBuckets || timeBuckets.length === 0) {
     return (
       <div className="text-center text-gray-400 py-10 bg-gray-800 rounded-lg">
         Ainda não há dados de validação para exibir no gráfico.
@@ -24,7 +25,7 @@ const AnalyticsChart: React.FC<AnalyticsChartProps> = ({ data, sectorNames }) =>
 
   return (
     <div className="w-full bg-gray-800 p-4 rounded-lg">
-      <h3 className="text-lg font-semibold text-white mb-4">Entradas a Cada 10 Minutos</h3>
+      <h3 className="text-lg font-semibold text-white mb-4">Entradas a Cada 30 Minutos</h3>
       <div className="flex items-end h-72 space-x-2 border-l-2 border-b-2 border-gray-600 pl-2 pb-1">
         {timeBuckets.map((bucket) => {
           const isPeak = bucket.time === peak.time;

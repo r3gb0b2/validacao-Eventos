@@ -19,7 +19,7 @@ const Stats: React.FC<StatsProps> = ({
     sectorNames = [], 
     viewMode, 
     onViewModeChange, 
-    groups, 
+    groups = [], 
     onGroupsChange,
     isReadOnly = false 
 }) => {
@@ -37,7 +37,7 @@ const Stats: React.FC<StatsProps> = ({
 
     // Initialize selected sectors when sectorNames changes
     useEffect(() => {
-        if (sectorNames.length > 0) {
+        if (Array.isArray(sectorNames) && sectorNames.length > 0) {
             setSelectedSectors(sectorNames);
         }
     }, [sectorNames]);
@@ -54,7 +54,7 @@ const Stats: React.FC<StatsProps> = ({
     }, []);
 
     // --- HELPERS ---
-    const normalize = (s: string) => s.trim().toLowerCase();
+    const normalize = (s: string) => (s || '').trim().toLowerCase();
 
     // Toggle a sector in the filter
     const toggleSectorFilter = (sector: string) => {
@@ -112,93 +112,108 @@ const Stats: React.FC<StatsProps> = ({
 
     // 1. Calculate General Stats (KPIs) based on SELECTED filters
     const generalStats = useMemo(() => {
-        if (!allTickets) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
-        
-        const filteredTickets = allTickets.filter(t => {
-            if (!t.sector) return false;
-            const ticketSectorNorm = normalize(t.sector);
-            return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
-        });
+        try {
+            if (!Array.isArray(allTickets)) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
+            
+            const filteredTickets = allTickets.filter(t => {
+                if (!t || !t.sector) return false;
+                const ticketSectorNorm = normalize(t.sector);
+                return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
+            });
 
-        const total = filteredTickets.length;
-        const scanned = filteredTickets.filter(t => t.status === 'USED').length;
-        const remaining = total - scanned;
-        const percentage = total > 0 ? ((scanned / total) * 100).toFixed(1) : '0.0';
-        return { total, scanned, remaining, percentage };
+            const total = filteredTickets.length;
+            const scanned = filteredTickets.filter(t => t.status === 'USED').length;
+            const remaining = total - scanned;
+            const percentage = total > 0 ? ((scanned / total) * 100).toFixed(1) : '0.0';
+            return { total, scanned, remaining, percentage };
+        } catch (e) {
+            console.error("General Stats Calc Error", e);
+            return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
+        }
     }, [allTickets, selectedSectors]);
 
     // 2. Calculate Table Data (Rows)
     const tableData = useMemo(() => {
-        const statsMap: Record<string, { total: number; scanned: number; displayName: string; isGroup?: boolean; subSectors?: string[] }> = {};
-        const handledSectors = new Set<string>();
+        try {
+            const statsMap: Record<string, { total: number; scanned: number; displayName: string; isGroup?: boolean; subSectors?: string[] }> = {};
+            const handledSectors = new Set<string>();
+            const safeGroups = Array.isArray(groups) ? groups : [];
+            const safeAllTickets = Array.isArray(allTickets) ? allTickets : [];
+            const safeSectorNames = Array.isArray(sectorNames) ? sectorNames : [];
 
-        // If Grouped Mode is ON
-        if (viewMode === 'grouped') {
-            // Process Groups first
-            groups.forEach(group => {
-                let groupTotal = 0;
-                let groupScanned = 0;
-                
-                // Find tickets belonging to any sector in this group
-                allTickets.forEach(ticket => {
-                    const tSector = normalize(ticket.sector || 'Desconhecido');
-                    const isInGroup = group.includedSectors.some(s => normalize(s) === tSector);
+            // If Grouped Mode is ON
+            if (viewMode === 'grouped') {
+                // Process Groups first
+                safeGroups.forEach(group => {
+                    if (!group || !Array.isArray(group.includedSectors)) return;
+                    let groupTotal = 0;
+                    let groupScanned = 0;
                     
-                    if (isInGroup) {
-                        groupTotal++;
-                        if (ticket.status === 'USED') groupScanned++;
-                    }
+                    // Find tickets belonging to any sector in this group
+                    safeAllTickets.forEach(ticket => {
+                        if (!ticket) return;
+                        const tSector = normalize(ticket.sector || 'Desconhecido');
+                        const isInGroup = group.includedSectors.some(s => normalize(s) === tSector);
+                        
+                        if (isInGroup) {
+                            groupTotal++;
+                            if (ticket.status === 'USED') groupScanned++;
+                        }
+                    });
+
+                    // Mark these sectors as handled
+                    group.includedSectors.forEach(s => handledSectors.add(normalize(s)));
+
+                    // Add to stats map
+                    statsMap[`group_${group.id}`] = {
+                        total: groupTotal,
+                        scanned: groupScanned,
+                        displayName: group.name,
+                        isGroup: true,
+                        subSectors: group.includedSectors
+                    };
                 });
+            }
 
-                // Mark these sectors as handled
-                group.includedSectors.forEach(s => handledSectors.add(normalize(s)));
+            // Process Individual Sectors (Either all of them if raw mode, or remaining ones if grouped mode)
+            const sectorsToProcess = viewMode === 'raw' 
+                ? safeSectorNames 
+                : safeSectorNames.filter(s => !handledSectors.has(normalize(s)));
 
-                // Add to stats map
-                statsMap[`group_${group.id}`] = {
-                    total: groupTotal,
-                    scanned: groupScanned,
-                    displayName: group.name,
-                    isGroup: true,
-                    subSectors: group.includedSectors
-                };
+            sectorsToProcess.forEach(sectorName => {
+                 if (!selectedSectors.includes(sectorName)) return;
+
+                 let total = 0;
+                 let scanned = 0;
+
+                 safeAllTickets.forEach(ticket => {
+                     if (ticket && normalize(ticket.sector) === normalize(sectorName)) {
+                         total++;
+                         if (ticket.status === 'USED') scanned++;
+                     }
+                 });
+
+                 statsMap[`sector_${sectorName}`] = {
+                     total,
+                     scanned,
+                     displayName: sectorName,
+                     isGroup: false
+                 };
             });
+            
+            let result = Object.values(statsMap);
+            
+            result.sort((a, b) => {
+                if (a.isGroup && !b.isGroup) return -1;
+                if (!a.isGroup && b.isGroup) return 1;
+                return a.displayName.localeCompare(b.displayName);
+            });
+
+            return result;
+        } catch (e) {
+            console.error("Table Stats Calc Error", e);
+            return [];
         }
-
-        // Process Individual Sectors (Either all of them if raw mode, or remaining ones if grouped mode)
-        const sectorsToProcess = viewMode === 'raw' 
-            ? sectorNames 
-            : sectorNames.filter(s => !handledSectors.has(normalize(s)));
-
-        sectorsToProcess.forEach(sectorName => {
-             if (!selectedSectors.includes(sectorName)) return;
-
-             let total = 0;
-             let scanned = 0;
-
-             allTickets.forEach(ticket => {
-                 if (normalize(ticket.sector) === normalize(sectorName)) {
-                     total++;
-                     if (ticket.status === 'USED') scanned++;
-                 }
-             });
-
-             statsMap[`sector_${sectorName}`] = {
-                 total,
-                 scanned,
-                 displayName: sectorName,
-                 isGroup: false
-             };
-        });
-        
-        let result = Object.values(statsMap);
-        
-        result.sort((a, b) => {
-            if (a.isGroup && !b.isGroup) return -1;
-            if (!a.isGroup && b.isGroup) return 1;
-            return a.displayName.localeCompare(b.displayName);
-        });
-
-        return result;
 
     }, [allTickets, sectorNames, viewMode, groups, selectedSectors]);
 
@@ -351,8 +366,8 @@ const Stats: React.FC<StatsProps> = ({
 
                     {/* List of Existing Groups */}
                     <div className="border-t border-gray-600 pt-4">
-                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({groups.length})</h5>
-                        {groups.length === 0 ? (
+                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({Array.isArray(groups) ? groups.length : 0})</h5>
+                        {(!groups || groups.length === 0) ? (
                             <p className="text-xs text-gray-500 italic">Nenhum grupo criado ainda.</p>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">

@@ -105,15 +105,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 if (snap.exists()) {
                     const data = snap.data();
                     if (data.viewMode) setStatsViewMode(data.viewMode);
-                    if (data.groups) setSectorGroups(data.groups);
+                    if (data.groups && Array.isArray(data.groups)) {
+                        setSectorGroups(data.groups);
+                    } else {
+                        setSectorGroups([]);
+                    }
                 } else {
                     // Try to migrate from localStorage if Firestore is empty (for backward compatibility)
                     const savedLocal = localStorage.getItem('stats_sector_groups');
                     if (savedLocal) {
-                        const localGroups = JSON.parse(savedLocal);
-                        setSectorGroups(localGroups);
-                        // Save to Firestore to complete migration
-                         await setDoc(docRef, { viewMode: 'raw', groups: localGroups }, { merge: true });
+                        try {
+                            const localGroups = JSON.parse(savedLocal);
+                            if (Array.isArray(localGroups)) {
+                                setSectorGroups(localGroups);
+                                // Save to Firestore to complete migration
+                                await setDoc(docRef, { viewMode: 'raw', groups: localGroups }, { merge: true });
+                            }
+                        } catch(e) { /* ignore invalid local data */ }
                     }
                 }
             } catch (e) {
@@ -294,6 +302,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const analyticsData: AnalyticsData = useMemo(() => {
         try {
             // Safeguard: Filter valid scans with valid timestamps
+            if (!Array.isArray(scanHistory)) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
+
             const validScans = scanHistory.filter(s => s && s.status === 'VALID' && s.timestamp && !isNaN(Number(s.timestamp)));
             if (validScans.length === 0) {
                 return {
@@ -323,7 +333,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     // Initial counts: use groups if in grouped mode
                     const initialCounts: Record<string, number> = {};
                     
-                    if (statsViewMode === 'grouped') {
+                    if (statsViewMode === 'grouped' && Array.isArray(sectorGroups)) {
                          sectorGroups.forEach(g => initialCounts[g.name] = 0);
                          // Also add sectors not in any group
                          sectorNames.forEach(name => {
@@ -341,7 +351,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const sector = scan.ticketSector || 'Desconhecido';
                 
                 let targetKey = sector;
-                if (statsViewMode === 'grouped') {
+                if (statsViewMode === 'grouped' && Array.isArray(sectorGroups)) {
                      const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
                      if (group) targetKey = group.name;
                 }
@@ -374,6 +384,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
      const pieChartData = useMemo(() => {
         try {
+            if (!Array.isArray(allTickets)) return [];
             const usedTickets = allTickets.filter(t => t && t.status === 'USED');
             if (usedTickets.length === 0) return [];
             
@@ -383,7 +394,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const sector = t.sector || 'Desconhecido';
                 let targetKey = sector;
                 
-                if (statsViewMode === 'grouped') {
+                if (statsViewMode === 'grouped' && Array.isArray(sectorGroups)) {
                     const group = sectorGroups.find(g => g.includedSectors.some(s => s.toLowerCase() === sector.toLowerCase()));
                     if (group) targetKey = group.name;
                 }
