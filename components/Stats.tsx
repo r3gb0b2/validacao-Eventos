@@ -35,6 +35,10 @@ const Stats: React.FC<StatsProps> = ({
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const filterRef = useRef<HTMLDivElement>(null);
 
+    // Safety wrappers for rendering
+    const safeSectorNames = Array.isArray(sectorNames) ? sectorNames : [];
+    const safeGroups = Array.isArray(groups) ? groups : [];
+
     // Initialize selected sectors when sectorNames changes
     useEffect(() => {
         if (Array.isArray(sectorNames) && sectorNames.length > 0) {
@@ -65,7 +69,7 @@ const Stats: React.FC<StatsProps> = ({
         }
     };
     
-    const handleSelectAll = () => setSelectedSectors(sectorNames);
+    const handleSelectAll = () => setSelectedSectors(safeSectorNames);
     const handleClearAll = () => setSelectedSectors([]);
 
     // --- GROUP MANAGEMENT ---
@@ -86,7 +90,7 @@ const Stats: React.FC<StatsProps> = ({
         };
 
         if (onGroupsChange) {
-            onGroupsChange([...groups, newGroup]);
+            onGroupsChange([...safeGroups, newGroup]);
         }
         setNewGroupName('');
         setNewGroupSectors([]);
@@ -95,7 +99,7 @@ const Stats: React.FC<StatsProps> = ({
     const handleDeleteGroup = (id: string) => {
         if (confirm("Excluir este grupo?")) {
             if (onGroupsChange) {
-                onGroupsChange(groups.filter(g => g.id !== id));
+                onGroupsChange(safeGroups.filter(g => g.id !== id));
             }
         }
     };
@@ -137,10 +141,8 @@ const Stats: React.FC<StatsProps> = ({
         try {
             const statsMap: Record<string, { total: number; scanned: number; displayName: string; isGroup?: boolean; subSectors?: string[] }> = {};
             const handledSectors = new Set<string>();
-            const safeGroups = Array.isArray(groups) ? groups : [];
             const safeAllTickets = Array.isArray(allTickets) ? allTickets : [];
-            const safeSectorNames = Array.isArray(sectorNames) ? sectorNames : [];
-
+            
             // If Grouped Mode is ON
             if (viewMode === 'grouped') {
                 // Process Groups first
@@ -215,7 +217,7 @@ const Stats: React.FC<StatsProps> = ({
             return [];
         }
 
-    }, [allTickets, sectorNames, viewMode, groups, selectedSectors]);
+    }, [allTickets, safeSectorNames, viewMode, safeGroups, selectedSectors]);
 
   return (
     <div className="space-y-6">
@@ -287,7 +289,7 @@ const Stats: React.FC<StatsProps> = ({
                         <button 
                             onClick={() => setIsFilterOpen(!isFilterOpen)}
                             className={`flex items-center px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
-                                selectedSectors.length < sectorNames.length 
+                                selectedSectors.length < safeSectorNames.length 
                                 ? 'bg-blue-600 text-white border-blue-500' 
                                 : 'bg-gray-800 text-gray-300 border-gray-600 hover:border-gray-500'
                             }`}
@@ -302,7 +304,7 @@ const Stats: React.FC<StatsProps> = ({
                                     <button onClick={handleClearAll} className="text-xs text-red-400 hover:text-red-300">Nenhum</button>
                                 </div>
                                 <div className="max-h-60 overflow-y-auto custom-scrollbar space-y-1">
-                                    {sectorNames.map(sector => (
+                                    {safeSectorNames.map(sector => (
                                         <label key={sector} className="flex items-center p-2 rounded hover:bg-gray-700 cursor-pointer">
                                             <input 
                                                 type="checkbox" 
@@ -340,7 +342,7 @@ const Stats: React.FC<StatsProps> = ({
                         <div className="flex-[2]">
                             <label className="text-xs text-gray-400 mb-1 block">Selecione os Setores para agrupar:</label>
                             <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-gray-900 rounded border border-gray-600">
-                                {sectorNames.map(sector => (
+                                {safeSectorNames.map(sector => (
                                     <label key={sector} className="inline-flex items-center bg-gray-800 px-2 py-1 rounded cursor-pointer hover:bg-gray-700 border border-gray-700">
                                         <input 
                                             type="checkbox"
@@ -366,17 +368,17 @@ const Stats: React.FC<StatsProps> = ({
 
                     {/* List of Existing Groups */}
                     <div className="border-t border-gray-600 pt-4">
-                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({Array.isArray(groups) ? groups.length : 0})</h5>
-                        {(!groups || groups.length === 0) ? (
+                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({Array.isArray(safeGroups) ? safeGroups.length : 0})</h5>
+                        {(!safeGroups || safeGroups.length === 0) ? (
                             <p className="text-xs text-gray-500 italic">Nenhum grupo criado ainda.</p>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                {groups.map(group => (
+                                {safeGroups.map(group => (
                                     <div key={group.id} className="bg-gray-800 p-3 rounded border border-gray-600 flex justify-between items-start">
                                         <div>
                                             <p className="font-bold text-orange-400 text-sm">{group.name}</p>
                                             <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-                                                {group.includedSectors.join(', ')}
+                                                {Array.isArray(group.includedSectors) ? group.includedSectors.join(', ') : 'Sem setores'}
                                             </p>
                                         </div>
                                         <button 
