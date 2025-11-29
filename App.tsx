@@ -260,11 +260,25 @@ const App: React.FC = () => {
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
             const historyData = snapshot.docs.map(doc => {
                 const data = doc.data();
+                let timestamp = Date.now();
+                
+                // Robust timestamp parsing
+                try {
+                    if (data.timestamp && typeof data.timestamp.toMillis === 'function') {
+                        timestamp = data.timestamp.toMillis();
+                    } else if (typeof data.timestamp === 'number') {
+                        timestamp = data.timestamp;
+                    } else if (typeof data.timestamp === 'string') {
+                        const parsed = Date.parse(data.timestamp);
+                        if (!isNaN(parsed)) timestamp = parsed;
+                    }
+                } catch (e) { console.error("Error parsing scan timestamp", e); }
+
                 return {
                     id: doc.id,
                     ticketId: data.ticketId,
                     status: data.status,
-                    timestamp: (data.timestamp as Timestamp)?.toMillis() || Date.now(),
+                    timestamp: timestamp,
                     ticketSector: data.sector ?? 'Desconhecido',
                     isPending: doc.metadata.hasPendingWrites,
                     deviceId: data.deviceId,
