@@ -177,6 +177,40 @@ const App: React.FC = () => {
         if (db && firebaseStatus === 'success') checkUrlParams();
     }, [db, firebaseStatus]);
 
+    // Restore Operator State on Refresh
+    useEffect(() => {
+        if (selectedEvent && view === 'scanner') {
+            const savedFlow = localStorage.getItem('flow_step');
+            
+            if (savedFlow === 'SCANNING') {
+                const savedSectors = localStorage.getItem('active_sectors');
+                const savedLocked = localStorage.getItem('locked_sector');
+                
+                if (savedSectors) {
+                    try {
+                        const parsedSectors = JSON.parse(savedSectors);
+                        setActiveSectors(parsedSectors);
+                    } catch (e) {}
+                }
+                
+                if (savedLocked) {
+                    setLockedSector(savedLocked === 'null' ? null : savedLocked);
+                    // Also restore selectedSector if locked is set
+                    if (savedLocked === 'Multiple' || (savedLocked !== 'null' && savedLocked)) {
+                         setSelectedSector('All');
+                    }
+                }
+
+                setIsOperatorStep(false);
+                setIsSectorSelectionStep(false);
+            } else if (savedFlow === 'SECTOR_SELECT') {
+                setIsOperatorStep(false);
+                setIsSectorSelectionStep(true);
+            }
+        }
+    }, [selectedEvent, view]);
+
+
     // Fetch Events
     useEffect(() => {
         if (!db || view === 'public_stats') return;
@@ -190,8 +224,26 @@ const App: React.FC = () => {
             setEvents(eventsData);
             
             if (selectedEvent && !eventsData.some(e => e.id === selectedEvent.id)) {
-                setSelectedEvent(null);
-                localStorage.removeItem('selectedEventId');
+                // If the selected event was deleted or lost access
+                // BUT we verify persistence before nullifying to allow refresh
+                const storedId = localStorage.getItem('selectedEventId');
+                if (!storedId || storedId !== selectedEvent.id) {
+                     setSelectedEvent(null);
+                     localStorage.removeItem('selectedEventId');
+                }
+            } else if (!selectedEvent) {
+                // Try restore from LocalStorage on load
+                const storedId = localStorage.getItem('selectedEventId');
+                if (storedId) {
+                    const ev = eventsData.find(e => e.id === storedId);
+                    if (ev) {
+                        setSelectedEvent(ev);
+                        // Default to operator step if no specific flow saved
+                        if (!localStorage.getItem('flow_step')) {
+                             setIsOperatorStep(true);
+                        }
+                    }
+                }
             }
         });
         return () => eventsUnsubscribe();
@@ -388,6 +440,10 @@ const App: React.FC = () => {
         setLockedSector(null);
         setActiveSectors([]);
         localStorage.removeItem('selectedEventId');
+        // Clear flow state
+        localStorage.removeItem('flow_step');
+        localStorage.removeItem('active_sectors');
+        localStorage.removeItem('locked_sector');
     };
 
     const handleAdminRequest = () => {
@@ -426,6 +482,10 @@ const App: React.FC = () => {
         setLockedSector(null);
         setActiveSectors([]);
         localStorage.setItem('selectedEventId', event.id);
+        // Clear old flow state on new event selection
+        localStorage.removeItem('flow_step');
+        localStorage.removeItem('active_sectors');
+        localStorage.removeItem('locked_sector');
     };
 
     const handleAdminSelectEvent = (event: Event) => {
@@ -439,6 +499,8 @@ const App: React.FC = () => {
         localStorage.setItem('operatorName', operatorName);
         setIsOperatorStep(false);
         setIsSectorSelectionStep(true);
+        // Persist flow step
+        localStorage.setItem('flow_step', 'SECTOR_SELECT');
     };
 
     const handleBackToEvents = () => {
@@ -456,6 +518,10 @@ const App: React.FC = () => {
         setIsSectorSelectionStep(false);
         setIsOperatorStep(false);
         localStorage.removeItem('selectedEventId');
+        // Clear flow state
+        localStorage.removeItem('flow_step');
+        localStorage.removeItem('active_sectors');
+        localStorage.removeItem('locked_sector');
     };
 
     const handleToggleSectorSelection = (sector: string) => {
@@ -464,6 +530,8 @@ const App: React.FC = () => {
     };
 
     const handleConfirmSectorSelection = () => {
+        const newLocked = activeSectors.length > 0 ? 'Multiple' : null;
+        
         if (activeSectors.length > 0) {
             setLockedSector('Multiple');
             setSelectedSector('All');
@@ -472,6 +540,11 @@ const App: React.FC = () => {
             setSelectedSector('All');
         }
         setIsSectorSelectionStep(false);
+
+        // Persist state
+        localStorage.setItem('flow_step', 'SCANNING');
+        localStorage.setItem('active_sectors', JSON.stringify(activeSectors));
+        localStorage.setItem('locked_sector', newLocked || 'null');
     };
 
     const handleUpdateSectorNames = async (newNames: string[], newHiddenSectors?: string[]) => {
