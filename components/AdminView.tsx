@@ -1514,10 +1514,36 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                             <h3 className="font-bold text-lg text-purple-300">{buyer.name || buyer.buyer_name || "Comprador Desconhecido"}</h3>
                                             {(buyer.tickets && buyer.tickets.length > 0) && (<button onClick={() => handleImportSingleBuyer(buyer)} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs font-bold flex items-center shadow"><CloudDownloadIcon className="w-3 h-3 mr-1" />Importar</button>)}
                                         </div>
-                                        <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div><span className="text-xs text-gray-400 uppercase">Email</span><p className="text-white">{buyer.email || '-'}</p></div>
-                                            <div><span className="text-xs text-gray-400 uppercase">Documento</span><p className="text-white">{buyer.cpf || buyer.document || '-'}</p></div>
+                                        
+                                        {/* DETAILED BUYER INFO GRID */}
+                                        <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            <div><span className="text-xs text-gray-400 uppercase font-bold">Email</span><p className="text-white">{buyer.email || '-'}</p></div>
+                                            <div><span className="text-xs text-gray-400 uppercase font-bold">Telefone</span><p className="text-white">{buyer.phone || '-'}</p></div>
+                                            <div><span className="text-xs text-gray-400 uppercase font-bold">Documento ({buyer.document_type || 'DOC'})</span><p className="text-white">{buyer.document || buyer.cpf || '-'}</p></div>
+                                            <div><span className="text-xs text-gray-400 uppercase font-bold">Código de Acesso</span><p className="text-white font-mono">{buyer.access_code || '-'}</p></div>
+                                            <div>
+                                                <span className="text-xs text-gray-400 uppercase font-bold">Check-in na API?</span>
+                                                <p className={`font-bold ${buyer.checked_in ? 'text-green-400' : 'text-gray-400'}`}>
+                                                    {buyer.checked_in ? 'SIM' : 'NÃO'}
+                                                </p>
+                                            </div>
+                                            {(!buyer.name && buyer.first_name) && (
+                                                <div><span className="text-xs text-gray-400 uppercase font-bold">Nome Completo</span><p className="text-white">{buyer.first_name} {buyer.last_name}</p></div>
+                                            )}
                                         </div>
+
+                                        {/* Custom Questions */}
+                                        {buyer.custom_questions && buyer.custom_questions.length > 0 && (
+                                            <div className="px-4 pb-4">
+                                                <p className="text-xs text-gray-400 uppercase font-bold mb-1">Perguntas Personalizadas</p>
+                                                <ul className="text-sm text-gray-300 list-disc pl-4">
+                                                    {buyer.custom_questions.map((q: any, i: number) => (
+                                                        <li key={i}>{typeof q === 'string' ? q : JSON.stringify(q)}</li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+
                                         {buyer.tickets && buyer.tickets.length > 0 && (
                                             <div className="bg-black/20 p-4">
                                                 <p className="text-xs font-bold text-gray-400 mb-2 uppercase">Ingressos ({buyer.tickets.length})</p>
