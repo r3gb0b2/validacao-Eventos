@@ -71,6 +71,8 @@ const App: React.FC = () => {
     const [onlineSheetUrl, setOnlineSheetUrl] = useState('');
 
     const cooldownRef = useRef<boolean>(false);
+    const lastCodeRef = useRef<string | null>(null);
+    const lastCodeTimeRef = useRef<number>(0);
     const selectedSectorRef = useRef<SectorFilter>('All');
     
     useEffect(() => {
@@ -580,12 +582,29 @@ const App: React.FC = () => {
 
     // --- SCAN LOGIC ---
     const handleScanSuccess = useCallback(async (decodedText: string) => {
+        const now = Date.now();
+        // 1. Global cooldown check (400ms) - User requested shorter delay
         if (cooldownRef.current || !db || !selectedEvent) return;
+
+        // 2. Duplicate Check: If scanning the exact same code, wait 3 seconds before allowing it again
+        // This prevents the "machine gun" effect while allowing fast scanning of different tickets
+        if (lastCodeRef.current === decodedText.trim()) {
+            if (now - lastCodeTimeRef.current < 3000) {
+                return;
+            }
+        }
+        
+        // Update trackers
+        lastCodeRef.current = decodedText.trim();
+        lastCodeTimeRef.current = now;
+        
         resetInactivityTimer();
         const currentSelectedSector = selectedSectorRef.current;
 
         cooldownRef.current = true;
-        setTimeout(() => { cooldownRef.current = false; }, 2000);
+        // Reduced to 400ms per user request
+        setTimeout(() => { cooldownRef.current = false; }, 400); 
+        
         const eventId = selectedEvent.id;
         
         // --- ONLINE VALIDATION ---
