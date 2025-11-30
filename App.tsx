@@ -641,8 +641,7 @@ const App: React.FC = () => {
                         apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, ''); 
                         
                         // --------------------------------------------------------------------------------
-                        // STEP 1: PARTICIPANT LOOKUP (REQUIRED)
-                        // Consult /participants to resolve access_code/qr_code to a numeric Ticket ID
+                        // STEP 1: PARTICIPANT LOOKUP (Try to resolve Code -> Numeric ID)
                         // --------------------------------------------------------------------------------
                         let resolvedId: string | null = null;
                         let resolvedAccessCode: string | null = null;
@@ -657,7 +656,6 @@ const App: React.FC = () => {
                                     const lookupData = await lookupRes.json();
                                     
                                     // RECURSIVE DEEP SEARCH to find ID and ACCESS CODE
-                                    // Returns the whole matching object/branch if found
                                     const findMatchRecursive = (obj: any, targetCode: string, depth = 0): any | null => {
                                         if (!obj || typeof obj !== 'object' || depth > 5) return null;
                                         const c = targetCode.trim().toLowerCase();
@@ -711,8 +709,7 @@ const App: React.FC = () => {
                         }
 
                         // --------------------------------------------------------------------------------
-                        // STEP 2: CHECK-IN
-                        // Use resolved ID (numeric) for URL if found, resolvedAccessCode for body
+                        // STEP 2: CHECK-IN EXECUTION
                         // --------------------------------------------------------------------------------
                         
                         const idForUrl = resolvedId || codesToSend[0];
@@ -725,7 +722,6 @@ const App: React.FC = () => {
                              if (res.status === 404 || res.status === 405) return null;
                              const data = await res.json();
                              
-                             // Logically failed (e.g. invalid status) but HTTP OK
                              if (res.ok && (data.success === false || data.error === true)) {
                                  if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
                                      return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
@@ -747,41 +743,56 @@ const App: React.FC = () => {
 
                         let response = null;
                         
-                        // Strategy A: Path Param (POST /checkins/{id}) - Required by ST Ingressos
-                        try {
-                            const url = `${checkinUrl}/${idForUrl}?event_id=${numericEventId}`;
-                            const payload = { 
-                                event_id: numericEventId, 
-                                qr_code: codeForBody, 
-                                code: codeForBody, 
-                                ticket_id: codeForBody,
-                                access_code: codeForBody // Specifically for participant/access codes
-                            };
-                            
-                            const res = await fetch(url, {
-                                method: 'POST',
-                                headers: { ...headers, 'Content-Type': 'application/json' },
-                                body: JSON.stringify(payload)
-                            });
-                            response = await processResponse(res);
-                        } catch(e) {}
-
-                        // Strategy B: Standard Body (POST /checkins) - Fallback
-                        if (!response) {
+                        // Define Strategies
+                        const strategyPath = async () => {
                              try {
-                                const url = `${checkinUrl}?event_id=${numericEventId}`;
+                                const url = `${checkinUrl}/${idForUrl}?event_id=${numericEventId}`;
                                 const payload = { 
                                     event_id: numericEventId, 
                                     qr_code: codeForBody, 
-                                    code: codeForBody 
+                                    code: codeForBody,
+                                    access_code: codeForBody
                                 };
                                 const res = await fetch(url, {
                                     method: 'POST',
                                     headers: { ...headers, 'Content-Type': 'application/json' },
                                     body: JSON.stringify(payload)
                                 });
-                                response = await processResponse(res);
-                            } catch(e) {}
+                                return await processResponse(res);
+                            } catch(e) { return null; }
+                        };
+
+                        const strategyBody = async () => {
+                             try {
+                                const url = `${checkinUrl}?event_id=${numericEventId}`;
+                                const payload = { 
+                                    event_id: numericEventId, 
+                                    qr_code: codeForBody, 
+                                    code: codeForBody,
+                                    access_code: codeForBody
+                                };
+                                const res = await fetch(url, {
+                                    method: 'POST',
+                                    headers: { ...headers, 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                });
+                                return await processResponse(res);
+                            } catch(e) { return null; }
+                        };
+
+                        // Decide Order based on ID type (Numeric vs String)
+                        // If we have a numeric ID (resolved or direct), Path Strategy (/checkins/123) is usually best.
+                        // If we have a string code (access_code), Body Strategy (/checkins + body) is usually best.
+                        const isNumericId = !isNaN(Number(idForUrl)) && !isNaN(parseFloat(idForUrl));
+
+                        if (isNumericId) {
+                            // Prioritize Path
+                            response = await strategyPath();
+                            if (!response) response = await strategyBody();
+                        } else {
+                            // Prioritize Body
+                            response = await strategyBody();
+                            if (!response) response = await strategyPath();
                         }
 
                         if (response) {
