@@ -100,6 +100,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (!selectedEvent) return;
         const loadStatsConfig = async () => {
             try {
+                // Wrap in try-catch to prevent crashes on invalid data
                 const docRef = doc(db, 'events', selectedEvent.id, 'settings', 'stats');
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
@@ -126,6 +127,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             } catch (e) {
                 console.error("Failed to load stats config", e);
+                setSectorGroups([]); // Fallback to empty array
             }
         };
         loadStatsConfig();
@@ -559,14 +561,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 // Construct URL to /buyers OR /participants endpoint
                 // PREFER PARTICIPANTS if default (user request)
                 let searchEndpoint = apiUrl.trim();
+                
+                // If user didn't explicitly set URL to something else, force /participants
+                // Or if it was set to /tickets (default), switch to /participants for search
                 if (!searchEndpoint.includes('/participants') && !searchEndpoint.includes('/buyers')) {
-                    // Try to guess base URL from configuration or default to PARTICIPANTS
-                    const urlObj = new URL(searchEndpoint || 'https://public-api.stingressos.com.br/tickets');
-                    searchEndpoint = `${urlObj.origin}/participants`;
+                    try {
+                        const urlObj = new URL(searchEndpoint || 'https://public-api.stingressos.com.br/tickets');
+                        searchEndpoint = `${urlObj.origin}/participants`;
+                    } catch (e) {
+                         searchEndpoint = 'https://public-api.stingressos.com.br/participants';
+                    }
                 }
                 
-                // Append Query
-                const searchUrl = `${searchEndpoint}?search=${encodeURIComponent(queryToUse)}${apiEventId ? `&event_id=${apiEventId}` : ''}`;
+                // SAFE URL CONSTRUCTION
+                const urlObj = new URL(searchEndpoint);
+                urlObj.searchParams.set('search', queryToUse);
+                if (apiEventId) {
+                     urlObj.searchParams.set('event_id', apiEventId);
+                }
+                
+                const searchUrl = urlObj.toString();
                 
                 const res = await fetch(searchUrl, {
                     headers: {
@@ -586,18 +600,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 else if (data.participants && Array.isArray(data.participants)) results = data.participants;
 
                 // POST-PROCESSING: Normalize results
-                // If the API returns participants where the access_code IS the ticket, 
-                // but no 'tickets' array is present, create a fake tickets array for the UI to render.
                 results.forEach((r: any) => {
                      // Check if 'tickets' is missing or empty
                      if (!r.tickets || r.tickets.length === 0) {
                          // Check if this object ITSELF is the ticket/participant with an access_code
-                         const code = r.access_code || r.code || r.qr_code;
+                         // Use recursive search to find any code
+                         const code = findValueRecursively(r, ['access_code', 'code', 'qr_code']);
                          if (code) {
+                             const sector = findValueRecursively(r, ['sector', 'sector_name', 'product_name']) || 'Geral';
+                             const status = findValueRecursively(r, ['status', 'checked_in']) || 'available';
                              r.tickets = [{
                                  code: code,
-                                 sector: r.product_name || r.sector_name || r.sector || 'Geral',
-                                 status: (r.checked_in || r.status === 'used' || r.status === 'checked_in') ? 'used' : 'available'
+                                 sector: typeof sector === 'object' ? sector.name : sector,
+                                 status: (status === true || status === 'used' || status === 'checked_in') ? 'used' : 'available'
                              }];
                          }
                      }
