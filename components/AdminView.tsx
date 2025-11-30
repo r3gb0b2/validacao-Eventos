@@ -633,7 +633,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const newSectors = new Set<string>();
 
             const HIGH_PRIORITY_CODE_KEYS = [
-                'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 'access_code', 
+                'access_code', 'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 
                 'token', 'loc', 'locator', 'identifier', 'friendly_id', 'hash', 'serial', 
                 'number', 'localizador', 'cod', 'codigo', 'id_ingresso'
             ];
@@ -647,7 +647,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             ticketsList.forEach((t: any) => {
                 // RECURSIVE SEARCH FOR DATA
                 
-                // 1. Find Code (Deep Search)
+                // 1. Find Code (Deep Search) - Prioritizing access_code
                 let code = findValueRecursively(t, HIGH_PRIORITY_CODE_KEYS);
                 if (!code) {
                     code = findValueRecursively(t, LOW_PRIORITY_CODE_KEYS);
@@ -1125,11 +1125,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     });
                 } else {
                     const processItem = (item: any) => {
-                        const code = item.code || item.qr_code || item.ticket_code || item.barcode || item.id;
+                        // Priority: access_code (for participants), then generic codes, then ID
+                        const code = item.access_code || item.code || item.qr_code || item.ticket_code || item.barcode || item.id;
+                        
                         let sector = item.sector || item.sector_name || item.section || item.setor || item.category || item.ticket_name || item.product_name || 'Geral';
                         if (typeof sector === 'object' && sector.name) sector = sector.name;
                         const ownerName = item.owner_name || item.name || item.participant_name || item.client_name || item.buyer_name || '';
-                        if (item.tickets && Array.isArray(item.tickets)) { item.tickets.forEach((subTicket: any) => { if (!subTicket.owner_name && ownerName) subTicket.owner_name = ownerName; processItem(subTicket); }); return; }
+                        
+                        // Handle nested tickets list (for buyers import)
+                        if (item.tickets && Array.isArray(item.tickets)) { 
+                            item.tickets.forEach((subTicket: any) => { 
+                                if (!subTicket.owner_name && ownerName) subTicket.owner_name = ownerName; 
+                                processItem(subTicket); 
+                            }); 
+                            return; 
+                        }
+
                         if (code) {
                             const idStr = String(code);
                             if (ignoreExisting && existingTicketIds.has(idStr)) return; 
