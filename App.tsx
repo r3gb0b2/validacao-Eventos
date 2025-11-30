@@ -640,7 +640,7 @@ const App: React.FC = () => {
                         
                         let apiBase = endpoint.url.trim();
                         if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
-                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, ''); // Also clean participants
+                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, ''); 
                         
                         const checkinUrl = `${apiBase}/checkins`;
 
@@ -670,107 +670,107 @@ const App: React.FC = () => {
                             return null;
                         };
 
-                        // ATTEMPT 1: Standard Check-in
+                        // --------------------------------------------------------------------------------
+                        // STEP 1: PARTICIPANT LOOKUP (DEFAULT)
+                        // Consult /participants to resolve access_code/qr_code to a numeric Ticket ID
+                        // --------------------------------------------------------------------------------
+                        let resolvedId: string | null = null;
+                        
                         for (const code of codesToSend) {
                             const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
-                            
-                            // Strategy A: Path + Body
                             try {
-                                const res = await fetch(`${checkinUrl}/${code}?event_id=${numericEventId}`, {
-                                    method: 'POST',
-                                    headers: { ...headers, 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ event_id: numericEventId, qr_code: code })
-                                });
-                                const result = await processResponse(res, code);
-                                if (result) { response = result; foundCode = code; break; }
-                            } catch(e) {}
-                            
-                            // Strategy B: JSON Body only
-                            if (!response) {
-                                try {
-                                    const res = await fetch(checkinUrl, {
-                                        method: 'POST',
-                                        headers: { ...headers, 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ event_id: numericEventId, code: code, qr_code: code })
-                                    });
-                                    const result = await processResponse(res, code);
-                                    if (result) { response = result; foundCode = code; break; }
-                                } catch (e) {}
-                            }
-                        }
-
-                        // ATTEMPT 2: Lookup & Retry (If failed)
-                        // If validation failed (404/not found) but we have a code string, 
-                        // it might be an 'access_code' that needs to be resolved to an ID
-                        if (!response) {
-                            for (const code of codesToSend) {
-                                // Only try lookup if it looks like a string code (not purely numeric short ID, though access codes can be anything)
-                                const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
-                                try {
-                                    const searchUrl = `${apiBase}/participants?event_id=${numericEventId}&search=${code}`;
-                                    const lookupRes = await fetch(searchUrl, { headers });
+                                const searchUrl = `${apiBase}/participants?event_id=${numericEventId}&search=${code}`;
+                                const lookupRes = await fetch(searchUrl, { headers });
+                                
+                                if (lookupRes.ok) {
+                                    const lookupData = await lookupRes.json();
                                     
-                                    if (lookupRes.ok) {
-                                        const lookupData = await lookupRes.json();
-                                        let foundId = '';
+                                    // RECURSIVE DEEP SEARCH to find ID
+                                    const findIdRecursive = (obj: any, targetCode: string, depth = 0): string | null => {
+                                        if (!obj || typeof obj !== 'object' || depth > 5) return null;
+                                        const c = targetCode.trim().toLowerCase();
                                         
-                                        // RECURSIVE DEEP SEARCH to find ID
-                                        const findIdRecursive = (obj: any, targetCode: string, depth = 0): string | null => {
-                                            if (!obj || typeof obj !== 'object' || depth > 4) return null;
-                                            const c = targetCode.trim().toLowerCase();
-                                            
-                                            // Check current level for code match
-                                            if ((obj.access_code && String(obj.access_code).trim().toLowerCase() === c) ||
-                                                (obj.code && String(obj.code).trim().toLowerCase() === c) ||
-                                                (obj.qr_code && String(obj.qr_code).trim().toLowerCase() === c) ||
-                                                (obj.ticket_code && String(obj.ticket_code).trim().toLowerCase() === c)) {
-                                                    // Return the ID if found
-                                                    return obj.id || obj.ticket_id || obj.pk || null;
-                                            }
+                                        // Priority on 'access_code'
+                                        if (obj.access_code && String(obj.access_code).trim().toLowerCase() === c) return obj.id || null;
+                                        
+                                        // Check other fields
+                                        if ((obj.code && String(obj.code).trim().toLowerCase() === c) ||
+                                            (obj.qr_code && String(obj.qr_code).trim().toLowerCase() === c) ||
+                                            (obj.ticket_code && String(obj.ticket_code).trim().toLowerCase() === c)) {
+                                                return obj.id || obj.ticket_id || obj.pk || null;
+                                        }
 
-                                            // Dig into children
-                                            if (Array.isArray(obj)) {
-                                                for (const item of obj) {
-                                                    const res = findIdRecursive(item, targetCode, depth + 1);
+                                        // Dig into children
+                                        if (Array.isArray(obj)) {
+                                            for (const item of obj) {
+                                                const res = findIdRecursive(item, targetCode, depth + 1);
+                                                if (res) return res;
+                                            }
+                                        } else {
+                                            const keysToCheck = ['tickets', 'data', 'participants', 'items', 'ticket'];
+                                            for (const key of keysToCheck) {
+                                                if (obj[key]) {
+                                                    const res = findIdRecursive(obj[key], targetCode, depth + 1);
                                                     if (res) return res;
                                                 }
-                                            } else {
-                                                // Specific object keys to traverse
-                                                const keysToCheck = ['tickets', 'data', 'participants', 'items', 'ticket'];
-                                                for (const key of keysToCheck) {
-                                                    if (obj[key]) {
-                                                        const res = findIdRecursive(obj[key], targetCode, depth + 1);
+                                            }
+                                            for (const k in obj) {
+                                                if (typeof obj[k] === 'object' && obj[k] !== null && !keysToCheck.includes(k)) {
+                                                        const res = findIdRecursive(obj[k], targetCode, depth + 1);
                                                         if (res) return res;
-                                                    }
-                                                }
-                                                // Also check generic numeric keys or iteration
-                                                for (const k in obj) {
-                                                    if (typeof obj[k] === 'object' && obj[k] !== null && !keysToCheck.includes(k)) {
-                                                         const res = findIdRecursive(obj[k], targetCode, depth + 1);
-                                                         if (res) return res;
-                                                    }
                                                 }
                                             }
-                                            return null;
-                                        };
-
-                                        // Try to find the ID
-                                        foundId = findIdRecursive(lookupData, code) || '';
-
-                                        if (foundId) {
-                                            // RETRY VALIDATION WITH FOUND ID
-                                             const res = await fetch(`${checkinUrl}/${foundId}?event_id=${numericEventId}`, {
-                                                method: 'POST',
-                                                headers: { ...headers, 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({ event_id: numericEventId, qr_code: foundId, code: foundId, ticket_id: foundId }) // Send ID in multiple fields
-                                            });
-                                            const result = await processResponse(res, foundId);
-                                            if (result) { response = result; foundCode = code; /* Keep original code for display */ break; }
                                         }
+                                        return null;
+                                    };
+
+                                    resolvedId = findIdRecursive(lookupData, code);
+                                    if (resolvedId) {
+                                        foundCode = code; // Keep original code for display/log
+                                        break; // Found it, proceed to check-in
                                     }
-                                } catch(e) { console.error("Lookup error", e); }
-                            }
+                                }
+                            } catch(e) { console.error("Lookup error", e); }
                         }
+
+                        // --------------------------------------------------------------------------------
+                        // STEP 2: CHECK-IN
+                        // Use resolved ID if found, otherwise fall back to original code
+                        // --------------------------------------------------------------------------------
+                        
+                        const idToCheckIn = resolvedId || codesToSend[0];
+                        const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
+
+                        // Strategy A: JSON Body (Preferred)
+                        try {
+                            const payload = { 
+                                event_id: numericEventId, 
+                                qr_code: idToCheckIn, 
+                                code: idToCheckIn, 
+                                ticket_id: idToCheckIn 
+                            };
+                            
+                            // If we resolved an ID, try path strategy first as it's often stricter on ID
+                            if (resolvedId) {
+                                const res = await fetch(`${checkinUrl}/${resolvedId}?event_id=${numericEventId}`, {
+                                    method: 'POST',
+                                    headers: { ...headers, 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                });
+                                const result = await processResponse(res, idToCheckIn);
+                                if (result) { response = result; foundCode = foundCode || idToCheckIn; }
+                            }
+
+                            if (!response) {
+                                const res = await fetch(checkinUrl, {
+                                    method: 'POST',
+                                    headers: { ...headers, 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                });
+                                const result = await processResponse(res, idToCheckIn);
+                                if (result) { response = result; foundCode = foundCode || idToCheckIn; }
+                            }
+                        } catch(e) {}
 
                         if (response) {
                             const { status, message, sector } = response;
