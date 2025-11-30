@@ -640,89 +640,140 @@ const App: React.FC = () => {
                         
                         let apiBase = endpoint.url.trim();
                         if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
-                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '');
+                        apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, ''); // Also clean participants
+                        
                         const checkinUrl = `${apiBase}/checkins`;
 
+                        // Helper for Response Handling
+                        const processResponse = async (res: Response, code: string) => {
+                            if (res.status === 404 || res.status === 405) return null;
+                            const data = await res.json();
+                            
+                            // Logically failed (e.g. invalid status) but HTTP OK
+                            if (res.ok && (data.success === false || data.error === true)) {
+                                if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
+                                    return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
+                                }
+                                if (data.message && (data.message.toLowerCase().includes('not found') || data.message.includes('não encontrado'))) return null;
+                                return { status: 'INVALID' as ScanStatus, message: data.message || 'Erro na validação', sector: 'Externo', raw: data };
+                            }
+                            
+                            if (res.ok || res.status === 201) {
+                                const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
+                                return { status: 'VALID' as ScanStatus, message: `Acesso Liberado! - ${sector}`, sector: sector, raw: data };
+                            }
+                            
+                            if (res.status === 409 || res.status === 422) {
+                                return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
+                            }
+
+                            return null;
+                        };
+
+                        // ATTEMPT 1: Standard Check-in
                         for (const code of codesToSend) {
                             const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
+                            
+                            // Strategy A: Path + Body
                             try {
                                 const res = await fetch(`${checkinUrl}/${code}?event_id=${numericEventId}`, {
                                     method: 'POST',
                                     headers: { ...headers, 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ event_id: numericEventId, qr_code: code })
                                 });
-                                if (res.status !== 404 && res.status !== 405) { response = res; foundCode = code; break; }
+                                const result = await processResponse(res, code);
+                                if (result) { response = result; foundCode = code; break; }
                             } catch(e) {}
+                            
+                            // Strategy B: JSON Body only
                             if (!response) {
                                 try {
                                     const res = await fetch(checkinUrl, {
                                         method: 'POST',
                                         headers: { ...headers, 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ event_id: numericEventId, code: code, qr_code: code, ticket_code: code, uuid: code })
+                                        body: JSON.stringify({ event_id: numericEventId, code: code, qr_code: code })
                                     });
-                                    if (res.status !== 404) { response = res; foundCode = code; break; }
+                                    const result = await processResponse(res, code);
+                                    if (result) { response = result; foundCode = code; break; }
                                 } catch (e) {}
                             }
-                             if (!response) {
+                        }
+
+                        // ATTEMPT 2: Lookup & Retry (If failed)
+                        // If validation failed (404/not found) but we have a code string, 
+                        // it might be an 'access_code' that needs to be resolved to an ID
+                        if (!response) {
+                            for (const code of codesToSend) {
+                                // Only try lookup if it looks like a string code (not purely numeric short ID, though access codes can be anything)
+                                const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
                                 try {
-                                    const formData = new FormData();
-                                    formData.append('event_id', String(numericEventId));
-                                    formData.append('qr_code', code);
-                                    const res = await fetch(`${checkinUrl}/${code}`, { method: 'POST', headers: headers, body: formData });
-                                    if (res.status !== 404) { response = res; foundCode = code; break; }
-                                } catch(e) {}
-                            }
-                            if (!response) {
-                                try {
-                                     const res = await fetch(`${apiBase}/tickets/${code}?event_id=${numericEventId}`, { method: 'GET', headers: headers });
-                                     if (res.ok) { response = res; foundCode = code; break; }
-                                } catch (e) {}
+                                    const searchUrl = `${apiBase}/participants?event_id=${numericEventId}&search=${code}`;
+                                    const lookupRes = await fetch(searchUrl, { headers });
+                                    
+                                    if (lookupRes.ok) {
+                                        const lookupData = await lookupRes.json();
+                                        let foundId = '';
+                                        
+                                        // Helper to dig for ID
+                                        const findId = (obj: any) => {
+                                             if (obj.id && (obj.access_code === code || obj.code === code || obj.qr_code === code)) return obj.id;
+                                             // Check inside tickets array
+                                             if (obj.tickets && Array.isArray(obj.tickets)) {
+                                                 const t = obj.tickets.find((t:any) => t.qr_code === code || t.code === code || t.access_code === code);
+                                                 if (t) return t.id || t.ticket_id;
+                                             }
+                                             return null;
+                                        };
+
+                                        let items = [];
+                                        if (Array.isArray(lookupData)) items = lookupData;
+                                        else if (lookupData.data) items = lookupData.data;
+                                        else if (lookupData.participants) items = lookupData.participants;
+
+                                        for (const item of items) {
+                                            const id = findId(item);
+                                            if (id) { foundId = String(id); break; }
+                                        }
+
+                                        if (foundId) {
+                                            // RETRY VALIDATION WITH FOUND ID
+                                             const res = await fetch(`${checkinUrl}/${foundId}?event_id=${numericEventId}`, {
+                                                method: 'POST',
+                                                headers: { ...headers, 'Content-Type': 'application/json' },
+                                                body: JSON.stringify({ event_id: numericEventId, qr_code: foundId }) // Send ID as QR code param too just in case
+                                            });
+                                            const result = await processResponse(res, foundId);
+                                            if (result) { response = result; foundCode = code; /* Keep original code for display */ break; }
+                                        }
+                                    }
+                                } catch(e) { console.error("Lookup error", e); }
                             }
                         }
 
                         if (response) {
-                            const data = await response.json();
-                            const apiName = 'API';
-                            if (data.message && (data.message.includes('belongs to another event') || data.message.includes('not found'))) continue;
-
-                            if (response.status === 200 || response.status === 201) {
-                                if (data.success === false || data.error === true) {
-                                      if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
-                                          showScanResult('USED', `Ingresso já utilizado!`);
-                                          return;
-                                      } else {
-                                           if (data.message.toLowerCase().includes('not found')) continue;
-                                           showScanResult('INVALID', `${data.message || 'Erro na validação'}`);
-                                           return;
-                                      }
-                                }
-                                const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
-                                const sectorLower = sector.toLowerCase();
-                                const currentTabLower = currentSelectedSector.toLowerCase();
-                                if (activeSectors.length > 0) {
-                                    if (!activeSectors.some(s => s.trim().toLowerCase() === sectorLower)) {
-                                         showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é: "${sector}".`);
-                                         await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
-                                        return;
-                                    }
-                                }
-                                if (currentSelectedSector !== 'All' && sectorLower !== currentTabLower) {
-                                    showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${currentSelectedSector}). Ingresso: ${sector}`);
-                                    await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+                            const { status, message, sector } = response;
+                            
+                            // Sector Validation
+                            const sectorLower = sector.toLowerCase();
+                            const currentTabLower = currentSelectedSector.toLowerCase();
+                            if (activeSectors.length > 0) {
+                                if (!activeSectors.some(s => s.trim().toLowerCase() === sectorLower)) {
+                                     showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é: "${sector}".`);
+                                     await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
                                     return;
                                 }
-                                showScanResult('VALID', `Acesso Liberado! - ${sector}`);
-                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'VALID', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
-                                return;
-                            } else if (response.status === 409 || response.status === 422) {
-                                showScanResult('USED', `Ingresso já utilizado!`);
-                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'USED', timestamp: serverTimestamp(), sector: 'Externo', deviceId, operator: operatorName });
-                                return;
-                            } else {
-                                showScanResult('INVALID', `Erro: ${data.message || response.statusText}`);
+                            }
+                            if (currentSelectedSector !== 'All' && sectorLower !== currentTabLower) {
+                                showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${currentSelectedSector}). Ingresso: ${sector}`);
+                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
                                 return;
                             }
+                            
+                            showScanResult(status, message);
+                            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status, timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+                            return;
                         }
+
                     } catch (error) { console.error("API error", error); }
                 }
                 showScanResult('INVALID', 'Não encontrado em nenhuma API.');
