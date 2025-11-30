@@ -714,44 +714,55 @@ const App: React.FC = () => {
                                         const lookupData = await lookupRes.json();
                                         let foundId = '';
                                         
-                                        // Helper to dig for ID
-                                        const findId = (obj: any) => {
-                                             const c = code.trim().toLowerCase();
-                                             // Priority 1: match access_code on root (Participant)
-                                             if (obj.access_code && String(obj.access_code).trim().toLowerCase() === c) return obj.id;
-                                             
-                                             // Priority 2: match other code fields on root
-                                             if (obj.code && String(obj.code).trim().toLowerCase() === c) return obj.id;
-                                             if (obj.qr_code && String(obj.qr_code).trim().toLowerCase() === c) return obj.id;
-                                    
-                                             // Priority 3: check nested tickets
-                                             if (obj.tickets && Array.isArray(obj.tickets)) {
-                                                 const t = obj.tickets.find((t:any) => 
-                                                    (t.access_code && String(t.access_code).trim().toLowerCase() === c) ||
-                                                    (t.qr_code && String(t.qr_code).trim().toLowerCase() === c) ||
-                                                    (t.code && String(t.code).trim().toLowerCase() === c)
-                                                 );
-                                                 if (t) return t.id || t.ticket_id;
-                                             }
-                                             return null;
+                                        // RECURSIVE DEEP SEARCH to find ID
+                                        const findIdRecursive = (obj: any, targetCode: string, depth = 0): string | null => {
+                                            if (!obj || typeof obj !== 'object' || depth > 4) return null;
+                                            const c = targetCode.trim().toLowerCase();
+                                            
+                                            // Check current level for code match
+                                            if ((obj.access_code && String(obj.access_code).trim().toLowerCase() === c) ||
+                                                (obj.code && String(obj.code).trim().toLowerCase() === c) ||
+                                                (obj.qr_code && String(obj.qr_code).trim().toLowerCase() === c) ||
+                                                (obj.ticket_code && String(obj.ticket_code).trim().toLowerCase() === c)) {
+                                                    // Return the ID if found
+                                                    return obj.id || obj.ticket_id || obj.pk || null;
+                                            }
+
+                                            // Dig into children
+                                            if (Array.isArray(obj)) {
+                                                for (const item of obj) {
+                                                    const res = findIdRecursive(item, targetCode, depth + 1);
+                                                    if (res) return res;
+                                                }
+                                            } else {
+                                                // Specific object keys to traverse
+                                                const keysToCheck = ['tickets', 'data', 'participants', 'items', 'ticket'];
+                                                for (const key of keysToCheck) {
+                                                    if (obj[key]) {
+                                                        const res = findIdRecursive(obj[key], targetCode, depth + 1);
+                                                        if (res) return res;
+                                                    }
+                                                }
+                                                // Also check generic numeric keys or iteration
+                                                for (const k in obj) {
+                                                    if (typeof obj[k] === 'object' && obj[k] !== null && !keysToCheck.includes(k)) {
+                                                         const res = findIdRecursive(obj[k], targetCode, depth + 1);
+                                                         if (res) return res;
+                                                    }
+                                                }
+                                            }
+                                            return null;
                                         };
 
-                                        let items = [];
-                                        if (Array.isArray(lookupData)) items = lookupData;
-                                        else if (lookupData.data) items = lookupData.data;
-                                        else if (lookupData.participants) items = lookupData.participants;
-
-                                        for (const item of items) {
-                                            const id = findId(item);
-                                            if (id) { foundId = String(id); break; }
-                                        }
+                                        // Try to find the ID
+                                        foundId = findIdRecursive(lookupData, code) || '';
 
                                         if (foundId) {
                                             // RETRY VALIDATION WITH FOUND ID
                                              const res = await fetch(`${checkinUrl}/${foundId}?event_id=${numericEventId}`, {
                                                 method: 'POST',
                                                 headers: { ...headers, 'Content-Type': 'application/json' },
-                                                body: JSON.stringify({ event_id: numericEventId, qr_code: foundId }) // Send ID as QR code param too just in case
+                                                body: JSON.stringify({ event_id: numericEventId, qr_code: foundId, code: foundId, ticket_id: foundId }) // Send ID in multiple fields
                                             });
                                             const result = await processResponse(res, foundId);
                                             if (result) { response = result; foundCode = code; /* Keep original code for display */ break; }
