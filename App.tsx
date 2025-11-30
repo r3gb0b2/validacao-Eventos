@@ -641,71 +641,80 @@ const App: React.FC = () => {
                         apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, ''); 
                         
                         // --------------------------------------------------------------------------------
-                        // STEP 1: PARTICIPANT LOOKUP (Try to resolve Code -> Numeric ID)
+                        // STEP 1: GLOBAL LOOKUP (Participants -> Tickets -> Buyers)
                         // --------------------------------------------------------------------------------
                         let resolvedId: string | null = null;
                         let resolvedAccessCode: string | null = null;
                         
-                        for (const code of codesToSend) {
-                            const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
-                            try {
-                                const searchUrl = `${apiBase}/participants?event_id=${numericEventId}&search=${code}`;
-                                const lookupRes = await fetch(searchUrl, { headers });
-                                
-                                if (lookupRes.ok) {
-                                    const lookupData = await lookupRes.json();
-                                    
-                                    // RECURSIVE DEEP SEARCH to find ID and ACCESS CODE
-                                    const findMatchRecursive = (obj: any, targetCode: string, depth = 0): any | null => {
-                                        if (!obj || typeof obj !== 'object' || depth > 5) return null;
-                                        const c = targetCode.trim().toLowerCase();
-                                        
-                                        // Check fields on this object
-                                        const accessCode = String(obj.access_code || '').trim().toLowerCase();
-                                        const qrCode = String(obj.qr_code || '').trim().toLowerCase();
-                                        const ticketCode = String(obj.ticket_code || '').trim().toLowerCase();
-                                        const objCode = String(obj.code || '').trim().toLowerCase();
+                        // Helper for deep search
+                        const findMatchRecursive = (obj: any, targetCode: string, depth = 0): any | null => {
+                            if (!obj || typeof obj !== 'object' || depth > 5) return null;
+                            const c = targetCode.trim().toLowerCase();
+                            
+                            // Check fields on this object
+                            const accessCode = String(obj.access_code || '').trim().toLowerCase();
+                            const qrCode = String(obj.qr_code || '').trim().toLowerCase();
+                            const ticketCode = String(obj.ticket_code || '').trim().toLowerCase();
+                            const objCode = String(obj.code || '').trim().toLowerCase();
+                            const uuid = String(obj.uuid || '').trim().toLowerCase();
+                            const barcode = String(obj.barcode || '').trim().toLowerCase();
 
-                                        if (accessCode === c || qrCode === c || ticketCode === c || objCode === c) {
-                                            return obj;
-                                        }
+                            if (accessCode === c || qrCode === c || ticketCode === c || objCode === c || uuid === c || barcode === c) {
+                                return obj;
+                            }
 
-                                        // Dig into children
-                                        if (Array.isArray(obj)) {
-                                            for (const item of obj) {
-                                                const res = findMatchRecursive(item, targetCode, depth + 1);
-                                                if (res) return res;
-                                            }
-                                        } else {
-                                            const keysToCheck = ['tickets', 'data', 'participants', 'items', 'ticket'];
-                                            for (const key of keysToCheck) {
-                                                if (obj[key]) {
-                                                    const res = findMatchRecursive(obj[key], targetCode, depth + 1);
-                                                    if (res) return res;
-                                                }
-                                            }
-                                            // Fallback: check all object properties
-                                            for (const k in obj) {
-                                                if (typeof obj[k] === 'object' && obj[k] !== null && !keysToCheck.includes(k)) {
-                                                        const res = findMatchRecursive(obj[k], targetCode, depth + 1);
-                                                        if (res) return res;
-                                                }
-                                            }
-                                        }
-                                        return null;
-                                    };
-
-                                    const match = findMatchRecursive(lookupData, code);
-                                    if (match) {
-                                        // Priority: access_code > qr_code > code
-                                        resolvedAccessCode = match.access_code || match.qr_code || match.code || match.ticket_code || code;
-                                        // Priority: id > ticket_id > pk
-                                        resolvedId = match.id || match.ticket_id || match.pk;
-                                        if (resolvedId && resolvedAccessCode) break;
+                            // Dig into children
+                            if (Array.isArray(obj)) {
+                                for (const item of obj) {
+                                    const res = findMatchRecursive(item, targetCode, depth + 1);
+                                    if (res) return res;
+                                }
+                            } else {
+                                // Specific priority keys first
+                                const keysToCheck = ['tickets', 'data', 'participants', 'items', 'ticket', 'buyers'];
+                                for (const key of keysToCheck) {
+                                    if (obj[key]) {
+                                        const res = findMatchRecursive(obj[key], targetCode, depth + 1);
+                                        if (res) return res;
                                     }
                                 }
-                            } catch(e) { console.error("Lookup error", e); }
+                                // Fallback: check all object properties
+                                for (const k in obj) {
+                                    if (typeof obj[k] === 'object' && obj[k] !== null && !keysToCheck.includes(k)) {
+                                            const res = findMatchRecursive(obj[k], targetCode, depth + 1);
+                                            if (res) return res;
+                                    }
+                                }
+                            }
+                            return null;
+                        };
+
+                        // Sources to check in parallel or sequence
+                        const lookupSources = ['participants', 'tickets', 'buyers'];
+
+                        for (const code of codesToSend) {
                             if (resolvedId) break;
+
+                            for (const source of lookupSources) {
+                                if (resolvedId) break;
+
+                                const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
+                                try {
+                                    const searchUrl = `${apiBase}/${source}?event_id=${numericEventId}&search=${code}`;
+                                    const lookupRes = await fetch(searchUrl, { headers });
+                                    
+                                    if (lookupRes.ok) {
+                                        const lookupData = await lookupRes.json();
+                                        const match = findMatchRecursive(lookupData, code);
+                                        if (match) {
+                                            // Priority: access_code > qr_code > code
+                                            resolvedAccessCode = match.access_code || match.qr_code || match.code || match.ticket_code || code;
+                                            // Priority: id > ticket_id > pk
+                                            resolvedId = match.id || match.ticket_id || match.pk;
+                                        }
+                                    }
+                                } catch(e) { console.error(`Lookup error on ${source}`, e); }
+                            }
                         }
 
                         // --------------------------------------------------------------------------------
