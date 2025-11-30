@@ -633,8 +633,6 @@ const App: React.FC = () => {
 
                 for (const endpoint of endpoints) {
                     try {
-                        let response = null;
-                        let foundCode = '';
                         const numericEventId = parseInt(endpoint.eventId || '0', 10);
                         if (!numericEventId) { showScanResult('ERROR', 'ID Evento inválido.'); return; }
                         
@@ -642,39 +640,12 @@ const App: React.FC = () => {
                         if (apiBase.endsWith('/')) apiBase = apiBase.slice(0, -1);
                         apiBase = apiBase.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, ''); 
                         
-                        const checkinUrl = `${apiBase}/checkins`;
-
-                        // Helper for Response Handling
-                        const processResponse = async (res: Response, code: string) => {
-                            if (res.status === 404 || res.status === 405) return null;
-                            const data = await res.json();
-                            
-                            // Logically failed (e.g. invalid status) but HTTP OK
-                            if (res.ok && (data.success === false || data.error === true)) {
-                                if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
-                                    return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
-                                }
-                                if (data.message && (data.message.toLowerCase().includes('not found') || data.message.includes('não encontrado'))) return null;
-                                return { status: 'INVALID' as ScanStatus, message: data.message || 'Erro na validação', sector: 'Externo', raw: data };
-                            }
-                            
-                            if (res.ok || res.status === 201) {
-                                const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
-                                return { status: 'VALID' as ScanStatus, message: `Acesso Liberado! - ${sector}`, sector: sector, raw: data };
-                            }
-                            
-                            if (res.status === 409 || res.status === 422) {
-                                return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
-                            }
-
-                            return null;
-                        };
-
                         // --------------------------------------------------------------------------------
-                        // STEP 1: PARTICIPANT LOOKUP (DEFAULT)
+                        // STEP 1: PARTICIPANT LOOKUP (REQUIRED)
                         // Consult /participants to resolve access_code/qr_code to a numeric Ticket ID
                         // --------------------------------------------------------------------------------
                         let resolvedId: string | null = null;
+                        let resolvedAccessCode: string | null = null;
                         
                         for (const code of codesToSend) {
                             const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
@@ -685,38 +656,40 @@ const App: React.FC = () => {
                                 if (lookupRes.ok) {
                                     const lookupData = await lookupRes.json();
                                     
-                                    // RECURSIVE DEEP SEARCH to find ID
-                                    const findIdRecursive = (obj: any, targetCode: string, depth = 0): string | null => {
+                                    // RECURSIVE DEEP SEARCH to find ID and ACCESS CODE
+                                    // Returns the whole matching object/branch if found
+                                    const findMatchRecursive = (obj: any, targetCode: string, depth = 0): any | null => {
                                         if (!obj || typeof obj !== 'object' || depth > 5) return null;
                                         const c = targetCode.trim().toLowerCase();
                                         
-                                        // Priority on 'access_code'
-                                        if (obj.access_code && String(obj.access_code).trim().toLowerCase() === c) return obj.id || null;
-                                        
-                                        // Check other fields
-                                        if ((obj.code && String(obj.code).trim().toLowerCase() === c) ||
-                                            (obj.qr_code && String(obj.qr_code).trim().toLowerCase() === c) ||
-                                            (obj.ticket_code && String(obj.ticket_code).trim().toLowerCase() === c)) {
-                                                return obj.id || obj.ticket_id || obj.pk || null;
+                                        // Check fields on this object
+                                        const accessCode = String(obj.access_code || '').trim().toLowerCase();
+                                        const qrCode = String(obj.qr_code || '').trim().toLowerCase();
+                                        const ticketCode = String(obj.ticket_code || '').trim().toLowerCase();
+                                        const objCode = String(obj.code || '').trim().toLowerCase();
+
+                                        if (accessCode === c || qrCode === c || ticketCode === c || objCode === c) {
+                                            return obj;
                                         }
 
                                         // Dig into children
                                         if (Array.isArray(obj)) {
                                             for (const item of obj) {
-                                                const res = findIdRecursive(item, targetCode, depth + 1);
+                                                const res = findMatchRecursive(item, targetCode, depth + 1);
                                                 if (res) return res;
                                             }
                                         } else {
                                             const keysToCheck = ['tickets', 'data', 'participants', 'items', 'ticket'];
                                             for (const key of keysToCheck) {
                                                 if (obj[key]) {
-                                                    const res = findIdRecursive(obj[key], targetCode, depth + 1);
+                                                    const res = findMatchRecursive(obj[key], targetCode, depth + 1);
                                                     if (res) return res;
                                                 }
                                             }
+                                            // Fallback: check all object properties
                                             for (const k in obj) {
                                                 if (typeof obj[k] === 'object' && obj[k] !== null && !keysToCheck.includes(k)) {
-                                                        const res = findIdRecursive(obj[k], targetCode, depth + 1);
+                                                        const res = findMatchRecursive(obj[k], targetCode, depth + 1);
                                                         if (res) return res;
                                                 }
                                             }
@@ -724,53 +697,92 @@ const App: React.FC = () => {
                                         return null;
                                     };
 
-                                    resolvedId = findIdRecursive(lookupData, code);
-                                    if (resolvedId) {
-                                        foundCode = code; // Keep original code for display/log
-                                        break; // Found it, proceed to check-in
+                                    const match = findMatchRecursive(lookupData, code);
+                                    if (match) {
+                                        // Priority: access_code > qr_code > code
+                                        resolvedAccessCode = match.access_code || match.qr_code || match.code || match.ticket_code || code;
+                                        // Priority: id > ticket_id > pk
+                                        resolvedId = match.id || match.ticket_id || match.pk;
+                                        if (resolvedId && resolvedAccessCode) break;
                                     }
                                 }
                             } catch(e) { console.error("Lookup error", e); }
+                            if (resolvedId) break;
                         }
 
                         // --------------------------------------------------------------------------------
                         // STEP 2: CHECK-IN
-                        // Use resolved ID if found, otherwise fall back to original code
+                        // Use resolved ID (numeric) for URL if found, resolvedAccessCode for body
                         // --------------------------------------------------------------------------------
                         
-                        const idToCheckIn = resolvedId || codesToSend[0];
+                        const idForUrl = resolvedId || codesToSend[0];
+                        const codeForBody = resolvedAccessCode || codesToSend[0];
+                        const checkinUrl = `${apiBase}/checkins`;
                         const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}` };
+                        
+                        // Response Handler
+                        const processResponse = async (res: Response) => {
+                             if (res.status === 404 || res.status === 405) return null;
+                             const data = await res.json();
+                             
+                             // Logically failed (e.g. invalid status) but HTTP OK
+                             if (res.ok && (data.success === false || data.error === true)) {
+                                 if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
+                                     return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
+                                 }
+                                 if (data.message && (data.message.toLowerCase().includes('not found') || data.message.includes('não encontrado'))) return null;
+                                 return { status: 'INVALID' as ScanStatus, message: data.message || 'Erro na validação', sector: 'Externo', raw: data };
+                             }
+                             
+                             if (res.ok || res.status === 201) {
+                                 const sector = (data.sector_name || data.sector || data.category || 'Externo').trim();
+                                 return { status: 'VALID' as ScanStatus, message: `Acesso Liberado! - ${sector}`, sector: sector, raw: data };
+                             }
+                             
+                             if (res.status === 409 || res.status === 422) {
+                                 return { status: 'USED' as ScanStatus, message: 'Ingresso já utilizado!', sector: 'Externo', raw: data };
+                             }
+                             return null;
+                        };
 
-                        // Strategy A: JSON Body (Preferred)
+                        let response = null;
+                        
+                        // Strategy A: Path Param (POST /checkins/{id}) - Required by ST Ingressos
                         try {
+                            const url = `${checkinUrl}/${idForUrl}?event_id=${numericEventId}`;
                             const payload = { 
                                 event_id: numericEventId, 
-                                qr_code: idToCheckIn, 
-                                code: idToCheckIn, 
-                                ticket_id: idToCheckIn 
+                                qr_code: codeForBody, 
+                                code: codeForBody, 
+                                ticket_id: codeForBody,
+                                access_code: codeForBody // Specifically for participant/access codes
                             };
                             
-                            // If we resolved an ID, try path strategy first as it's often stricter on ID
-                            if (resolvedId) {
-                                const res = await fetch(`${checkinUrl}/${resolvedId}?event_id=${numericEventId}`, {
-                                    method: 'POST',
-                                    headers: { ...headers, 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(payload)
-                                });
-                                const result = await processResponse(res, idToCheckIn);
-                                if (result) { response = result; foundCode = foundCode || idToCheckIn; }
-                            }
-
-                            if (!response) {
-                                const res = await fetch(checkinUrl, {
-                                    method: 'POST',
-                                    headers: { ...headers, 'Content-Type': 'application/json' },
-                                    body: JSON.stringify(payload)
-                                });
-                                const result = await processResponse(res, idToCheckIn);
-                                if (result) { response = result; foundCode = foundCode || idToCheckIn; }
-                            }
+                            const res = await fetch(url, {
+                                method: 'POST',
+                                headers: { ...headers, 'Content-Type': 'application/json' },
+                                body: JSON.stringify(payload)
+                            });
+                            response = await processResponse(res);
                         } catch(e) {}
+
+                        // Strategy B: Standard Body (POST /checkins) - Fallback
+                        if (!response) {
+                             try {
+                                const url = `${checkinUrl}?event_id=${numericEventId}`;
+                                const payload = { 
+                                    event_id: numericEventId, 
+                                    qr_code: codeForBody, 
+                                    code: codeForBody 
+                                };
+                                const res = await fetch(url, {
+                                    method: 'POST',
+                                    headers: { ...headers, 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                });
+                                response = await processResponse(res);
+                            } catch(e) {}
+                        }
 
                         if (response) {
                             const { status, message, sector } = response;
@@ -781,18 +793,18 @@ const App: React.FC = () => {
                             if (activeSectors.length > 0) {
                                 if (!activeSectors.some(s => s.trim().toLowerCase() === sectorLower)) {
                                      showScanResult('WRONG_SECTOR', `Setor incorreto! Ingresso é: "${sector}".`);
-                                     await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+                                     await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: codeForBody, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
                                     return;
                                 }
                             }
                             if (currentSelectedSector !== 'All' && sectorLower !== currentTabLower) {
                                 showScanResult('WRONG_SECTOR', `Setor Incorreto! (Filtro: ${currentSelectedSector}). Ingresso: ${sector}`);
-                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+                                await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: codeForBody, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
                                 return;
                             }
                             
                             showScanResult(status, message);
-                            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: foundCode, status, timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
+                            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId: codeForBody, status, timestamp: serverTimestamp(), sector, deviceId, operator: operatorName });
                             return;
                         }
 
