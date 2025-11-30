@@ -556,16 +556,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setBuyerSearchResults([]);
             
             try {
-                // Construct URL to /buyers endpoint
-                let buyersUrl = apiUrl.trim();
-                if (!buyersUrl.includes('/buyers')) {
-                    // Try to guess base URL from configuration or default
-                    const urlObj = new URL(buyersUrl || 'https://public-api.stingressos.com.br/tickets');
-                    buyersUrl = `${urlObj.origin}/buyers`;
+                // Construct URL to /buyers OR /participants endpoint
+                // PREFER PARTICIPANTS if default (user request)
+                let searchEndpoint = apiUrl.trim();
+                if (!searchEndpoint.includes('/participants') && !searchEndpoint.includes('/buyers')) {
+                    // Try to guess base URL from configuration or default to PARTICIPANTS
+                    const urlObj = new URL(searchEndpoint || 'https://public-api.stingressos.com.br/tickets');
+                    searchEndpoint = `${urlObj.origin}/participants`;
                 }
                 
                 // Append Query
-                const searchUrl = `${buyersUrl}?search=${encodeURIComponent(queryToUse)}${apiEventId ? `&event_id=${apiEventId}` : ''}`;
+                const searchUrl = `${searchEndpoint}?search=${encodeURIComponent(queryToUse)}${apiEventId ? `&event_id=${apiEventId}` : ''}`;
                 
                 const res = await fetch(searchUrl, {
                     headers: {
@@ -582,9 +583,28 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 if (Array.isArray(data)) results = data;
                 else if (data.data && Array.isArray(data.data)) results = data.data;
                 else if (data.buyers && Array.isArray(data.buyers)) results = data.buyers;
+                else if (data.participants && Array.isArray(data.participants)) results = data.participants;
+
+                // POST-PROCESSING: Normalize results
+                // If the API returns participants where the access_code IS the ticket, 
+                // but no 'tickets' array is present, create a fake tickets array for the UI to render.
+                results.forEach((r: any) => {
+                     // Check if 'tickets' is missing or empty
+                     if (!r.tickets || r.tickets.length === 0) {
+                         // Check if this object ITSELF is the ticket/participant with an access_code
+                         const code = r.access_code || r.code || r.qr_code;
+                         if (code) {
+                             r.tickets = [{
+                                 code: code,
+                                 sector: r.product_name || r.sector_name || r.sector || 'Geral',
+                                 status: (r.checked_in || r.status === 'used' || r.status === 'checked_in') ? 'used' : 'available'
+                             }];
+                         }
+                     }
+                });
                 
                 setBuyerSearchResults(results);
-                if (results.length === 0) alert("Nenhum comprador encontrado com esse termo.");
+                if (results.length === 0) alert("Nenhum registro encontrado com esse termo.");
 
             } catch (error) {
                 console.error(error);
@@ -622,7 +642,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             return;
         }
         
-        const ownerName = buyer.name || buyer.buyer_name || 'Comprador Importado';
+        const ownerName = buyer.name || buyer.buyer_name || buyer.first_name || 'Comprador Importado';
         const confirmMsg = `Deseja importar ingressos de "${ownerName}" para o sistema local?`;
         if (!window.confirm(confirmMsg)) return;
 
@@ -632,6 +652,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const ticketsToSave: Ticket[] = [];
             const newSectors = new Set<string>();
 
+            // Added access_code to high priority
             const HIGH_PRIORITY_CODE_KEYS = [
                 'access_code', 'code', 'qr_code', 'ticket_code', 'uuid', 'barcode', 
                 'token', 'loc', 'locator', 'identifier', 'friendly_id', 'hash', 'serial', 
@@ -659,6 +680,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     
                     // 3. Find Status (Deep Search)
                     let statusRaw = findValueRecursively(t, STATUS_KEYS);
+                    if (t.checked_in === true) statusRaw = 'used'; // Participant API flag
                     
                     // 4. Find Date (Deep Search)
                     let dateStr = findValueRecursively(t, DATE_KEYS);
@@ -1082,6 +1104,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     else if (jsonResponse.data && Array.isArray(jsonResponse.data)) { pageItems = jsonResponse.data; meta = jsonResponse; if (jsonResponse.meta) meta = jsonResponse.meta; }
                     else if (jsonResponse.items && Array.isArray(jsonResponse.items)) { pageItems = jsonResponse.items; meta = jsonResponse; }
                     else if (jsonResponse.tickets && Array.isArray(jsonResponse.tickets)) { pageItems = jsonResponse.tickets; meta = jsonResponse; }
+                    else if (jsonResponse.participants && Array.isArray(jsonResponse.participants)) { pageItems = jsonResponse.participants; meta = jsonResponse; }
                     else { const keys = Object.keys(jsonResponse); for (const k of keys) { if (Array.isArray(jsonResponse[k])) { pageItems = jsonResponse[k]; break; } } }
 
                     if (!pageItems || pageItems.length === 0) { hasMore = false; break; }
@@ -1455,8 +1478,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     </div>
                 );
             case 'search':
-                // [SEARCH CONTENT OMITTED FOR BREVITY - UNCHANGED]
-                // Re-adding critical search functionality to prevent regression
                 if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
                     <div className="max-w-2xl mx-auto space-y-6">
@@ -1528,14 +1549,22 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         
                                         {/* DETAILED BUYER INFO GRID */}
                                         <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            {/* IMPORTANT: Access Code Display */}
+                                            {buyer.access_code && (
+                                                <div className="bg-black/40 p-2 rounded border border-purple-500/30">
+                                                    <span className="text-xs text-purple-400 uppercase font-bold">Código de Acesso (Ingresso)</span>
+                                                    <p className="text-white font-mono text-lg font-bold tracking-wider">{buyer.access_code}</p>
+                                                </div>
+                                            )}
+                                            
                                             <div><span className="text-xs text-gray-400 uppercase font-bold">Email</span><p className="text-white">{buyer.email || '-'}</p></div>
                                             <div><span className="text-xs text-gray-400 uppercase font-bold">Telefone</span><p className="text-white">{buyer.phone || '-'}</p></div>
                                             <div><span className="text-xs text-gray-400 uppercase font-bold">Documento ({buyer.document_type || 'DOC'})</span><p className="text-white">{buyer.document || buyer.cpf || '-'}</p></div>
-                                            <div><span className="text-xs text-gray-400 uppercase font-bold">Código de Acesso</span><p className="text-white font-mono">{buyer.access_code || '-'}</p></div>
+                                            
                                             <div>
                                                 <span className="text-xs text-gray-400 uppercase font-bold">Check-in na API?</span>
-                                                <p className={`font-bold ${buyer.checked_in ? 'text-green-400' : 'text-gray-400'}`}>
-                                                    {buyer.checked_in ? 'SIM' : 'NÃO'}
+                                                <p className={`font-bold ${buyer.checked_in || buyer.status === 'used' || buyer.status === 'checked_in' ? 'text-green-400' : 'text-gray-400'}`}>
+                                                    {(buyer.checked_in || buyer.status === 'used' || buyer.status === 'checked_in') ? 'SIM' : 'NÃO'}
                                                 </p>
                                             </div>
                                             {(!buyer.name && buyer.first_name) && (
@@ -1560,7 +1589,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                                 <p className="text-xs font-bold text-gray-400 mb-2 uppercase">Ingressos ({buyer.tickets.length})</p>
                                                 <div className="space-y-2">
                                                     {buyer.tickets.map((t: any, ti: number) => {
-                                                        const code = findValueRecursively(t, ['qr_code', 'code', 'ticket_code', 'uuid', 'barcode', 'id', 'ticket_id', 'pk', 'locator', 'identifier', 'friendly_id']);
+                                                        const code = findValueRecursively(t, ['qr_code', 'code', 'ticket_code', 'uuid', 'barcode', 'id', 'ticket_id', 'pk', 'locator', 'identifier', 'friendly_id', 'access_code']);
                                                         const sector = findValueRecursively(t, ['sector', 'sector_name', 'section', 'category', 'product_name']);
                                                         const status = findValueRecursively(t, ['status', 'state']);
                                                         
