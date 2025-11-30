@@ -716,10 +716,21 @@ const App: React.FC = () => {
                                         
                                         // Helper to dig for ID
                                         const findId = (obj: any) => {
-                                             if (obj.id && (obj.access_code === code || obj.code === code || obj.qr_code === code)) return obj.id;
-                                             // Check inside tickets array
+                                             const c = code.trim().toLowerCase();
+                                             // Priority 1: match access_code on root (Participant)
+                                             if (obj.access_code && String(obj.access_code).trim().toLowerCase() === c) return obj.id;
+                                             
+                                             // Priority 2: match other code fields on root
+                                             if (obj.code && String(obj.code).trim().toLowerCase() === c) return obj.id;
+                                             if (obj.qr_code && String(obj.qr_code).trim().toLowerCase() === c) return obj.id;
+                                    
+                                             // Priority 3: check nested tickets
                                              if (obj.tickets && Array.isArray(obj.tickets)) {
-                                                 const t = obj.tickets.find((t:any) => t.qr_code === code || t.code === code || t.access_code === code);
+                                                 const t = obj.tickets.find((t:any) => 
+                                                    (t.access_code && String(t.access_code).trim().toLowerCase() === c) ||
+                                                    (t.qr_code && String(t.qr_code).trim().toLowerCase() === c) ||
+                                                    (t.code && String(t.code).trim().toLowerCase() === c)
+                                                 );
                                                  if (t) return t.id || t.ticket_id;
                                              }
                                              return null;
