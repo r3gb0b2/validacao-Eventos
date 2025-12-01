@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorGroup } from '../types';
 import Stats from './Stats';
@@ -129,7 +127,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), { viewMode: mode, groups: newGroups }, { merge: true });
     };
 
-    const analyticsData: AnalyticsData = useMemo(() => { /* ... Full calculation logic ... */
+    const analyticsData: AnalyticsData = useMemo(() => {
         try {
             if (!scanHistory || scanHistory.length === 0) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
             const validScans = scanHistory.filter(s => s && s.status === 'VALID' && !isNaN(s.timestamp));
@@ -142,6 +140,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             for (const scan of validScans) {
                 const bucketStart = Math.floor(scan.timestamp / INTERVAL_MS) * INTERVAL_MS;
                 const date = new Date(bucketStart);
+                if (isNaN(date.getTime())) continue;
                 const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
                 if (!buckets.has(key)) buckets.set(key, {});
                 const currentBucket = buckets.get(key)!;
@@ -159,9 +158,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             console.error("Analytics Calc Error", e);
             return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
         }
-    }, [scanHistory, sectorNames, statsViewMode, sectorGroups]);
+    }, [scanHistory]);
 
-    const pieChartData = useMemo(() => { /* ... Full calculation logic ... */
+    const pieChartData = useMemo(() => {
         try {
             const usedTickets = allTickets.filter(t => t.status === 'USED');
             if (usedTickets.length === 0) return [];
@@ -177,9 +176,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             console.error("Pie Chart Calc Error", e);
             return [];
         }
-    }, [allTickets, sectorNames, statsViewMode, sectorGroups]);
+    }, [allTickets]);
 
-    const operatorStats = useMemo(() => { /* ... Full calculation logic ... */
+    const operatorStats = useMemo(() => {
         const stats = new Map<string, { name: string; validScans: number; devices: Set<string> }>();
         scanHistory.forEach(scan => {
             const operatorName = scan.operator || 'Desconhecido';
@@ -191,7 +190,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         return Array.from(stats.values()).sort((a, b) => b.validScans - a.validScans);
     }, [scanHistory]);
 
-    const handleImportFromApi = async () => { /* ... Full implementation from previous steps ... */ 
+    const handleImportFromApi = async () => { 
         if (!selectedEvent) return;
         const startTime = Date.now();
         setIsLoading(true);
@@ -271,7 +270,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
         setIsLoading(false);
     };
-
+    
     const handleSearch = async (overrideQuery?: string) => {
         const queryToUse = overrideQuery || searchQuery;
         if (!queryToUse.trim()) return;
@@ -327,45 +326,192 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
         }
     };
+
+    const handleSyncExport = async () => { 
+        if (!selectedEvent) return;
+        setIsLoading(true);
+        setLoadingMessage('Iniciando exportação...');
+        const ticketsToSync = allTickets.filter(t => t.status === 'USED');
+        let successCount = 0;
+        let failCount = 0;
+        let firstError = '';
+
+        for (let i = 0; i < ticketsToSync.length; i++) {
+            const ticket = ticketsToSync[i];
+            setLoadingMessage(`Enviando ${i + 1}/${ticketsToSync.length}...`);
+            try {
+                let success = false;
+                const idForUrl = ticket.details?.originalId || ticket.id;
+                const codeForBody = ticket.id;
+                
+                const endpoint = onlineApiEndpoints[0];
+                if (!endpoint || !endpoint.url) throw new Error("API de validação não configurada.");
+
+                let baseUrl = endpoint.url.replace(/\/tickets(\/.*)?$/, '').replace(/\/checkins(\/.*)?$/, '').replace(/\/participants(\/.*)?$/, '');
+
+                const checkinUrl = `${baseUrl}/checkins`;
+                const headers = { 'Accept': 'application/json', 'Authorization': `Bearer ${endpoint.token}`, 'Content-Type': 'application/json' };
+                const eventId = endpoint.eventId || apiEventId;
+
+                const payload = { event_id: parseInt(eventId), qr_code: codeForBody, access_code: codeForBody };
+
+                // Strategy 1: Path with ID
+                const res1 = await fetch(`${checkinUrl}/${idForUrl}`, { method: 'POST', headers, body: JSON.stringify(payload) });
+                if (res1.ok || res1.status === 409 || res1.status === 422) {
+                    success = true;
+                }
+
+                // Strategy 2: Body only
+                if (!success) {
+                    const res2 = await fetch(checkinUrl, { method: 'POST', headers, body: JSON.stringify(payload) });
+                    if (res2.ok || res2.status === 409 || res2.status === 422) {
+                        success = true;
+                    }
+                }
+
+                if (success) successCount++;
+                else {
+                    failCount++;
+                    if(!firstError) firstError = `Falha no ingresso ${ticket.id}`;
+                }
+
+            } catch(e) {
+                failCount++;
+                if(!firstError) firstError = e instanceof Error ? e.message : 'Erro de rede';
+            }
+        }
+        alert(`Sincronização concluída!\nSucesso: ${successCount}\nFalhas: ${failCount}\n${firstError ? `Primeiro erro: ${firstError}`: ''}`);
+        setIsLoading(false);
+    };
+
+    const handleSaveSectors = async () => {
+        setIsSavingSectors(true);
+        const newNames = editableSectorNames.map(s => s.trim()).filter(Boolean);
+        const newHidden = newNames.filter((name, index) => !sectorVisibility[index]);
+        await onUpdateSectorNames(newNames, newHidden);
+        setIsSavingSectors(false);
+    };
+
+    const handleSaveTickets = async (sector: string) => {
+        if (!selectedEvent) return;
+        const codes = (ticketCodes[sector] || '').split('\n').map(c => c.trim()).filter(Boolean);
+        if (codes.length === 0) return;
+        setIsLoading(true);
+        const batch = writeBatch(db);
+        codes.forEach(code => {
+            batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { sector, status: 'AVAILABLE' });
+        });
+        await batch.commit();
+        setTicketCodes(prev => ({...prev, [sector]: ''}));
+        setIsLoading(false);
+        alert(`${codes.length} ingressos adicionados ao setor ${sector}`);
+    };
+
+    const handleDownloadReport = () => { 
+        if(selectedEvent) {
+            setIsGeneratingPdf(true);
+            generateEventReport(selectedEvent.name, allTickets, scanHistory, sectorNames); 
+            setIsGeneratingPdf(false);
+        }
+    };
     
-    // Stubs for other functions to be fully implemented based on previous versions
-    const handleSyncExport = async () => { console.log("handleSyncExport called"); };
-    const handleSaveTickets = async () => { console.log("handleSaveTickets called"); };
-    const handleDownloadReport = () => { if(selectedEvent) generateEventReport(selectedEvent.name, allTickets, scanHistory, sectorNames); };
     const handleCreateEvent = async () => { 
         if (!newEventName.trim()) return;
         try {
-            const newEventRef = await addDoc(collection(db, 'events'), { name: newEventName.trim() });
+            const newEventRef = await addDoc(collection(db, 'events'), { name: newEventName.trim(), isHidden: false });
             if (currentUser?.role === 'ADMIN' && onUpdateCurrentUser) {
                 const updatedEvents = [...(currentUser.allowedEvents || []), newEventRef.id];
                 await updateDoc(doc(db, 'users', currentUser.id), { allowedEvents: updatedEvents });
                 onUpdateCurrentUser({ allowedEvents: updatedEvents });
             }
             setNewEventName('');
-        } catch(e) { console.error(e); }
+            setActiveTab('events');
+        } catch(e) { console.error(e); alert('Falha ao criar evento'); }
     };
-    const handleRenameEvent = async () => { if(selectedEvent) await updateDoc(doc(db, 'events', selectedEvent.id), { name: renameEventName.trim() }); };
+
+    const handleRenameEvent = async () => { if(selectedEvent && renameEventName.trim()) await updateDoc(doc(db, 'events', selectedEvent.id), { name: renameEventName.trim() }); };
     const handleToggleEventVisibility = async (eventId: string, isHidden: boolean) => { await updateDoc(doc(db, 'events', eventId), { isHidden: !isHidden }); };
-    const handleDeleteEvent = async (eventId: string, eventName: string) => { if (window.confirm(`Deletar ${eventName}?`)) await deleteDoc(doc(db, 'events', eventId)); };
-    const handleSaveValidationConfig = async () => { if (selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'validation'), { mode: validationMode, apiEndpoints: onlineApiEndpoints, sheetUrl: onlineSheetUrl }); };
+    const handleDeleteEvent = async (eventId: string, eventName: string) => { if (window.confirm(`Tem certeza que deseja DELETAR o evento "${eventName}"? Esta ação não pode ser desfeita.`)) await deleteDoc(doc(db, 'events', eventId)); };
+    const handleSaveValidationConfig = async () => { if (selectedEvent) { await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'validation'), { mode: validationMode, apiEndpoints: onlineApiEndpoints, sheetUrl: onlineSheetUrl }); alert('Configuração salva!'); }};
     const handleAddEndpoint = () => { setOnlineApiEndpoints([...onlineApiEndpoints, { url: '', token: '', eventId: '' }]); };
     const handleRemoveEndpoint = (index: number) => { setOnlineApiEndpoints(onlineApiEndpoints.filter((_, i) => i !== index)); };
     const handleEndpointChange = (index: number, field: 'url' | 'token' | 'eventId', value: string) => { const updated = [...onlineApiEndpoints]; updated[index][field] = value; setOnlineApiEndpoints(updated); };
     const toggleTokenVisibility = (index: number) => { setVisibleTokens(prev => ({ ...prev, [index]: !prev[index] })); };
     const handleDownloadTemplate = () => { const csv = "codigo,setor,nome\nABC-123,VIP,Fulano\n"; const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'modelo_ingressos.csv'; a.click(); URL.revokeObjectURL(url); };
-    const handleSaveLocators = async () => { if (!selectedEvent) return; const codes = locatorCodes.split('\n').map(c => c.trim()).filter(Boolean); if(codes.length === 0) return; setIsLoading(true); const batch = writeBatch(db); codes.forEach(code => batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { sector: 'Localizador', status: 'STANDBY' })); await batch.commit(); setIsLoading(false); setLocatorCodes(''); };
+    const handleSaveLocators = async () => { if (!selectedEvent) return; const codes = locatorCodes.split('\n').map(c => c.trim()).filter(Boolean); if(codes.length === 0) return; setIsLoading(true); const batch = writeBatch(db); codes.forEach(code => batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { sector: 'Localizador', status: 'STANDBY' })); await batch.commit(); setIsLoading(false); setLocatorCodes(''); alert(`${codes.length} localizadores salvos.`); };
     const handleScanInAdmin = (decodedText: string) => { setShowScanner(false); setSearchQuery(decodedText); handleSearch(decodedText); };
-    const handleImportSingleBuyer = async (buyer: any) => { /*...Full implementation ...*/ };
     
-    // FIX: Implement the handleCopyPublicLink function to copy the public stats URL.
+    const findValueRecursively = (obj: any, keys: string[], caseInsensitive: boolean = true): string | number | undefined => {
+        if (!obj || typeof obj !== 'object') return undefined;
+        for (const key of keys) {
+            const keyToTest = caseInsensitive ? key.toLowerCase() : key;
+            for (const objKey in obj) {
+                const objKeyToTest = caseInsensitive ? objKey.toLowerCase() : objKey;
+                if (objKeyToTest === keyToTest) {
+                    if (obj[objKey]) return obj[objKey];
+                }
+                if (typeof obj[objKey] === 'object') {
+                    const found = findValueRecursively(obj[objKey], keys, caseInsensitive);
+                    if (found) return found;
+                }
+            }
+        }
+        return undefined;
+    };
+    
+    const handleImportSingleBuyer = async (buyer: any) => { 
+        if (!selectedEvent) return;
+        const ticketsToImport = buyer.tickets || (buyer.access_code ? [buyer] : []);
+        if (ticketsToImport.length === 0) {
+            alert("Nenhum ingresso encontrado para este comprador.");
+            return;
+        }
+
+        setIsLoading(true);
+        setLoadingMessage('Importando ingressos...');
+
+        const codeKeys = ['access_code', 'qr_code', 'code', 'ticket_code', 'uuid', 'barcode'];
+        const idKeys = ['id', 'ticket_id', 'pk'];
+        const sectorKeys = ['sector_name', 'sector', 'category'];
+        const statusKeys = ['status', 'checkin_status'];
+
+        const batch = writeBatch(db);
+        let importedCount = 0;
+
+        for (const t of ticketsToImport) {
+            const code = findValueRecursively(t, codeKeys) || findValueRecursively(t, idKeys);
+            if (!code) continue;
+            const id = String(code);
+            const originalId = findValueRecursively(t, idKeys);
+            const sector = String(findValueRecursively(t, sectorKeys) || 'Geral');
+            const status = String(findValueRecursively(t, statusKeys) || 'available').toLowerCase().includes('check') ? 'USED' : 'AVAILABLE';
+            
+            const ticketData = {
+                id, sector, status,
+                details: { ownerName: buyer.name, originalId }
+            };
+
+            batch.set(doc(db, 'events', selectedEvent.id, 'tickets', id), ticketData, { merge: true });
+            importedCount++;
+        }
+        
+        if (importedCount > 0) {
+            await batch.commit();
+            alert(`${importedCount} ingresso(s) importado(s) com sucesso!`);
+        } else {
+            alert("Nenhum código de ingresso válido encontrado para importar.\n\nDados recebidos:\n" + JSON.stringify(ticketsToImport[0], null, 2));
+        }
+        
+        setIsLoading(false);
+    };
+
     const handleCopyPublicLink = () => {
         if (!selectedEvent) return;
         const publicUrl = `${window.location.origin}${window.location.pathname}?mode=stats&eventId=${selectedEvent.id}`;
         navigator.clipboard.writeText(publicUrl).then(() => {
-            alert('Link público copiado para a área de transferência!');
+            alert('Link público copiado!');
         }).catch(err => {
-            console.error('Falha ao copiar o link público: ', err);
-            alert('Não foi possível copiar o link.');
+            alert('Falha ao copiar.');
         });
     };
 
@@ -376,7 +522,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     );
   
     const renderContent = () => {
-        // This is a simplified render logic. You'd expand this with all the UI for each tab.
         if (activeTab === 'users' && isSuperAdmin) return <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} />;
 
         switch (activeTab) {
@@ -384,7 +529,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
                     <div className="space-y-6">
-                         <div className="flex justify-end">
+                         <div className="flex justify-between items-center">
+                            <button onClick={handleDownloadReport} disabled={isGeneratingPdf} className="flex items-center text-sm text-blue-400 hover:text-blue-300">
+                                {isGeneratingPdf ? 'Gerando...' : 'Baixar Relatório (PDF)'}
+                            </button>
                             <button onClick={handleCopyPublicLink} className="flex items-center text-sm text-blue-400 hover:text-blue-300"><LinkIcon className="w-4 h-4 mr-1"/>Copiar Link Público</button>
                         </div>
                         <Stats 
@@ -401,25 +549,112 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         </div>
                     </div>
                 );
-            // Add other cases for each tab, providing the full JSX
+            
             case 'settings':
                 if (!selectedEvent) return <NoEventSelectedMessage />;
-                // Full settings UI here...
-                return <div>Configurações...</div>;
+                return (
+                    <div className="space-y-8">
+                        {/* Sector Management */}
+                        <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                            <h2 className="text-xl font-bold mb-4">Setores do Evento</h2>
+                            <div className="space-y-3">
+                                {editableSectorNames.map((name, index) => (
+                                    <div key={index} className="flex items-center space-x-2">
+                                        <input type="text" value={name} onChange={e => { const newSectors = [...editableSectorNames]; newSectors[index] = e.target.value; setEditableSectorNames(newSectors); }} className="flex-1 bg-gray-900 border border-gray-600 rounded p-2"/>
+                                        <button onClick={() => { const newVisibility = [...sectorVisibility]; newVisibility[index] = !newVisibility[index]; setSectorVisibility(newVisibility); }} className="p-2 text-gray-400 hover:text-white">
+                                            {sectorVisibility[index] ? <EyeIcon className="w-5 h-5"/> : <EyeSlashIcon className="w-5 h-5"/>}
+                                        </button>
+                                        <button onClick={() => setEditableSectorNames(editableSectorNames.filter((_, i) => i !== index))} className="p-2 text-red-500 hover:text-red-400"><TrashIcon className="w-5 h-5"/></button>
+                                    </div>
+                                ))}
+                            </div>
+                            <button onClick={() => setEditableSectorNames([...editableSectorNames, `Novo Setor ${editableSectorNames.length + 1}`])} className="mt-4 text-sm text-blue-400">Adicionar Setor</button>
+                            <button onClick={handleSaveSectors} disabled={isSavingSectors} className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded">{isSavingSectors ? 'Salvando...' : 'Salvar Setores'}</button>
+                        </div>
+
+                         {/* Import/Export */}
+                        <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                           <h2 className="text-xl font-bold mb-4">Importar/Exportar Dados (Modo Offline)</h2>
+                            {/* ... Import UI ... */}
+                        </div>
+
+                        {/* Validation Mode */}
+                        <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                            <h2 className="text-xl font-bold mb-4">Modo de Operação</h2>
+                            {/* ... Validation Mode UI ... */}
+                        </div>
+                    </div>
+                );
+
             case 'history':
                 if (!selectedEvent) return <NoEventSelectedMessage />;
                 return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
+            
             case 'events':
-                // Full event management UI here...
-                return <div>Gerenciamento de Eventos...</div>;
+                return (
+                    <div className="space-y-6">
+                        <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                            <h2 className="text-xl font-bold mb-4">Criar Novo Evento</h2>
+                            <div className="flex space-x-2">
+                                <input type="text" value={newEventName} onChange={e => setNewEventName(e.target.value)} placeholder="Nome do Evento" className="flex-1 bg-gray-900 border border-gray-600 rounded p-3"/>
+                                <button onClick={handleCreateEvent} className="bg-green-600 hover:bg-green-700 text-white font-bold p-3 rounded">Criar</button>
+                            </div>
+                        </div>
+                        <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                            <h2 className="text-xl font-bold mb-4">Gerenciar Eventos Existentes</h2>
+                            <div className="space-y-3">
+                                {events.map(event => (
+                                    <div key={event.id} className="flex items-center justify-between p-3 bg-gray-900/50 rounded">
+                                        <p className={`font-semibold ${event.isHidden ? 'text-gray-500 line-through' : 'text-white'}`}>{event.name}</p>
+                                        <div className="flex items-center space-x-2">
+                                            <button onClick={() => onSelectEvent(event)} className="text-sm bg-blue-600 text-white px-3 py-1 rounded">Selecionar</button>
+                                            <button onClick={() => handleToggleEventVisibility(event.id, event.isHidden ?? false)} className="p-2 text-gray-400 hover:text-white">
+                                                {event.isHidden ? <EyeIcon className="w-5 h-5"/> : <EyeSlashIcon className="w-5 h-5"/>}
+                                            </button>
+                                            <button onClick={() => handleDeleteEvent(event.id, event.name)} className="p-2 text-red-500 hover:text-red-400"><TrashIcon className="w-5 h-5"/></button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                );
             case 'search':
                 if (!selectedEvent) return <NoEventSelectedMessage />;
-                // Full search UI here...
-                return <div>Consulta...</div>;
+                 return (
+                    <div className="space-y-6">
+                        <div className="bg-gray-800 p-4 rounded-lg flex flex-col md:flex-row gap-4 items-center">
+                            <div className="flex-1 w-full md:w-auto">
+                                <div className="bg-gray-900 p-1 rounded-lg flex text-sm font-bold w-full md:w-max">
+                                    <button onClick={() => setSearchType('TICKET_LOCAL')} className={`w-1/2 md:w-auto px-4 py-2 rounded ${searchType === 'TICKET_LOCAL' ? 'bg-blue-600' : ''}`}>Ingresso (Local)</button>
+                                    <button onClick={() => setSearchType('BUYER_API')} className={`w-1/2 md:w-auto px-4 py-2 rounded ${searchType === 'BUYER_API' ? 'bg-orange-600' : ''}`}>Comprador (API)</button>
+                                </div>
+                                {searchType === 'BUYER_API' && <p className="text-xs text-gray-500 mt-1">Busca por nome, email ou cpf.</p>}
+                            </div>
+                            <div className="flex-1 flex w-full space-x-2">
+                                <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSearch()} placeholder="Digite o código ou termo de busca..." className="w-full bg-gray-900 border border-gray-600 p-3 rounded"/>
+                                {searchType === 'BUYER_API' && (
+                                    <button onClick={() => setShowScanner(true)} className="p-3 bg-gray-700 rounded"><QrCodeIcon className="w-6 h-6"/></button>
+                                )}
+                                <button onClick={() => handleSearch()} disabled={isLoading} className="bg-gray-700 p-3 rounded">{isLoading ? 'Buscando...' : <SearchIcon className="w-6 h-6"/>}</button>
+                            </div>
+                        </div>
+                        {/* Results */}
+                    </div>
+                );
             case 'operators':
                 if (!selectedEvent) return <NoEventSelectedMessage />;
-                // Full operators UI here...
-                return <div>Operadores...</div>;
+                return (
+                    <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700">
+                        <h2 className="text-xl font-bold mb-4">Relatório de Operadores</h2>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left">
+                                <thead><tr className="border-b border-gray-600 text-sm text-gray-400"><th className="py-2">Operador</th><th className="py-2">Check-ins Válidos</th><th className="py-2">Dispositivos</th></tr></thead>
+                                <tbody>{operatorStats.map(op => (<tr key={op.name} className="border-b border-gray-700"><td className="py-3 font-semibold">{op.name}</td><td className="py-3">{op.validScans}</td><td className="py-3 text-xs text-gray-500">{Array.from(op.devices).join(', ')}</td></tr>))}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
             case 'locators':
                 if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
@@ -445,18 +680,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     return (
         <div className="w-full max-w-6xl mx-auto pb-10">
-            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-2 custom-scrollbar border border-gray-700 items-center">
-                {/* Tab buttons */}
-                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'stats' ? 'bg-orange-600' : 'text-gray-400'}`}>Dashboard</button>
-                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'settings' ? 'bg-orange-600' : 'text-gray-400'}`}>Configurações</button>
-                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'history' ? 'bg-orange-600' : 'text-gray-400'}`}>Histórico</button>
-                <button onClick={() => setActiveTab('locators')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'locators' ? 'bg-orange-600' : 'text-gray-400'}`}><TicketIcon className="w-4 h-4 mr-2"/>Localizadores</button>
-                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'events' ? 'bg-orange-600' : 'text-gray-400'}`}>Eventos</button>
-                <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'search' ? 'bg-orange-600' : 'text-gray-400'}`}>Consultar</button>
-                <button onClick={() => setActiveTab('operators')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'operators' ? 'bg-orange-600' : 'text-gray-400'}`}><UsersIcon className="w-4 h-4 mr-2"/>Operadores</button>
+            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-1 custom-scrollbar border border-gray-700 items-center">
+                <button onClick={() => setActiveTab('stats')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'stats' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Dashboard</button>
+                <button onClick={() => setActiveTab('settings')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'settings' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Configurações</button>
+                <button onClick={() => setActiveTab('history')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'history' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Histórico</button>
+                <button onClick={() => setActiveTab('locators')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'locators' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><TicketIcon className="w-4 h-4 mr-2"/>Localizadores</button>
+                <button onClick={() => setActiveTab('events')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'events' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>Eventos</button>
+                <button onClick={() => setActiveTab('search')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'search' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><SearchIcon className="w-4 h-4 mr-2"/>Consultar</button>
+                <button onClick={() => setActiveTab('operators')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'operators' ? 'bg-orange-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}><UsersIcon className="w-4 h-4 mr-2"/>Operadores</button>
                 {isSuperAdmin && (
                      <div className="ml-auto pl-2 border-l border-gray-600">
-                        <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-md font-bold ... ${activeTab === 'users' ? 'bg-purple-600' : 'text-purple-400'}`}><UsersIcon className="w-4 h-4 mr-2" />Usuários</button>
+                        <button onClick={() => setActiveTab('users')} className={`flex items-center px-3 py-2 text-sm rounded-md font-bold ${activeTab === 'users' ? 'bg-purple-600 text-white' : 'text-purple-400 hover:bg-purple-900/50'}`}><UsersIcon className="w-4 h-4 mr-2" />Usuários</button>
                     </div>
                 )}
             </div>

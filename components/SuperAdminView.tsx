@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Firestore, collection, getDocs, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { User, Event } from '../types';
