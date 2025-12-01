@@ -6,7 +6,7 @@ export interface Event {
   isHidden?: boolean;
 }
 
-export type TicketStatus = 'AVAILABLE' | 'USED' | 'STANDBY';
+export type TicketStatus = 'AVAILABLE' | 'USED';
 export type Sector = string;
 export type SectorFilter = 'All' | Sector;
 

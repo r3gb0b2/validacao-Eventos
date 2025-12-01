@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Firestore, collection, getDocs, addDoc, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { User, Event } from '../types';
@@ -242,3 +243,4 @@ const SuperAdminView: React.FC<SuperAdminViewProps> = ({ db, events, onClose }) 
 };
 
 export default SuperAdminView;
+    
