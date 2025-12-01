@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorGroup } from '../types';
 import Stats from './Stats';
@@ -41,7 +42,7 @@ interface ImportPreset {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser, onUpdateCurrentUser }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search' | 'users'>('stats');
+    const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search' | 'users' | 'operators'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
     const [sectorVisibility, setSectorVisibility] = useState<boolean[]>([]); // Track visibility locally during edit
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
@@ -415,6 +416,33 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
 
     }, [allTickets, sectorNames, statsViewMode, sectorGroups]);
+    
+    // Calculate Operator Stats
+    const operatorStats = useMemo(() => {
+        if (!scanHistory) return [];
+        const stats = new Map<string, { name: string; validScans: number; devices: Set<string> }>();
+
+        scanHistory.forEach(scan => {
+            const operatorName = scan.operator || 'Desconhecido';
+            if (!stats.has(operatorName)) {
+                stats.set(operatorName, {
+                    name: operatorName,
+                    validScans: 0,
+                    devices: new Set<string>()
+                });
+            }
+            const current = stats.get(operatorName)!;
+            if (scan.status === 'VALID') {
+                current.validScans++;
+            }
+            if (scan.deviceId) {
+                current.devices.add(scan.deviceId);
+            }
+        });
+
+        return Array.from(stats.values()).sort((a, b) => b.validScans - a.validScans);
+    }, [scanHistory]);
+
 
     const handleSaveSectorNames = async () => {
         if (editableSectorNames.some(name => name.trim() === '')) {
@@ -1631,6 +1659,38 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         )}
                     </div>
                 );
+             case 'operators':
+                if (!selectedEvent) return <NoEventSelectedMessage />;
+                return (
+                    <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 animate-fade-in">
+                        <h2 className="text-xl font-bold mb-4 flex items-center"><UsersIcon className="w-6 h-6 mr-2 text-blue-500" /> Painel de Operadores</h2>
+                        <div className="overflow-x-auto">
+                             <table className="w-full text-left">
+                                <thead>
+                                    <tr className="bg-gray-700 text-gray-300 text-xs uppercase">
+                                        <th className="px-4 py-2">Operador</th>
+                                        <th className="px-4 py-2 text-center">Validações Válidas</th>
+                                        <th className="px-4 py-2">Dispositivos Utilizados</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-700">
+                                    {operatorStats.map(op => (
+                                        <tr key={op.name} className="hover:bg-gray-700/50">
+                                            <td className="px-4 py-3 font-medium text-white">{op.name}</td>
+                                            <td className="px-4 py-3 text-center text-green-400 font-bold text-lg">{op.validScans}</td>
+                                            <td className="px-4 py-3 text-gray-400 text-xs font-mono">{Array.from(op.devices).join(', ')}</td>
+                                        </tr>
+                                    ))}
+                                    {operatorStats.length === 0 && (
+                                        <tr>
+                                            <td colSpan={3} className="text-center py-4 text-gray-500">Nenhuma atividade de operador registrada.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
             case 'settings':
                  if (!selectedEvent) return <NoEventSelectedMessage />;
                 return (
@@ -1803,6 +1863,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'history' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Histórico</button>
                 <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'events' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Eventos</button>
                 <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors ${activeTab === 'search' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}>Consultar</button>
+                <button onClick={() => setActiveTab('operators')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-colors flex items-center ${activeTab === 'operators' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}><UsersIcon className="w-4 h-4 mr-2"/>Operadores</button>
                 
                 {isSuperAdmin && (
                      <div className="ml-auto pl-2 border-l border-gray-600">

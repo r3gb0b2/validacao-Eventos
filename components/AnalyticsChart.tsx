@@ -1,4 +1,5 @@
 
+
 import React from 'react';
 import { AnalyticsData } from '../types';
 
@@ -6,6 +7,41 @@ interface AnalyticsChartProps {
   data: AnalyticsData;
   sectorNames: string[];
 }
+
+// --- SVG Path Generation Helper ---
+// This function calculates control points and generates a smooth cubic bezier path string
+const getSvgPath = (points: { x: number; y: number }[], smoothing: number, height: number): string => {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x},${height} L ${points[0].x},${points[0].y} L ${points[0].x},${height} Z`;
+
+  const controlPoint = (current: any, previous: any, next: any, reverse?: boolean) => {
+    const p = previous || current;
+    const n = next || current;
+    const o = {
+      length: Math.sqrt(Math.pow(n.x - p.x, 2) + Math.pow(n.y - p.y, 2)),
+      angle: Math.atan2(n.y - p.y, n.x - p.x),
+    };
+    const angle = o.angle + (reverse ? Math.PI : 0);
+    const length = o.length * smoothing;
+    const x = current.x + Math.cos(angle) * length;
+    const y = current.y + Math.sin(angle) * length;
+    return [x, y];
+  };
+
+  const pathData = points.map((point, i, a) => {
+    if (i === 0) {
+      return `M ${point.x},${point.y}`;
+    }
+    const [cpsX, cpsY] = controlPoint(a[i - 1], a[i - 2], point);
+    const [cpeX, cpeY] = controlPoint(point, a[i - 1], a[i + 1], true);
+    return `C ${cpsX},${cpsY} ${cpeX},${cpeY} ${point.x},${point.y}`;
+  });
+
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  return `${pathData.join(' ')} L ${lastPoint.x},${height} L ${firstPoint.x},${height} Z`;
+};
+
 
 const AnalyticsChart: React.FC<AnalyticsChartProps> = ({ data, sectorNames }) => {
   const { timeBuckets, peak } = data;
@@ -17,58 +53,77 @@ const AnalyticsChart: React.FC<AnalyticsChartProps> = ({ data, sectorNames }) =>
       </div>
     );
   }
+  
+  const CHART_WIDTH = 1000;
+  const CHART_HEIGHT = 288; // h-72
+  const SMOOTHING = 0.2;
 
   const maxCount = Math.max(...timeBuckets.map(b => b.total), 1);
-  const sectorColors = ['bg-blue-500', 'bg-teal-500', 'bg-purple-500', 'bg-pink-500', 'bg-fuchsia-500', 'bg-sky-500'];
+  const points = timeBuckets.map((bucket, index) => ({
+      x: (index / (timeBuckets.length - 1)) * CHART_WIDTH,
+      y: CHART_HEIGHT - (bucket.total / maxCount) * CHART_HEIGHT,
+      time: bucket.time,
+      total: bucket.total,
+      counts: bucket.counts
+  }));
+  
+  const path = getSvgPath(points, SMOOTHING, CHART_HEIGHT);
   const sectorTextColors = ['text-blue-400', 'text-teal-400', 'text-purple-400', 'text-pink-400', 'text-fuchsia-400', 'text-sky-400'];
-
 
   return (
     <div className="w-full bg-gray-800 p-4 rounded-lg">
       <h3 className="text-lg font-semibold text-white mb-4">Entradas a Cada 30 Minutos</h3>
-      <div className="flex items-end h-72 space-x-2 border-l-2 border-b-2 border-gray-600 pl-2 pb-1">
-        {timeBuckets.map((bucket) => {
-          const isPeak = bucket.time === peak.time;
-          return (
-            <div key={bucket.time} className="flex-1 flex flex-col items-center h-full justify-end relative group">
-              <div
-                className={`w-full flex flex-col-reverse rounded-t-md ${isPeak ? 'bg-orange-600/30' : 'bg-gray-700'}`}
-                style={{ height: `${(bucket.total / maxCount) * 100}%` }}
-              >
-                {sectorNames.map((sector, index) => {
-                  const sectorCount = bucket.counts[sector] || 0;
-                  if (sectorCount === 0) return null;
-                  const sectorHeight = (sectorCount / bucket.total) * 100;
-                  return (
-                    <div
-                      key={sector}
-                      className={`${sectorColors[index % sectorColors.length]}`}
-                      style={{ height: `${sectorHeight}%` }}
-                    />
-                  );
-                })}
-              </div>
-              <span className="text-xs text-gray-400 mt-1 absolute -bottom-5">{bucket.time}</span>
-              {/* Tooltip */}
-              <div className="absolute bottom-full mb-2 w-32 bg-gray-900 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                <p className="font-bold">{bucket.time}</p>
-                 {sectorNames.map((sector, index) => (
-                    <p key={sector}><span className={sectorTextColors[index % sectorTextColors.length]}>{sector}:</span> {bucket.counts[sector] || 0}</p>
-                 ))}
-                <hr className="border-gray-600 my-1"/>
-                <p>Total: {bucket.total}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex justify-end flex-wrap gap-x-4 gap-y-2 mt-4">
-          {sectorNames.map((sector, index) => (
-            <div key={sector} className="flex items-center space-x-2">
-                <div className={`w-3 h-3 rounded-full ${sectorColors[index % sectorColors.length]}`}></div>
-                <span className="text-sm text-gray-300">{sector}</span>
-            </div>
-          ))}
+      
+      {/* Chart Area */}
+      <div className="relative h-72 w-full">
+         <svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} className="absolute inset-0 w-full h-full" preserveAspectRatio="none">
+             <defs>
+                <linearGradient id="area-gradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f97316" stopOpacity="0.4" />
+                    <stop offset="100%" stopColor="#f97316" stopOpacity="0.05" />
+                </linearGradient>
+            </defs>
+             <path d={path} fill="url(#area-gradient)" stroke="#f97316" strokeWidth="2" />
+         </svg>
+         
+         {/* Interaction Layer for Tooltips */}
+         <div className="absolute inset-0 flex">
+             {points.map((point) => {
+                 const isPeak = point.time === peak.time;
+                 return (
+                    <div key={point.time} className="flex-1 group relative flex items-end justify-center">
+                        {isPeak && (
+                           <div className="absolute top-0 w-px h-full bg-orange-500/50" style={{ transform: `translateY(${point.y}px)` }}>
+                               <div className="absolute -top-1 -left-1 w-2 h-2 rounded-full bg-orange-400"></div>
+                           </div>
+                        )}
+                         {/* Tooltip */}
+                        <div className="absolute bottom-full mb-2 w-36 bg-gray-900 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 border border-gray-600 shadow-lg">
+                            <p className="font-bold">{point.time}</p>
+                            <hr className="border-gray-600 my-1"/>
+                             {sectorNames.map((sector, index) => (
+                                <p key={sector} className="text-left"><span className={sectorTextColors[index % sectorTextColors.length]}>{sector}:</span> {point.counts[sector] || 0}</p>
+                             ))}
+                            <hr className="border-gray-600 my-1"/>
+                            <p className="font-bold text-left">Total: {point.total}</p>
+                        </div>
+                    </div>
+                 )
+             })}
+         </div>
+
+         {/* X-Axis Labels */}
+         <div className="absolute -bottom-5 inset-x-0 flex justify-between">
+            {timeBuckets.map((bucket, index) => {
+                // Show fewer labels on smaller screens if too cluttered
+                if (timeBuckets.length > 10 && index % 2 !== 0 && timeBuckets.length > 15) return null;
+                return (
+                    <span key={bucket.time} className="text-xs text-gray-400" style={{ transform: `translateX(${(index / (timeBuckets.length - 1)) * 100}%)`}}>
+                        {bucket.time}
+                    </span>
+                );
+            })}
+         </div>
       </div>
     </div>
   );
