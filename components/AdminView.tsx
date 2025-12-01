@@ -586,29 +586,30 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setBuyerSearchResults([]);
             
             try {
-                // Construct URL to /buyers OR /participants endpoint
-                // PREFER PARTICIPANTS if default (user request)
-                let searchEndpoint = apiUrl.trim();
+                let baseUrl = apiUrl.trim();
+                if (!baseUrl) throw new Error("URL da API não configurada.");
                 
-                // If user didn't explicitly set URL to something else, force /participants
-                // Or if it was set to /tickets (default), switch to /participants for search
-                if (!searchEndpoint.includes('/participants') && !searchEndpoint.includes('/buyers')) {
-                    try {
-                        const urlObj = new URL(searchEndpoint || 'https://public-api.stingressos.com.br/tickets');
-                        searchEndpoint = `${urlObj.origin}/participants`;
-                    } catch (e) {
-                         searchEndpoint = 'https://public-api.stingressos.com.br/participants';
-                    }
+                // More robustly change the endpoint to /participants
+                const url = new URL(baseUrl);
+                let pathSegments = url.pathname.split('/').filter(Boolean);
+                
+                // Replace the last segment if it's a known endpoint
+                const lastSegment = pathSegments[pathSegments.length - 1];
+                if (['tickets', 'buyers', 'checkins'].includes(lastSegment)) {
+                    pathSegments[pathSegments.length - 1] = 'participants';
+                } else if (lastSegment !== 'participants') {
+                    // If it's something else, we can't be sure, but a common case is an empty path
+                    pathSegments.push('participants');
                 }
+                url.pathname = '/' + pathSegments.join('/');
                 
-                // SAFE URL CONSTRUCTION
-                const urlObj = new URL(searchEndpoint);
-                urlObj.searchParams.set('search', queryToUse);
+                // Add search parameters safely
+                url.searchParams.set('search', queryToUse.trim());
                 if (apiEventId) {
-                     urlObj.searchParams.set('event_id', apiEventId);
+                    url.searchParams.set('event_id', apiEventId);
                 }
                 
-                const searchUrl = urlObj.toString();
+                const searchUrl = url.toString();
                 
                 const res = await fetch(searchUrl, {
                     headers: {
@@ -629,10 +630,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
                 // POST-PROCESSING: Normalize results
                 results.forEach((r: any) => {
-                     // Check if 'tickets' is missing or empty
                      if (!r.tickets || r.tickets.length === 0) {
-                         // Check if this object ITSELF is the ticket/participant with an access_code
-                         // Use recursive search to find any code
                          const code = findValueRecursively(r, ['access_code', 'code', 'qr_code']);
                          if (code) {
                              const sector = findValueRecursively(r, ['sector', 'sector_name', 'product_name']) || 'Geral';
