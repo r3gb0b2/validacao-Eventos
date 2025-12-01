@@ -1,4 +1,5 @@
 
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Ticket, SectorGroup } from '../types';
 import { TableCellsIcon, FunnelIcon, PlusCircleIcon, TrashIcon, CogIcon } from './Icons';
@@ -119,17 +120,23 @@ const Stats: React.FC<StatsProps> = ({
         try {
             if (!Array.isArray(allTickets)) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
             
-            const filteredTickets = allTickets.filter(t => {
+            // Base tickets for calculation based on selected sectors
+            const filteredTicketsBySelection = allTickets.filter(t => {
                 if (!t || !t.sector) return false;
                 const ticketSectorNorm = normalize(t.sector);
                 return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
             });
 
-            const total = filteredTickets.length;
-            const scanned = filteredTickets.filter(t => t.status === 'USED').length;
+            // "Total de Ingressos" should NOT include stand-by tickets
+            const total = filteredTicketsBySelection.filter(t => t.status !== 'STANDBY').length;
+            // "Scanned" SHOULD include stand-by tickets that were used
+            const scanned = filteredTicketsBySelection.filter(t => t.status === 'USED').length;
+
             const remaining = total - scanned;
             const percentage = total > 0 ? ((scanned / total) * 100).toFixed(1) : '0.0';
+            
             return { total, scanned, remaining, percentage };
+
         } catch (e) {
             console.error("General Stats Calc Error", e);
             return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
@@ -141,32 +148,29 @@ const Stats: React.FC<StatsProps> = ({
         try {
             const statsMap: Record<string, { total: number; scanned: number; displayName: string; isGroup?: boolean; subSectors?: string[] }> = {};
             const handledSectors = new Set<string>();
+            // Use all tickets for processing, but filter out STANDBY from totals later
             const safeAllTickets = Array.isArray(allTickets) ? allTickets : [];
             
             // If Grouped Mode is ON
             if (viewMode === 'grouped') {
-                // Process Groups first
                 safeGroups.forEach(group => {
                     if (!group || !Array.isArray(group.includedSectors)) return;
                     let groupTotal = 0;
                     let groupScanned = 0;
                     
-                    // Find tickets belonging to any sector in this group
                     safeAllTickets.forEach(ticket => {
                         if (!ticket) return;
                         const tSector = normalize(ticket.sector || 'Desconhecido');
                         const isInGroup = group.includedSectors.some(s => normalize(s) === tSector);
                         
                         if (isInGroup) {
-                            groupTotal++;
+                            if (ticket.status !== 'STANDBY') groupTotal++;
                             if (ticket.status === 'USED') groupScanned++;
                         }
                     });
 
-                    // Mark these sectors as handled
                     group.includedSectors.forEach(s => handledSectors.add(normalize(s)));
 
-                    // Add to stats map
                     statsMap[`group_${group.id}`] = {
                         total: groupTotal,
                         scanned: groupScanned,
@@ -177,7 +181,6 @@ const Stats: React.FC<StatsProps> = ({
                 });
             }
 
-            // Process Individual Sectors (Either all of them if raw mode, or remaining ones if grouped mode)
             const sectorsToProcess = viewMode === 'raw' 
                 ? safeSectorNames 
                 : safeSectorNames.filter(s => !handledSectors.has(normalize(s)));
@@ -190,7 +193,7 @@ const Stats: React.FC<StatsProps> = ({
 
                  safeAllTickets.forEach(ticket => {
                      if (ticket && normalize(ticket.sector) === normalize(sectorName)) {
-                         total++;
+                         if (ticket.status !== 'STANDBY') total++;
                          if (ticket.status === 'USED') scanned++;
                      }
                  });
