@@ -243,4 +243,3 @@ const SuperAdminView: React.FC<SuperAdminViewProps> = ({ db, events, onClose }) 
 };
 
 export default SuperAdminView;
-    
