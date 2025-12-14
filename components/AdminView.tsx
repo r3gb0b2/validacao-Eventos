@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorGroup } from '../types';
 import Stats from './Stats';
 import TicketList from './TicketList';
@@ -59,6 +59,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [apiToken, setApiToken] = useState('');
     const [apiEventId, setApiEventId] = useState('');
     const [showImportToken, setShowImportToken] = useState(false);
+    
+    // Auto Import State
+    const [autoImportEnabled, setAutoImportEnabled] = useState(false);
+    const [lastAutoImportTime, setLastAutoImportTime] = useState<Date | null>(null);
+    // FIX: Use ReturnType<typeof setInterval> instead of NodeJS.Timeout to avoid namespace errors.
+    const autoImportIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     
     // Ignore Existing State (Locked for normal admins)
     const [ignoreExisting, setIgnoreExisting] = useState(true);
@@ -194,6 +200,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 // Reset first to avoid showing previous event's data
                 setApiToken('');
                 setApiEventId('');
+                setAutoImportEnabled(false); // Disable auto import on event switch for safety
 
                 const docRef = doc(db, 'events', selectedEvent.id, 'settings', 'import');
                 const snap = await getDoc(docRef);
@@ -227,6 +234,40 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setActiveTab('events');
         }
     }, [selectedEvent]);
+
+    // AUTO IMPORT LOGIC
+    // We use a ref for the import function to avoid stale closures in the interval
+    const handleImportFromApiRef = useRef<(isAuto?: boolean) => Promise<void>>();
+
+    useEffect(() => {
+        if (autoImportEnabled) {
+            const INTERVAL_MS = 15 * 60 * 1000; // 15 Minutes
+            
+            // Run immediately on enable
+            if (handleImportFromApiRef.current) {
+                handleImportFromApiRef.current(true);
+            }
+
+            autoImportIntervalRef.current = setInterval(() => {
+                if (handleImportFromApiRef.current) {
+                    console.log("Executando auto-importação...");
+                    handleImportFromApiRef.current(true);
+                }
+            }, INTERVAL_MS);
+        } else {
+            if (autoImportIntervalRef.current) {
+                clearInterval(autoImportIntervalRef.current);
+                autoImportIntervalRef.current = null;
+            }
+        }
+
+        return () => {
+            if (autoImportIntervalRef.current) {
+                clearInterval(autoImportIntervalRef.current);
+            }
+        };
+    }, [autoImportEnabled]);
+
 
     // Calculate Locator Stats
     const locatorStats = useMemo(() => {
@@ -772,8 +813,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         alert(report);
     };
 
-    const handleImportFromApi = async () => {
+    const handleImportFromApi = async (isAuto = false) => {
         if (!selectedEvent) return;
+        
+        // Prevent manual click overlapping
+        if (!isAuto && isLoading) return;
+
         const startTime = Date.now();
         setIsLoading(true);
         try {
@@ -845,13 +890,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             }
 
             const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-            alert(`Importação concluída em ${duration}s!\n${ticketsToSave.length} novos ingressos importados.`);
+            if (isAuto) {
+                setLastAutoImportTime(new Date());
+                console.log(`Auto Importação concluída em ${duration}s. ${ticketsToSave.length} novos.`);
+            } else {
+                alert(`Importação concluída em ${duration}s!\n${ticketsToSave.length} novos ingressos importados.`);
+            }
         } catch (e) {
-            alert(`Falha na importação: ${e instanceof Error ? e.message : 'Erro'}`);
+            const errorMsg = `Falha na importação: ${e instanceof Error ? e.message : 'Erro'}`;
+            console.error(errorMsg);
+            if (!isAuto) alert(errorMsg);
         } finally {
             setIsLoading(false);
         }
     };
+    
+    // Assign Ref for Auto Import
+    handleImportFromApiRef.current = handleImportFromApi;
 
     const handleSaveTickets = async () => {
         if (!selectedEvent || Object.values(ticketCodes).every((c: string) => !(c || '').trim())) return alert('Nenhum código para salvar.');
@@ -1081,7 +1136,34 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             <div className="bg-gray-800 p-5 rounded-lg"><h3 className="text-lg font-bold mb-3">Adicionar Códigos (Manual)</h3><div className="space-y-2">{sectorNames.map(s => (<div key={s}><label className="text-sm">{s}</label><textarea value={ticketCodes[s] || ''} onChange={e => handleTicketCodeChange(s, e.target.value)} className="w-full bg-gray-700 p-1 rounded h-20"/></div>))}<button onClick={handleSaveTickets} disabled={isLoading} className="bg-blue-600 w-full p-2 rounded">Salvar Códigos</button></div></div>
                         </div>
                         <div className="space-y-6">
-                            <div className="bg-gray-800 p-5 rounded-lg"><h3 className="text-lg font-bold mb-3">Importar Dados</h3><select value={importType} onChange={e => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded mb-2"><option value="tickets">Ingressos (API)</option><option value="participants">Participantes (API)</option><option value="buyers">Compradores (API)</option><option value="checkins">Check-ins (API)</option><option value="google_sheets">Google Sheets</option></select><input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="URL" className="w-full bg-gray-700 p-2 rounded mb-2"/><div className="flex gap-2"><input value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder="Token" className="w-full bg-gray-700 p-2 rounded"/><input value={apiEventId} onChange={e => setApiEventId(e.target.value)} placeholder="ID Evento" className="w-full bg-gray-700 p-2 rounded"/></div><button onClick={handleSaveImportCredentials} className="text-xs text-blue-400 hover:text-white underline mb-2 mt-1 block w-full text-right">Salvar estas credenciais no evento</button><label className="text-xs flex items-center mt-2"><input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} disabled={!isSuperAdmin}/> Ignorar existentes</label><button onClick={handleImportFromApi} disabled={isLoading} className="bg-orange-600 w-full p-2 rounded mt-2">{isLoading ? loadingMessage : 'Importar'}</button><button onClick={handleSyncExport} disabled={isLoading} className="bg-gray-600 w-full p-2 rounded mt-2">Sincronizar Validações</button></div>
+                            <div className="bg-gray-800 p-5 rounded-lg"><h3 className="text-lg font-bold mb-3">Importar Dados</h3><select value={importType} onChange={e => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded mb-2"><option value="tickets">Ingressos (API)</option><option value="participants">Participantes (API)</option><option value="buyers">Compradores (API)</option><option value="checkins">Check-ins (API)</option><option value="google_sheets">Google Sheets</option></select><input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="URL" className="w-full bg-gray-700 p-2 rounded mb-2"/><div className="flex gap-2"><input value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder="Token" className="w-full bg-gray-700 p-2 rounded"/><input value={apiEventId} onChange={e => setApiEventId(e.target.value)} placeholder="ID Evento" className="w-full bg-gray-700 p-2 rounded"/></div><button onClick={handleSaveImportCredentials} className="text-xs text-blue-400 hover:text-white underline mb-2 mt-1 block w-full text-right">Salvar estas credenciais no evento</button>
+                            
+                            {/* Auto Import Toggle */}
+                            <div className="bg-gray-700 p-3 rounded mt-2 border border-gray-600">
+                                <label className="flex items-center space-x-2 cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={autoImportEnabled} 
+                                        onChange={(e) => setAutoImportEnabled(e.target.checked)} 
+                                        className="w-4 h-4 text-orange-600 rounded focus:ring-0"
+                                    />
+                                    <span className="text-sm font-bold text-white">Importação Automática (15 min)</span>
+                                </label>
+                                <p className="text-xs text-gray-400 mt-1 ml-6">
+                                    {autoImportEnabled ? (
+                                        <span className="text-green-400">Ativado. Mantenha esta aba aberta.</span>
+                                    ) : (
+                                        "O sistema buscará novos dados a cada 15 minutos."
+                                    )}
+                                </p>
+                                {lastAutoImportTime && (
+                                    <p className="text-xs text-gray-500 mt-1 ml-6">
+                                        Última execução: {lastAutoImportTime.toLocaleTimeString('pt-BR')}
+                                    </p>
+                                )}
+                            </div>
+
+                            <label className="text-xs flex items-center mt-2"><input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} disabled={!isSuperAdmin}/> Ignorar existentes</label><button onClick={() => handleImportFromApi(false)} disabled={isLoading} className="bg-orange-600 w-full p-2 rounded mt-2">{isLoading ? loadingMessage : 'Importar Agora'}</button><button onClick={handleSyncExport} disabled={isLoading} className="bg-gray-600 w-full p-2 rounded mt-2">Sincronizar Validações</button></div>
                         </div>
                     </div>
                 );
