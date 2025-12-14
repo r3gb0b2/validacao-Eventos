@@ -199,6 +199,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
                     const data = snap.data();
+                    if (data.url) setApiUrl(data.url);
                     if (data.token) setApiToken(data.token);
                     if (data.eventId) setApiEventId(data.eventId);
                 }
@@ -513,11 +514,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (!selectedEvent) return;
         try {
              await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'), {
+                url: apiUrl,
                 token: apiToken,
                 eventId: apiEventId,
                 lastUpdated: Timestamp.now()
             }, { merge: true });
-            alert("Credenciais de acesso (Token e ID) salvas para este evento!");
+            alert("Credenciais de acesso (URL, Token e ID) salvas para este evento!");
         } catch (e) {
             console.error(e);
             alert("Erro ao salvar credenciais.");
@@ -852,13 +854,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const handleSaveTickets = async () => {
-        if (!selectedEvent || Object.values(ticketCodes).every(c => !(c || '').trim())) return alert('Nenhum código para salvar.');
+        if (!selectedEvent || Object.values(ticketCodes).every((c: string) => !(c || '').trim())) return alert('Nenhum código para salvar.');
         setIsLoading(true);
         try {
             const batch = writeBatch(db);
             for (const sector in ticketCodes) {
                 if ((ticketCodes[sector] || '').trim()) {
-                    (ticketCodes[sector] || '').split('\n').map(c => c.trim()).filter(Boolean).forEach(code => {
+                    (ticketCodes[sector] || '').split('\n').map((c: string) => c.trim()).filter(Boolean).forEach(code => {
                         batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { sector, status: 'AVAILABLE' });
                     });
                 }
@@ -873,7 +875,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (!selectedEvent || !(locatorCodes || '').trim()) return alert("Nenhum código para salvar.");
         setIsLoading(true);
         try {
-            const codes = (locatorCodes || '').split('\n').map(c => c.trim()).filter(Boolean);
+            const codes = (locatorCodes || '').split('\n').map((c: string) => c.trim()).filter(Boolean);
             const batch = writeBatch(db);
             codes.forEach(code => {
                 const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', code);
@@ -1079,7 +1081,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             <div className="bg-gray-800 p-5 rounded-lg"><h3 className="text-lg font-bold mb-3">Adicionar Códigos (Manual)</h3><div className="space-y-2">{sectorNames.map(s => (<div key={s}><label className="text-sm">{s}</label><textarea value={ticketCodes[s] || ''} onChange={e => handleTicketCodeChange(s, e.target.value)} className="w-full bg-gray-700 p-1 rounded h-20"/></div>))}<button onClick={handleSaveTickets} disabled={isLoading} className="bg-blue-600 w-full p-2 rounded">Salvar Códigos</button></div></div>
                         </div>
                         <div className="space-y-6">
-                            <div className="bg-gray-800 p-5 rounded-lg"><h3 className="text-lg font-bold mb-3">Importar Dados</h3><select value={importType} onChange={e => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded mb-2"><option value="tickets">Ingressos (API)</option><option value="participants">Participantes (API)</option><option value="buyers">Compradores (API)</option><option value="checkins">Check-ins (API)</option><option value="google_sheets">Google Sheets</option></select><input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="URL" className="w-full bg-gray-700 p-2 rounded mb-2"/><div className="flex gap-2"><input value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder="Token" className="w-full bg-gray-700 p-2 rounded"/><input value={apiEventId} onChange={e => setApiEventId(e.target.value)} placeholder="ID Evento" className="w-full bg-gray-700 p-2 rounded"/></div><label className="text-xs flex items-center mt-2"><input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} disabled={!isSuperAdmin}/> Ignorar existentes</label><button onClick={handleImportFromApi} disabled={isLoading} className="bg-orange-600 w-full p-2 rounded mt-2">{isLoading ? loadingMessage : 'Importar'}</button><button onClick={handleSyncExport} disabled={isLoading} className="bg-gray-600 w-full p-2 rounded mt-2">Sincronizar Validações</button></div>
+                            <div className="bg-gray-800 p-5 rounded-lg"><h3 className="text-lg font-bold mb-3">Importar Dados</h3><select value={importType} onChange={e => handleImportTypeChange(e.target.value as ImportType)} className="w-full bg-gray-700 p-2 rounded mb-2"><option value="tickets">Ingressos (API)</option><option value="participants">Participantes (API)</option><option value="buyers">Compradores (API)</option><option value="checkins">Check-ins (API)</option><option value="google_sheets">Google Sheets</option></select><input value={apiUrl} onChange={e => setApiUrl(e.target.value)} placeholder="URL" className="w-full bg-gray-700 p-2 rounded mb-2"/><div className="flex gap-2"><input value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder="Token" className="w-full bg-gray-700 p-2 rounded"/><input value={apiEventId} onChange={e => setApiEventId(e.target.value)} placeholder="ID Evento" className="w-full bg-gray-700 p-2 rounded"/></div><button onClick={handleSaveImportCredentials} className="text-xs text-blue-400 hover:text-white underline mb-2 mt-1 block w-full text-right">Salvar estas credenciais no evento</button><label className="text-xs flex items-center mt-2"><input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} disabled={!isSuperAdmin}/> Ignorar existentes</label><button onClick={handleImportFromApi} disabled={isLoading} className="bg-orange-600 w-full p-2 rounded mt-2">{isLoading ? loadingMessage : 'Importar'}</button><button onClick={handleSyncExport} disabled={isLoading} className="bg-gray-600 w-full p-2 rounded mt-2">Sincronizar Validações</button></div>
                         </div>
                     </div>
                 );
