@@ -1,6 +1,3 @@
-
-
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorGroup } from '../types';
 import Stats from './Stats';
@@ -230,6 +227,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     }, [selectedEvent]);
 
+    // Calculate Locator Stats
+    const locatorStats = useMemo(() => {
+        if (!allTickets) return { sectorTotal: 0, sectorUsed: 0, globalTotal: 0, globalUsed: 0 };
+        
+        const locators = allTickets.filter(t => t.details?.ownerName === 'Localizador');
+        
+        // Filter by currently selected sector in the Locators tab
+        const currentSectorLocators = locators.filter(t => t.sector === selectedLocatorSector);
+        
+        return {
+            sectorTotal: currentSectorLocators.length,
+            sectorUsed: currentSectorLocators.filter(t => t.status === 'USED').length,
+            globalTotal: locators.length,
+            globalUsed: locators.filter(t => t.status === 'USED').length
+        };
+    }, [allTickets, selectedLocatorSector]);
+
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
         // Do NOT clear token/eventId automatically here, user might want to reuse them.
@@ -263,9 +277,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         const preset = importPresets.find(p => p.name === presetId); // using name as ID essentially for simplicity
         if (preset) {
-            setApiUrl(preset.url);
-            setApiToken(preset.token);
-            setApiEventId(preset.eventId);
+            setApiUrl(preset.url || '');
+            setApiToken(preset.token || '');
+            setApiEventId(preset.eventId || '');
         }
     };
 
@@ -440,7 +454,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
 
     const handleSaveSectorNames = async () => {
-        if (editableSectorNames.some(name => name.trim() === '')) {
+        if (editableSectorNames.some(name => (name || '').trim() === '')) {
             alert('O nome de um setor não pode estar em branco.');
             return;
         }
@@ -559,7 +573,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const handleSearch = async (overrideQuery?: string) => {
         const queryToUse = overrideQuery || searchQuery;
         
-        if (!queryToUse.trim()) return;
+        if (!(queryToUse || '').trim()) return;
 
         if (searchType === 'TICKET_LOCAL') {
             const ticket = allTickets.find(t => t.id === queryToUse.trim());
@@ -575,7 +589,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             
             try {
                 // More robust URL handling that preserves base paths
-                let baseUrl = apiUrl.trim();
+                let baseUrl = (apiUrl || '').trim();
                 let urlObj;
                 try {
                      urlObj = new URL(baseUrl);
@@ -694,7 +708,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const handleSyncExport = async () => {
         if (!selectedEvent) return;
         
-        let cleanBaseUrl = apiUrl.trim().replace(/\/tickets\/?$/, '').replace(/\/participants\/?$/, '').replace(/\/checkins\/?.*$/, '');
+        let cleanBaseUrl = (apiUrl || '').trim().replace(/\/tickets\/?$/, '').replace(/\/participants\/?$/, '').replace(/\/checkins\/?.*$/, '');
         const targetUrl = `${cleanBaseUrl}/checkins`;
         
         if (!apiToken) return alert("Token da API é necessário.");
@@ -767,7 +781,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const existingTicketIds = ignoreExisting ? new Set(allTickets.map(t => t.id)) : new Set();
 
             if (importType === 'google_sheets') {
-                 let fetchUrl = apiUrl.trim();
+                 let fetchUrl = (apiUrl || '').trim();
                  if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                  const res = await fetch(fetchUrl);
                  const csvText = await res.text();
@@ -783,13 +797,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                  });
             } else {
                 const headers: HeadersInit = { 'Accept': 'application/json' };
-                if (apiToken.trim()) headers['Authorization'] = `Bearer ${apiToken.trim()}`;
+                if ((apiToken || '').trim()) headers['Authorization'] = `Bearer ${(apiToken || '').trim()}`;
 
                 let page = 1;
                 let hasMore = true;
                 while (hasMore) {
                     setLoadingMessage(`Baixando página ${page}...`);
-                    const urlObj = new URL(apiUrl);
+                    const urlObj = new URL((apiUrl || '').trim());
                     urlObj.searchParams.set('page', String(page));
                     urlObj.searchParams.set('per_page', '200');
                     if (apiEventId) urlObj.searchParams.set('event_id', apiEventId);
@@ -838,13 +852,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const handleSaveTickets = async () => {
-        if (!selectedEvent || Object.values(ticketCodes).every(c => !c.trim())) return alert('Nenhum código para salvar.');
+        if (!selectedEvent || Object.values(ticketCodes).every(c => !(c || '').trim())) return alert('Nenhum código para salvar.');
         setIsLoading(true);
         try {
             const batch = writeBatch(db);
             for (const sector in ticketCodes) {
-                if (ticketCodes[sector].trim()) {
-                    ticketCodes[sector].split('\n').map(c => c.trim()).filter(Boolean).forEach(code => {
+                if ((ticketCodes[sector] || '').trim()) {
+                    (ticketCodes[sector] || '').split('\n').map(c => c.trim()).filter(Boolean).forEach(code => {
                         batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { sector, status: 'AVAILABLE' });
                     });
                 }
@@ -856,10 +870,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const handleSaveLocators = async () => {
-        if (!selectedEvent || !locatorCodes.trim()) return alert("Nenhum código para salvar.");
+        if (!selectedEvent || !(locatorCodes || '').trim()) return alert("Nenhum código para salvar.");
         setIsLoading(true);
         try {
-            const codes = locatorCodes.split('\n').map(c => c.trim()).filter(Boolean);
+            const codes = (locatorCodes || '').split('\n').map(c => c.trim()).filter(Boolean);
             const batch = writeBatch(db);
             codes.forEach(code => {
                 const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', code);
@@ -889,10 +903,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     // Event Handlers
     const handleCreateEvent = async () => {
-        if (!newEventName.trim()) return;
+        if (!(newEventName || '').trim()) return;
         setIsLoading(true);
         try {
-            const eventRef = await addDoc(collection(db, 'events'), { name: newEventName.trim(), isHidden: false });
+            const eventRef = await addDoc(collection(db, 'events'), { name: (newEventName || '').trim(), isHidden: false });
             await setDoc(doc(db, 'events', eventRef.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
             
             if (currentUser && currentUser.role === 'ADMIN' && onUpdateCurrentUser) {
@@ -908,10 +922,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const handleRenameEvent = async () => {
-        if (!selectedEvent || !renameEventName.trim()) return;
+        if (!selectedEvent || !(renameEventName || '').trim()) return;
         setIsLoading(true);
         try {
-            await updateDoc(doc(db, 'events', selectedEvent.id), { name: renameEventName.trim() });
+            await updateDoc(doc(db, 'events', selectedEvent.id), { name: (renameEventName || '').trim() });
             alert("Evento renomeado!");
         } catch (e) { alert("Falha ao renomear."); } finally { setIsLoading(false); }
     };
@@ -1075,7 +1089,32 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                  return (
                     <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 animate-fade-in">
                         <h2 className="text-xl font-bold mb-4 flex items-center"><TicketIcon className="w-6 h-6 mr-2 text-yellow-400" /> Gerenciar Localizadores (Stand-by)</h2>
-                        <p className="text-sm text-gray-400 mb-4">Cole uma lista de códigos (um por linha) para adicioná-los como ingressos stand-by. Eles não contam nas estatísticas até serem validados na portaria.</p>
+                        <p className="text-sm text-gray-400 mb-6">Cole uma lista de códigos (um por linha) para adicioná-los como ingressos stand-by. Eles não contam nas estatísticas até serem validados na portaria.</p>
+                        
+                        {/* Stats Panel for Locators */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            <div className="bg-gray-700/50 p-4 rounded-lg border-l-4 border-yellow-500">
+                                <p className="text-xs text-gray-400 uppercase font-bold mb-1">Neste Setor ({selectedLocatorSector})</p>
+                                <div className="flex items-baseline space-x-2">
+                                    <span className="text-3xl font-bold text-white">{locatorStats.sectorUsed}</span>
+                                    <span className="text-sm text-gray-400">utilizados de {locatorStats.sectorTotal}</span>
+                                </div>
+                                <div className="w-full bg-gray-600 rounded-full h-1.5 mt-2">
+                                    <div className="bg-yellow-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${locatorStats.sectorTotal > 0 ? (locatorStats.sectorUsed / locatorStats.sectorTotal) * 100 : 0}%` }}></div>
+                                </div>
+                            </div>
+                            <div className="bg-gray-700/50 p-4 rounded-lg border-l-4 border-gray-500">
+                                <p className="text-xs text-gray-400 uppercase font-bold mb-1">Total Geral (Todos Setores)</p>
+                                <div className="flex items-baseline space-x-2">
+                                    <span className="text-3xl font-bold text-white">{locatorStats.globalUsed}</span>
+                                    <span className="text-sm text-gray-400">utilizados de {locatorStats.globalTotal}</span>
+                                </div>
+                                <div className="w-full bg-gray-600 rounded-full h-1.5 mt-2">
+                                    <div className="bg-gray-400 h-1.5 rounded-full transition-all duration-500" style={{ width: `${locatorStats.globalTotal > 0 ? (locatorStats.globalUsed / locatorStats.globalTotal) * 100 : 0}%` }}></div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                              <div className="md:col-span-1">
                                 <label className="block text-xs font-bold text-gray-300 mb-1 uppercase">Setor</label>
