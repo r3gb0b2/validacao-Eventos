@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorGroup } from '../types';
 import Stats from './Stats';
@@ -779,11 +780,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             let currentError = '';
 
             const tryHandleResponse = async (res: Response) => {
-                if (res.ok || res.status === 409 || res.status === 422) {
+                if (res.ok || res.status === 201 || res.status === 409 || res.status === 422) {
                      const data = await res.json().catch(() => ({}));
-                     if (data.success === false || data.error === true) {
+                     if ((data.success === false || data.error === true) && !res.ok) {
+                         // Check for "already used" which counts as success
+                         if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
+                             return true;
+                         }
                          currentError = data.message || JSON.stringify(data);
-                         return data.message?.toLowerCase().includes('used');
+                         return false;
+                     }
+                     // Check for 409/422 used status specifically if body is empty or different
+                     if (res.status === 409 || res.status === 422) {
+                         if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
+                             return true;
+                         }
+                         currentError = data.message || `Status ${res.status}`;
+                         return false;
                      }
                      return true;
                 }
@@ -792,24 +805,76 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             };
 
             const idToSend = ticket.details?.originalId || ticket.id;
-            try {
-                 const res = await fetch(`${targetUrl}/${idToSend}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${apiToken}` },
-                    body: JSON.stringify({ event_id: numericEventId, qr_code: ticket.id }),
-                });
-                itemSuccess = await tryHandleResponse(res);
-            } catch(e) { if (!currentError) currentError = (e as any).message; }
+            const codeToSend = ticket.id;
+            
+            const payload = { 
+                event_id: numericEventId, 
+                qr_code: codeToSend,
+                code: codeToSend,
+                access_code: codeToSend
+            };
+
+            const headers = { 
+                'Content-Type': 'application/json', 
+                'Accept': 'application/json', 
+                'Authorization': `Bearer ${apiToken}` 
+            };
+
+            const isNumericId = !isNaN(Number(idToSend));
+
+            // Strategy 1: Path Variable
+            const strategyPath = async () => {
+                try {
+                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${numericEventId}`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(payload),
+                    });
+                    return await tryHandleResponse(res);
+                } catch(e) { 
+                    if (!currentError) currentError = (e as any).message; 
+                    return false;
+                }
+            };
+
+            // Strategy 2: Body Only
+            const strategyBody = async () => {
+                try {
+                     const res = await fetch(`${targetUrl}?event_id=${numericEventId}`, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(payload),
+                    });
+                    return await tryHandleResponse(res);
+                } catch(e) { 
+                    if (!currentError) currentError = (e as any).message; 
+                    return false;
+                }
+            };
+
+            if (isNumericId) {
+                itemSuccess = await strategyPath();
+                if (!itemSuccess) itemSuccess = await strategyBody();
+            } else {
+                itemSuccess = await strategyBody();
+                if (!itemSuccess) itemSuccess = await strategyPath();
+            }
 
             if (itemSuccess) successCount++;
-            else { failCount++; if (!lastErrorMessage) { lastErrorMessage = currentError; lastErrorStatus = `HTTP Error`; } }
+            else { 
+                failCount++; 
+                if (!lastErrorMessage) { 
+                    lastErrorMessage = currentError; 
+                    lastErrorStatus = currentError.includes('Status') ? currentError : `API Error`; 
+                } 
+            }
             
-            if (i % 10 === 0) await new Promise(r => setTimeout(r, 100));
+            if (i % 5 === 0) await new Promise(r => setTimeout(r, 50));
         }
 
         setIsLoading(false);
         let report = `Sincronização concluída!\nSucesso: ${successCount}\nFalhas: ${failCount}`;
-        if (failCount > 0) report += `\n\nDETALHES DO ERRO: "${lastErrorMessage}" (${lastErrorStatus})`;
+        if (failCount > 0) report += `\n\nErro comum: "${lastErrorMessage}"`;
         alert(report);
     };
 
