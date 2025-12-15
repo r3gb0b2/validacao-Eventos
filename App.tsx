@@ -14,6 +14,7 @@ import TicketList from './components/TicketList';
 import PublicStatsView from './components/PublicStatsView';
 import LoginModal from './components/LoginModal';
 import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon } from './components/Icons';
+import { useSound } from './hooks/useSound';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User } from './types';
 
@@ -74,6 +75,7 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
     const selectedSectorRef = useRef<SectorFilter>('All');
+    const playBeep = useSound();
     
     useEffect(() => {
         selectedSectorRef.current = selectedSector;
@@ -575,6 +577,10 @@ const App: React.FC = () => {
     };
     
     const showScanResult = (status: ScanStatus, message: string) => {
+        // Feedback Sonoro
+        if (status === 'VALID') playBeep('success');
+        else playBeep('error');
+
         setScanResult({ status, message });
         setTimeout(() => setScanResult(null), 3000);
         resetInactivityTimer();
@@ -875,13 +881,18 @@ const App: React.FC = () => {
             showScanResult('VALID', `Acesso liberado para ${ticket.sector}!`);
         } catch (error) { showScanResult('ERROR', 'Falha ao atualizar BD.'); }
 
-    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, deviceId, operatorName]);
+    }, [db, selectedEvent, ticketsMap, validationMode, onlineApiEndpoints, activeSectors, deviceId, operatorName, playBeep]);
 
     const handleManualSubmit = () => {
         if (!manualCode.trim()) return;
         handleScanSuccess(manualCode);
         setManualCode('');
     };
+
+    const handleScanError = useCallback((errorMsg: string) => {
+        // Only show fatal errors, avoid sounding alarm for focus issues
+        setScanResult({ status: 'ERROR', message: errorMsg });
+    }, []);
 
     // --- RENDER ---
 
@@ -1020,7 +1031,7 @@ const App: React.FC = () => {
                                 <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-lg overflow-hidden border-4 border-gray-700 shadow-xl">
                                     {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} />}
                                     {isCameraActive ? (
-                                        <Scanner onScanSuccess={handleScanSuccess} onScanError={() => {}} />
+                                        <Scanner onScanSuccess={handleScanSuccess} onScanError={handleScanError} />
                                     ) : (
                                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 text-gray-400">
                                             <VideoCameraIcon className="w-16 h-16 mb-4 text-gray-600" />
