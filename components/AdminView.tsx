@@ -769,8 +769,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setLoadingMessage('Sincronizando...');
         
         let successCount = 0, failCount = 0, lastErrorMessage = '', lastErrorStatus = '';
-        const numericEventId = apiEventId ? parseInt(apiEventId, 10) : undefined;
-        if (!numericEventId) { alert("ID do Evento inválido."); setIsLoading(false); return; }
+        
+        // Ensure event ID is string for "numeric string" validation compatibility
+        const strEventId = String(apiEventId || '').trim();
+        if (!strEventId) { alert("ID do Evento inválido."); setIsLoading(false); return; }
 
         for (let i = 0; i < usedTickets.length; i++) {
             const ticket = usedTickets[i];
@@ -784,14 +786,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 
                 if (res.ok || res.status === 201 || res.status === 409 || res.status === 422) {
                      if ((data.success === false || data.error === true) && !res.ok) {
-                         // Check for "already used" which counts as success
                          if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
                              return true;
                          }
                          currentError = data.message ? `${res.status}: ${data.message}` : JSON.stringify(data);
                          return false;
                      }
-                     // Check for 409/422 used status specifically if body is empty or different
                      if (res.status === 409 || res.status === 422) {
                          if (data.message && (data.message.toLowerCase().includes('used') || data.message.toLowerCase().includes('utilizado'))) {
                              return true;
@@ -801,11 +801,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                      }
                      return true;
                 }
-                // Capture detailed error message for 400 Bad Request
-                if (res.status === 400 && data.message) {
-                    currentError = `400 Bad Request: ${data.message}`;
+                
+                // Detailed error capture
+                if (data.message) {
+                    currentError = `${res.status}: ${data.message}`;
+                    if (data.errors) currentError += ` ${JSON.stringify(data.errors)}`;
                 } else {
-                    currentError = data.message ? `${res.status}: ${data.message}` : `Status ${res.status}`;
+                    currentError = `Status ${res.status}`;
                 }
                 return false;
             };
@@ -813,13 +815,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const idToSend = ticket.details?.originalId || ticket.id;
             const codeToSend = ticket.id;
             
-            // Clean Payload: Only send essential fields to avoid "unexpected field" validation errors
+            // Payload: Send as strings to satisfy "numeric string" validators
             const payload: any = { 
-                event_id: numericEventId, 
-                qr_code: codeToSend
+                event_id: strEventId, 
+                qr_code: String(codeToSend)
             };
             
-            // Add date if available (formatted as YYYY-MM-DD HH:mm:ss for PHP/Laravel compatibility)
             if (ticket.usedAt) {
                 try {
                      const d = new Date(ticket.usedAt);
@@ -838,9 +839,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const isNumericId = !isNaN(Number(idToSend));
 
             // Strategy 1: Path Variable (Best for IDs)
+            // Note: We also pass event_id in query just in case
             const strategyPath = async () => {
                 try {
-                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${numericEventId}`, {
+                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${strEventId}`, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
@@ -852,10 +854,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             };
 
-            // Strategy 2: Body Only (Best for QR codes)
+            // Strategy 2: Body Only
             const strategyBody = async () => {
                 try {
-                     const res = await fetch(`${targetUrl}?event_id=${numericEventId}`, {
+                     const res = await fetch(`${targetUrl}?event_id=${strEventId}`, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
