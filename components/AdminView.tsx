@@ -770,9 +770,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         let successCount = 0, failCount = 0, lastErrorMessage = '', lastErrorStatus = '';
         
-        // Ensure event ID is parsed as integer (many APIs require numeric ID, NOT string)
-        const numericEventId = apiEventId ? parseInt(apiEventId, 10) : undefined;
-        if (!numericEventId) { alert("ID do Evento inválido."); setIsLoading(false); return; }
+        // FIX: Ensure event ID is parsed as string to satisfy "numeric string" validation
+        const eventIdStr = String(apiEventId || '').trim();
+        if (!eventIdStr || isNaN(Number(eventIdStr))) { 
+            alert("ID do Evento inválido (deve ser numérico)."); 
+            setIsLoading(false); 
+            return; 
+        }
 
         for (let i = 0; i < usedTickets.length; i++) {
             const ticket = usedTickets[i];
@@ -817,7 +821,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             
             // Payload: Send redundant fields to ensure compatibility with different API expectations
             const payload: any = { 
-                event_id: numericEventId, 
+                event_id: eventIdStr, // Sent as string
                 qr_code: String(codeToSend),
                 code: String(codeToSend),
                 access_code: String(codeToSend)
@@ -843,7 +847,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             // Strategy 1: Path Variable (Best for IDs)
             const strategyPath = async () => {
                 try {
-                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${numericEventId}`, {
+                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${eventIdStr}`, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
@@ -858,7 +862,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             // Strategy 2: Body Only (Best for Codes)
             const strategyBody = async () => {
                 try {
-                     const res = await fetch(`${targetUrl}?event_id=${numericEventId}`, {
+                     const res = await fetch(`${targetUrl}?event_id=${eventIdStr}`, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
