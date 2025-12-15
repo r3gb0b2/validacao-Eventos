@@ -770,9 +770,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         let successCount = 0, failCount = 0, lastErrorMessage = '', lastErrorStatus = '';
         
-        // Ensure event ID is string for "numeric string" validation compatibility
-        const strEventId = String(apiEventId || '').trim();
-        if (!strEventId) { alert("ID do Evento inválido."); setIsLoading(false); return; }
+        // Ensure event ID is parsed as integer (many APIs require numeric ID, NOT string)
+        const numericEventId = apiEventId ? parseInt(apiEventId, 10) : undefined;
+        if (!numericEventId) { alert("ID do Evento inválido."); setIsLoading(false); return; }
 
         for (let i = 0; i < usedTickets.length; i++) {
             const ticket = usedTickets[i];
@@ -815,10 +815,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const idToSend = ticket.details?.originalId || ticket.id;
             const codeToSend = ticket.id;
             
-            // Payload: Send as strings to satisfy "numeric string" validators
+            // Payload: Send redundant fields to ensure compatibility with different API expectations
             const payload: any = { 
-                event_id: strEventId, 
-                qr_code: String(codeToSend)
+                event_id: numericEventId, 
+                qr_code: String(codeToSend),
+                code: String(codeToSend),
+                access_code: String(codeToSend)
             };
             
             if (ticket.usedAt) {
@@ -839,10 +841,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const isNumericId = !isNaN(Number(idToSend));
 
             // Strategy 1: Path Variable (Best for IDs)
-            // Note: We also pass event_id in query just in case
             const strategyPath = async () => {
                 try {
-                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${strEventId}`, {
+                     const res = await fetch(`${targetUrl}/${idToSend}?event_id=${numericEventId}`, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
@@ -854,10 +855,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             };
 
-            // Strategy 2: Body Only
+            // Strategy 2: Body Only (Best for Codes)
             const strategyBody = async () => {
                 try {
-                     const res = await fetch(`${targetUrl}?event_id=${strEventId}`, {
+                     const res = await fetch(`${targetUrl}?event_id=${numericEventId}`, {
                         method: 'POST',
                         headers,
                         body: JSON.stringify(payload),
@@ -869,6 +870,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             };
 
+            // Try the most likely strategy first
             if (isNumericId) {
                 itemSuccess = await strategyPath();
                 if (!itemSuccess) itemSuccess = await strategyBody();
