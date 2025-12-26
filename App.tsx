@@ -13,6 +13,7 @@ import EventSelector from './components/EventSelector';
 import TicketList from './components/TicketList';
 import PublicStatsView from './components/PublicStatsView';
 import LoginModal from './components/LoginModal';
+import SecretTicketGenerator from './components/SecretTicketGenerator'; // Importar o gerador oculto
 import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
@@ -48,7 +49,7 @@ const App: React.FC = () => {
 
     // View State
     const [selectedSector, setSelectedSector] = useState<SectorFilter>('All');
-    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats'>('scanner');
+    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator'>('scanner');
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); 
@@ -156,7 +157,7 @@ const App: React.FC = () => {
             });
     }, []);
 
-    // URL Check (Public Stats)
+    // URL Check (Public Stats & Hidden Generator)
     useEffect(() => {
         const checkUrlParams = async () => {
             if (!db) return;
@@ -175,6 +176,17 @@ const App: React.FC = () => {
                         setIsOperatorStep(false);
                     }
                 } catch (e) { console.error("Error fetching event from URL", e); }
+            } else if (mode === 'generator') {
+                // ROTA OCULTA ACESSADA VIA ?mode=generator
+                setView('generator');
+                // Se já houver um evento salvo no storage, associa a ele
+                const storedId = localStorage.getItem('selectedEventId');
+                if (storedId) {
+                    const eventDoc = await getDoc(doc(db, 'events', storedId));
+                    if (eventDoc.exists()) {
+                        setSelectedEvent({ id: eventDoc.id, name: eventDoc.data().name });
+                    }
+                }
             }
             setIsCheckingUrl(false);
         };
@@ -217,7 +229,7 @@ const App: React.FC = () => {
 
     // Fetch Events
     useEffect(() => {
-        if (!db || view === 'public_stats') return;
+        if (!db || view === 'public_stats' || view === 'generator') return;
 
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
             const eventsData = snapshot.docs.map(doc => ({
@@ -906,6 +918,11 @@ const App: React.FC = () => {
         return <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} isLoading={!ticketsLoaded} />;
     }
     
+    // RENDERIZAR GERADOR OCULTO
+    if (view === 'generator') {
+        return <SecretTicketGenerator db={db} selectedEventId={selectedEvent?.id || null} />;
+    }
+
     // LOGIN MODAL
     if (showLoginModal) {
         return <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />;
