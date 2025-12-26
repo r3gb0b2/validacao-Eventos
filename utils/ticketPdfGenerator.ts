@@ -1,7 +1,18 @@
 
 import jsPDF from 'jspdf';
 
-export const generateSingleTicketPdf = async (eventName: string) => {
+export interface TicketPdfDetails {
+  eventName: string;
+  openingTime: string;
+  venue: string;
+  address: string;
+  producer: string;
+  contact: string;
+  sector: string;
+  ownerName: string;
+}
+
+export const generateSingleTicketPdf = async (details: TicketPdfDetails) => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -41,7 +52,7 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   // Nome do Evento (Grande e Bold)
   doc.setFontSize(28);
   doc.setFont('helvetica', 'bold');
-  doc.text(eventName.toUpperCase(), 105, 68, { align: 'center' });
+  doc.text(details.eventName.toUpperCase(), 105, 68, { align: 'center' });
 
   // Linha pontilhada branca 2
   doc.line(20, 78, 190, 78);
@@ -49,10 +60,10 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   // Detalhes do Evento
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Abertura: 27/12/2025 16:00   Local: Iate Club', 105, 90, { align: 'center' });
+  doc.text(`Abertura: ${details.openingTime}   Local: ${details.venue}`, 105, 90, { align: 'center' });
   doc.setFontSize(9);
-  doc.text('Endereço: Avenida Vicente de Castro, 4813 - Cais do Porto, Fortaleza, CE - 60180-410', 105, 98, { align: 'center' });
-  doc.text('Produzido: D&E MUSIC   Contato: +5585987737330', 105, 108, { align: 'center' });
+  doc.text(`Endereço: ${details.address}`, 105, 98, { align: 'center' });
+  doc.text(`Produzido: ${details.producer}   Contato: ${details.contact}`, 105, 108, { align: 'center' });
 
   // --- ÁREA DE INFORMAÇÕES DO CLIENTE (BRANCO) ---
   doc.setTextColor(80, 80, 80);
@@ -66,8 +77,8 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   doc.setFontSize(12);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(45, 100, 150); // Azul escuro
-  doc.text('Setor Único [Meia] 3º Lote', 15, 152);
-  doc.text('VENDA ONLINE', 195, 152, { align: 'right' });
+  doc.text(details.sector, 15, 152);
+  doc.text(details.ownerName, 195, 152, { align: 'right' });
 
   doc.setTextColor(80, 80, 80);
   doc.setFontSize(10);
@@ -89,8 +100,6 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   // QR CODE (Gerado via API externa para simplicidade no jspdf)
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${ticketCode}`;
   
-  // Adicionar QR Code ao PDF
-  // Nota: jspdf addImage é assíncrono se for URL, mas o qrserver responde rápido.
   const img = new Image();
   img.crossOrigin = "Anonymous";
   img.src = qrUrl;
@@ -105,7 +114,6 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   // --- PÁGINA 2 (TERMOS) ---
   doc.addPage();
   
-  // Borda arredondada simulada
   doc.setDrawColor(255, 0, 80); // Rosa/Vermelho dos termos
   doc.setLineWidth(0.5);
   doc.setLineDashPattern([], 0);
@@ -127,7 +135,6 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   doc.text(`vigente, você poderá ser responsabilizado. Qualquer dúvida leia`, 15, 87);
   doc.text(`nossos termos de uso ou entre em contato conosco.`, 15, 94);
 
-  // Texto pequeno de termos
   doc.setTextColor(100, 100, 100);
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
@@ -135,7 +142,6 @@ export const generateSingleTicketPdf = async (eventName: string) => {
   
   doc.text(terms, 15, 110, { maxWidth: 180, align: 'justify' });
 
-  // Salvar
-  doc.save(`ingresso_${eventName.replace(/\s+/g, '_')}_${ticketCode}.pdf`);
+  doc.save(`ingresso_${details.eventName.replace(/\s+/g, '_')}_${ticketCode}.pdf`);
   return { ticketCode, purchaseCode };
 };
