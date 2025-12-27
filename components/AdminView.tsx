@@ -8,7 +8,7 @@ import PieChart from './PieChart';
 import Scanner from './Scanner';
 import SuperAdminView from './SuperAdminView'; 
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc, getDocs } from 'firebase/firestore';
+import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
 import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon, LockClosedIcon, TicketIcon, PlusCircleIcon, FunnelIcon } from './Icons';
 import Papa from 'papaparse';
 
@@ -33,44 +33,47 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search' | 'users' | 'operators' | 'locators'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
     const [sectorVisibility, setSectorVisibility] = useState<boolean[]>([]);
+    const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState('');
     const [isSavingSectors, setIsSavingSectors] = useState(false);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-    const [allUsers, setAllUsers] = useState<User[]>([]);
 
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
 
+    // Multi-Import State
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
     const [activeSourceId, setActiveSourceId] = useState<string>('new');
     const [ignoreExisting, setIgnoreExisting] = useState(true);
     
+    // Local form state to prevent auto-save on keystroke
     const [editSource, setEditSource] = useState<Partial<ImportSource>>({
         name: '', url: '', token: '', eventId: '', type: 'tickets', autoImport: false
     });
     
     const autoImportIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+    // Form Temporary State for events
     const [newEventName, setNewEventName] = useState('');
+    const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
+
+    // Search Tab State
+    const [searchType, setSearchType] = useState<'TICKET_LOCAL' | 'BUYER_API'>('TICKET_LOCAL');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResult, setSearchResult] = useState<{ ticket: Ticket | undefined, logs: DisplayableScanLog[] } | null>(null);
+    const [buyerSearchResults, setBuyerSearchResults] = useState<any[]>([]);
+    const [showScanner, setShowScanner] = useState(false);
+
+    // "Localizadores" (Stand-by) State
     const [locatorCodes, setLocatorCodes] = useState('');
     const [selectedLocatorSector, setSelectedLocatorSector] = useState(sectorNames[0] || '');
 
+    // Stats Configuration State
     const [statsViewMode, setStatsViewMode] = useState<'raw' | 'grouped'>('raw');
     const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
 
-    const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.username === 'Administrador';
+    const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
     const canManageEvents = currentUser?.role === 'ADMIN' || isSuperAdmin;
-
-    // Load users for the events tab summary
-    useEffect(() => {
-        if (activeTab === 'events' && isSuperAdmin) {
-            const loadUsers = async () => {
-                const snap = await getDocs(collection(db, 'users'));
-                setAllUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as User)));
-            };
-            loadUsers();
-        }
-    }, [activeTab, isSuperAdmin, db]);
 
     useEffect(() => {
         if (sectorNames) {
@@ -90,12 +93,29 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const iDoc = await getDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'));
                 if (iDoc.exists()) {
                     setImportSources(iDoc.data().sources || []);
+                } else {
+                    const oldDoc = await getDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'));
+                    if (oldDoc.exists()) {
+                        const data = oldDoc.data();
+                        const initial: ImportSource = {
+                            id: 'default',
+                            name: 'API Principal',
+                            url: data.url || 'https://public-api.stingressos.com.br/tickets',
+                            token: data.token || '',
+                            eventId: data.eventId || '',
+                            type: 'tickets',
+                            autoImport: false
+                        };
+                        setImportSources([initial]);
+                        setActiveSourceId('default');
+                    }
                 }
             } catch (e) { console.error("Error loading configs", e); }
         };
         loadConfigs();
     }, [db, selectedEvent]);
 
+    // Update form when active source changes
     useEffect(() => {
         if (activeSourceId === 'new') {
             setEditSource({ name: '', url: '', token: '', eventId: '', type: 'tickets', autoImport: false });
@@ -104,6 +124,25 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             if (found) setEditSource({ ...found });
         }
     }, [activeSourceId, importSources]);
+
+    useEffect(() => {
+        if (!selectedEvent || importSources.length === 0) return;
+        const runAutoImports = async () => {
+            const sourcesToRun = importSources.filter(s => s.autoImport);
+            if (sourcesToRun.length === 0) return;
+            for (const source of sourcesToRun) {
+                await executeImport(source, true);
+            }
+        };
+        if (importSources.some(s => s.autoImport)) {
+             runAutoImports();
+             if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current);
+             autoImportIntervalRef.current = setInterval(runAutoImports, 15 * 60 * 1000);
+        } else {
+            if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current);
+        }
+        return () => { if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current); };
+    }, [importSources, selectedEvent]);
 
     const executeImport = async (source: ImportSource, isAuto = false) => {
         if (!selectedEvent) return;
@@ -134,6 +173,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 let page = 1;
                 let hasMore = true;
                 while (hasMore) {
+                    if (!isAuto) setLoadingMessage(`[${source.name}] Pág ${page}...`);
                     const urlObj = new URL((source.url || '').trim());
                     urlObj.searchParams.set('page', String(page));
                     urlObj.searchParams.set('per_page', '200');
@@ -171,8 +211,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: now } : s);
             setImportSources(updatedSources);
             await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), { sources: updatedSources }, { merge: true });
+            if (!isAuto) alert(`Fonte [${source.name}]: Importação finalizada.`);
         } catch (e) {
-            console.error(e);
+            console.error(`Import Error [${source.name}]:`, e);
+            if (!isAuto) alert(`Erro na fonte [${source.name}]: ${e instanceof Error ? e.message : 'Erro'}`);
         } finally {
             if (!isAuto) setIsLoading(false);
         }
@@ -180,12 +222,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleSaveEditSource = async () => {
         if (!editSource.name || !editSource.url) return alert("Preencha ao menos Nome e URL.");
+        
         let newSources: ImportSource[];
         if (activeSourceId === 'new') {
             const newSource: ImportSource = {
                 id: Math.random().toString(36).substr(2, 9),
-                name: editSource.name!,
-                url: editSource.url!,
+                name: editSource.name,
+                url: editSource.url,
                 token: editSource.token || '',
                 eventId: editSource.eventId || '',
                 type: editSource.type || 'tickets',
@@ -196,35 +239,79 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         } else {
             newSources = importSources.map(s => s.id === activeSourceId ? { ...s, ...editSource } as ImportSource : s);
         }
+        
         setImportSources(newSources);
         await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: newSources }, { merge: true });
-        alert("Fonte salva!");
+        alert("Fonte salva com sucesso!");
+    };
+
+    const handleRemoveSource = async (id: string) => {
+        if (!confirm("Deseja remover esta fonte?")) return;
+        const newSources = importSources.filter(s => s.id !== id);
+        setImportSources(newSources);
+        await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: newSources }, { merge: true });
+        setActiveSourceId('new');
     };
 
     const handleProcessLocators = async () => {
-        if (!selectedEvent || !locatorCodes.trim() || !selectedLocatorSector) return;
+        if (!selectedEvent) return;
+        if (!locatorCodes.trim()) return alert("Insira ao menos um código.");
+        if (!selectedLocatorSector) return alert("Selecione um setor.");
+
         setIsLoading(true);
+        setLoadingMessage('Processando códigos...');
+
         try {
             const codes = locatorCodes.split('\n').map(c => c.trim()).filter(c => c.length > 0);
-            const batch = writeBatch(db);
-            codes.forEach(code => {
-                batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), {
-                    sector: selectedLocatorSector,
-                    status: 'AVAILABLE',
-                    source: 'manual_locator',
-                    details: { ownerName: 'LOCALIZADOR MANUAL', eventName: selectedEvent.name }
-                }, { merge: true });
-            });
-            await batch.commit();
+            const BATCH_SIZE = 450;
+            let addedCount = 0;
+
+            for (let i = 0; i < codes.length; i += BATCH_SIZE) {
+                const chunk = codes.slice(i, i + BATCH_SIZE);
+                const batch = writeBatch(db);
+                
+                chunk.forEach(code => {
+                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', code);
+                    batch.set(ticketRef, {
+                        sector: selectedLocatorSector,
+                        status: 'AVAILABLE',
+                        source: 'manual_locator',
+                        details: {
+                            ownerName: 'LOCALIZADOR MANUAL',
+                            eventName: selectedEvent.name
+                        }
+                    }, { merge: true });
+                    addedCount++;
+                });
+
+                await batch.commit();
+            }
+
             setLocatorCodes('');
-            alert("Processado!");
-        } catch (e) { alert("Erro."); } finally { setIsLoading(false); }
+            alert(`${addedCount} códigos processados com sucesso!`);
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao processar localizadores.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleDeleteTicket = async (id: string) => {
+        if (!selectedEvent) return;
+        if (!confirm(`Deseja excluir permanentemente o código ${id}?`)) return;
+        try {
+            await deleteDoc(doc(db, 'events', selectedEvent.id, 'tickets', id));
+        } catch (e) { alert("Erro ao excluir."); }
     };
 
     const nonSecretTickets = useMemo(() => allTickets.filter(t => t.source !== 'secret_generator'), [allTickets]);
     const secretTicketIds = useMemo(() => new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id)), [allTickets]);
     const nonSecretScanHistory = useMemo(() => scanHistory.filter(log => !secretTicketIds.has(log.ticketId)), [scanHistory, secretTicketIds]);
-    const manualLocatorTickets = useMemo(() => allTickets.filter(t => t.source === 'manual_locator'), [allTickets]);
+
+    const manualLocatorTickets = useMemo(() => {
+        return allTickets.filter(t => t.source === 'manual_locator');
+    }, [allTickets]);
 
     const renderContent = () => {
         if (activeTab === 'users') return isSuperAdmin ? <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} /> : <p>Acesso negado.</p>;
@@ -266,6 +353,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         <div key={i} className="flex items-center space-x-2">
                                             <input value={name} onChange={e => { const n = [...editableSectorNames]; n[i] = e.target.value; setEditableSectorNames(n); }} className="flex-grow bg-gray-700 p-2 rounded text-sm"/>
                                             <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); }} className="p-1">{sectorVisibility[i] ? <EyeIcon className="w-5 h-5"/> : <EyeSlashIcon className="w-5 h-5 text-gray-500"/>}</button>
+                                            <button onClick={() => { if(confirm("Remover setor?")){ setEditableSectorNames(editableSectorNames.filter((_, idx) => idx !== i)); setSectorVisibility(sectorVisibility.filter((_, idx) => idx !== i)); }}} className="bg-red-600 px-2 py-1 rounded font-bold text-xs">X</button>
                                         </div>
                                     ))}
                                     <button onClick={() => { setEditableSectorNames([...editableSectorNames, 'Novo Setor']); setSectorVisibility([...sectorVisibility, true]); }} className="text-sm text-blue-400 mt-2 hover:underline">+ Adicionar Setor</button>
@@ -276,23 +364,118 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     await onUpdateSectorNames(editableSectorNames, hidden);
                                     setIsSavingSectors(false);
                                     alert("Setores salvos!");
-                                }} disabled={isSavingSectors} className="bg-orange-600 w-full mt-4 p-2 rounded font-bold">Salvar Configuração</button>
+                                }} disabled={isSavingSectors} className="bg-orange-600 w-full mt-4 p-2 rounded font-bold">Salvar Configuração de Setores</button>
                              </div>
                         </div>
 
                         <div className="space-y-6">
                             <div className="bg-gray-800 p-5 rounded-lg border border-blue-500/20">
-                                <h3 className="text-lg font-bold text-blue-400 mb-4">Importar Dados</h3>
-                                <div className="space-y-3">
-                                    <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Nome da Fonte" className="w-full bg-gray-700 p-2 rounded text-sm"/>
-                                    <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL" className="w-full bg-gray-700 p-2 rounded text-sm"/>
-                                    <button onClick={handleSaveEditSource} className="w-full bg-green-600 py-2 rounded font-bold text-xs">Salvar Fonte</button>
-                                    {importSources.map(s => (
-                                        <div key={s.id} className="flex justify-between items-center bg-gray-900/30 p-2 rounded border border-gray-800">
-                                            <span className="text-xs font-bold">{s.name}</span>
-                                            <button onClick={() => executeImport(s)} className="text-[10px] bg-blue-600 px-2 py-1 rounded">Rodar</button>
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-lg font-bold text-blue-400">Importar Dados (Multi-API)</h3>
+                                    <button onClick={async () => {
+                                        if (importSources.length === 0) return;
+                                        setIsLoading(true);
+                                        for (const s of importSources) {
+                                            setLoadingMessage(`Importando ${s.name}...`);
+                                            await executeImport(s, true);
+                                        }
+                                        setIsLoading(false);
+                                        alert("Processamento concluído!");
+                                    }} className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded font-bold">Rodar Todas Agora</button>
+                                </div>
+                                
+                                <div className="mb-4">
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Selecionar Fonte para Editar</label>
+                                    <select 
+                                        value={activeSourceId} 
+                                        onChange={e => setActiveSourceId(e.target.value)} 
+                                        className="w-full bg-gray-700 p-3 rounded border border-gray-600 font-bold focus:border-blue-500 outline-none"
+                                    >
+                                        <option value="new">+ Adicionar Nova API / Planilha</option>
+                                        {importSources.map(s => (
+                                            <option key={s.id} value={s.id}>{s.name} {s.autoImport ? ' (AUTO)' : ''}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="space-y-3 bg-gray-900/50 p-4 rounded-lg border border-gray-700 mb-4 transition-all">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">Nome da Fonte</label>
+                                            <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Ex: API Store 1" className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700"/>
                                         </div>
-                                    ))}
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">Tipo de Recurso</label>
+                                            <select value={editSource.type} onChange={e => setEditSource({...editSource, type: e.target.value as ImportType})} className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700">
+                                                <option value="tickets">Ingressos</option>
+                                                <option value="participants">Participantes</option>
+                                                <option value="google_sheets">Google Sheets (CSV)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] text-gray-500 uppercase font-bold">URL / Endpoint</label>
+                                        <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="https://..." className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700 font-mono"/>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div className="col-span-2">
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">Token (Bearer)</label>
+                                            <input value={editSource.token} onChange={e => setEditSource({...editSource, token: e.target.value})} type="password" placeholder="Token" className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700"/>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">ID Evento API</label>
+                                            <input value={editSource.eventId} onChange={e => setEditSource({...editSource, eventId: e.target.value})} placeholder="ID" className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700"/>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-700">
+                                        <label className="flex items-center space-x-2 cursor-pointer group">
+                                            <input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-0 w-4 h-4"/>
+                                            <span className="text-xs font-bold text-gray-300 group-hover:text-blue-400">Ativar Auto-Importação (15m)</span>
+                                        </label>
+                                        {activeSourceId !== 'new' && importSources.find(s=>s.id===activeSourceId)?.lastImportTime && (
+                                            <div className="text-[10px] text-gray-500 flex items-center">
+                                                <ClockIcon className="w-3 h-3 mr-1"/> {new Date(importSources.find(s=>s.id===activeSourceId)!.lastImportTime!).toLocaleTimeString('pt-BR')}
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    <button 
+                                        onClick={handleSaveEditSource} 
+                                        className="w-full bg-green-600 hover:bg-green-700 py-2 rounded font-bold text-xs transition-colors mt-2"
+                                    >
+                                        {activeSourceId === 'new' ? 'Adicionar Nova Fonte' : 'Salvar Configuração desta Fonte'}
+                                    </button>
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button onClick={() => { if(activeSourceId !== 'new') executeImport(importSources.find(s => s.id === activeSourceId)!) }} disabled={isLoading || activeSourceId === 'new'} className="flex-grow bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold text-sm disabled:opacity-50 transition-colors">
+                                        {isLoading ? 'Importando...' : 'Importar Esta Fonte Agora'}
+                                    </button>
+                                    {activeSourceId !== 'new' && (
+                                        <button onClick={() => handleRemoveSource(activeSourceId)} className="bg-red-600 p-2 rounded hover:bg-red-700 transition-colors" title="Excluir">
+                                            <TrashIcon className="w-5 h-5"/>
+                                        </button>
+                                    )}
+                                </div>
+                                
+                                <div className="mt-6 border-t border-gray-700 pt-4">
+                                    <h4 className="text-[10px] font-bold text-gray-500 uppercase mb-2">Status das Fontes Configuradas</h4>
+                                    <div className="space-y-2">
+                                        {importSources.length === 0 ? (
+                                            <p className="text-xs text-gray-600 italic">Nenhuma fonte cadastrada.</p>
+                                        ) : importSources.map(s => (
+                                            <div key={s.id} className="flex items-center justify-between bg-gray-900/30 p-2 rounded border border-gray-800">
+                                                <div className="flex items-center">
+                                                    <div className={`w-2 h-2 rounded-full mr-2 ${s.autoImport ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                                                    <span className="text-xs font-bold truncate max-w-[120px]">{s.name}</span>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500">
+                                                    {s.lastImportTime ? `Última: ${new Date(s.lastImportTime).toLocaleTimeString()}` : 'Nunca rodou'}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -311,68 +494,113 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     try {
                                         const ref = await addDoc(collection(db, 'events'), { name: newEventName, isHidden: false });
                                         await setDoc(doc(db, 'events', ref.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
-                                        alert("Evento criado!");
+                                        alert("Evento criado com sucesso!");
                                         setNewEventName('');
-                                    } catch (e) { alert("Erro."); } finally { setIsLoading(false); }
-                                }} className="bg-orange-600 px-6 rounded font-bold hover:bg-orange-700">Criar</button>
+                                    } catch (e) { alert("Falha ao criar evento."); } finally { setIsLoading(false); }
+                                }} className="bg-orange-600 px-6 rounded font-bold hover:bg-orange-700 transition-colors">Criar</button>
                             </div>
                         </div>
                         <div className="bg-gray-800 p-5 rounded-lg border border-gray-700">
                             <h3 className="font-bold mb-3 text-gray-400 text-sm uppercase">Meus Eventos</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {events.map(ev => {
-                                    const assignedAdmins = allUsers.filter(u => u.allowedEvents?.includes(ev.id));
-                                    return (
-                                        <div key={ev.id} className="bg-gray-700/50 p-4 rounded border border-gray-600 hover:border-orange-500/50 transition-all">
-                                            <div className="flex justify-between items-start mb-2">
-                                                <span className="font-bold text-lg">{ev.name}</span>
-                                                <button onClick={() => onSelectEvent(ev)} className="bg-blue-600 text-xs px-4 py-1.5 rounded font-bold">Gerenciar</button>
-                                            </div>
-                                            {isSuperAdmin && (
-                                                <div className="mt-2 pt-2 border-t border-gray-600">
-                                                    <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Admins com Acesso:</p>
-                                                    <div className="flex flex-wrap gap-1">
-                                                        {assignedAdmins.length > 0 ? assignedAdmins.map(u => (
-                                                            <span key={u.id} className="text-[10px] bg-gray-800 px-1.5 py-0.5 rounded text-gray-400">{u.username}</span>
-                                                        )) : <span className="text-[10px] italic text-gray-600">Nenhum admin vinculado</span>}
-                                                        <button onClick={() => setActiveTab('users')} className="text-[10px] text-blue-400 hover:underline ml-1">+ Atribuir</button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    );
-                                })}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {events.map(ev => (
+                                    <div key={ev.id} className="flex justify-between items-center bg-gray-700/50 p-3 rounded hover:bg-gray-700 transition-colors border border-transparent hover:border-gray-600">
+                                        <span className="font-bold">{ev.name}</span>
+                                        <button onClick={() => onSelectEvent(ev)} className="bg-blue-600 text-xs px-4 py-1.5 rounded font-bold hover:bg-blue-500">Gerenciar</button>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     </div>
                 );
+            case 'search': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Selecione o campo de busca no painel superior.</div>;
             case 'locators': 
                 return (
                     <div className="space-y-6 animate-fade-in">
-                        <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
-                            <h2 className="text-xl font-bold mb-4 flex items-center"><TicketIcon className="w-6 h-6 mr-2 text-orange-500"/> Localizadores Manuais</h2>
-                            <textarea value={locatorCodes} onChange={e => setLocatorCodes(e.target.value)} placeholder="Códigos (um por linha)" className="w-full h-48 bg-gray-900 border border-gray-700 rounded p-4 mb-4 font-mono text-sm"/>
-                            <div className="flex gap-4">
-                                <select value={selectedLocatorSector} onChange={e => setSelectedLocatorSector(e.target.value)} className="flex-1 bg-gray-700 p-3 rounded border border-gray-700 text-sm">
-                                    {sectorNames.map(s => <option key={s} value={s}>{s}</option>)}
-                                </select>
-                                <button onClick={handleProcessLocators} className="bg-orange-600 px-8 rounded font-bold">Processar</button>
+                        <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
+                            <div className="flex items-center space-x-3 mb-6">
+                                <TicketIcon className="w-8 h-8 text-orange-500" />
+                                <div>
+                                    <h2 className="text-xl font-bold">Processamento de Localizadores</h2>
+                                    <p className="text-sm text-gray-400">Adicione códigos manuais para validação offline.</p>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="md:col-span-2 space-y-4">
+                                    <label className="block text-sm font-bold text-gray-300">Códigos (um por linha)</label>
+                                    <textarea 
+                                        value={locatorCodes}
+                                        onChange={(e) => setLocatorCodes(e.target.value)}
+                                        placeholder="Cole aqui os códigos..."
+                                        className="w-full h-64 bg-gray-900 border border-gray-700 rounded-lg p-4 font-mono text-sm focus:border-orange-500 outline-none resize-none"
+                                    />
+                                </div>
+                                <div className="space-y-6">
+                                    <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Setor de Destino</label>
+                                        <select 
+                                            value={selectedLocatorSector}
+                                            onChange={(e) => setSelectedLocatorSector(e.target.value)}
+                                            className="w-full bg-gray-800 p-3 rounded border border-gray-700 text-sm font-bold outline-none focus:border-orange-500"
+                                        >
+                                            <option value="">Selecione um setor...</option>
+                                            {sectorNames.map(s => <option key={s} value={s}>{s}</option>)}
+                                        </select>
+                                    </div>
+
+                                    <div className="bg-orange-600/10 p-4 rounded-lg border border-orange-500/20 text-xs text-orange-200">
+                                        <p className="font-bold mb-1 flex items-center"><AlertTriangleIcon className="w-3 h-3 mr-1"/> Aviso:</p>
+                                        <p>Estes códigos serão injetados diretamente no banco de dados do evento como <b>Disponíveis</b> para validação via scanner.</p>
+                                    </div>
+
+                                    <button 
+                                        onClick={handleProcessLocators}
+                                        disabled={isLoading || !locatorCodes.trim() || !selectedLocatorSector}
+                                        className="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center space-x-2"
+                                    >
+                                        {isLoading ? <><ClockIcon className="w-5 h-5 animate-spin"/> <span>Processando...</span></> : <><span>Processar Códigos</span></>}
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-                            <div className="max-h-96 overflow-y-auto">
+
+                        {/* LISTA DE REGISTROS MANUAIS */}
+                        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden shadow-xl">
+                            <div className="p-4 bg-gray-700/50 border-b border-gray-700 flex justify-between items-center">
+                                <h3 className="font-bold text-sm uppercase flex items-center"><TableCellsIcon className="w-4 h-4 mr-2"/> Localizadores Manuais ({manualLocatorTickets.length})</h3>
+                                <div className="text-[10px] text-gray-400">Exibindo apenas entradas manuais</div>
+                            </div>
+                            <div className="max-h-96 overflow-y-auto custom-scrollbar">
                                 <table className="w-full text-left text-sm">
-                                    <thead className="bg-gray-700 text-gray-400 text-[10px] uppercase">
-                                        <tr><th className="p-4">Código</th><th className="p-4">Setor</th><th className="p-4">Status</th></tr>
+                                    <thead className="sticky top-0 bg-gray-800 text-gray-500 text-[10px] uppercase border-b border-gray-700">
+                                        <tr>
+                                            <th className="px-6 py-3">Código</th>
+                                            <th className="px-6 py-3">Setor</th>
+                                            <th className="px-6 py-3">Status</th>
+                                            <th className="px-6 py-3 text-right">Ação</th>
+                                        </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-gray-700">
+                                    <tbody className="divide-y divide-gray-700/50">
                                         {manualLocatorTickets.map(t => (
-                                            <tr key={t.id} className="hover:bg-gray-700/30">
-                                                <td className="p-4 font-mono font-bold text-orange-400">{t.id}</td>
-                                                <td className="p-4">{t.sector}</td>
-                                                <td className="p-4"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.status === 'USED' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}`}>{t.status}</span></td>
+                                            <tr key={t.id} className="hover:bg-gray-700/30 transition-colors">
+                                                <td className="px-6 py-4 font-mono font-bold text-orange-400">{t.id}</td>
+                                                <td className="px-6 py-4 text-xs">{t.sector}</td>
+                                                <td className="px-6 py-4">
+                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.status === 'USED' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}`}>
+                                                        {t.status === 'USED' ? 'UTILIZADO' : 'DISPONÍVEL'}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <button onClick={() => handleDeleteTicket(t.id)} className="text-gray-500 hover:text-red-500 transition-colors"><TrashIcon className="w-4 h-4"/></button>
+                                                </td>
                                             </tr>
                                         ))}
+                                        {manualLocatorTickets.length === 0 && (
+                                            <tr>
+                                                <td colSpan={4} className="px-6 py-10 text-center text-gray-600 italic">Nenhum localizador manual adicionado.</td>
+                                            </tr>
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
@@ -380,6 +608,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     </div>
                 );
             case 'history': return <TicketList tickets={nonSecretScanHistory} sectorNames={sectorNames} />;
+            case 'operators': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Monitoramento de operadores em tempo real.</div>;
             default: return null;
         }
     };
@@ -392,11 +621,9 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 <button onClick={() => setActiveTab('locators')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'locators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><TicketIcon className="w-4 h-4 mr-1.5"/>Localizadores</button>
                 <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'history' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Histórico</button>
                 <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'events' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Eventos</button>
-                {isSuperAdmin && (
-                    <div className="ml-auto pl-2 border-l border-gray-600">
-                        <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'users' ? 'bg-purple-600 shadow-lg scale-105' : 'text-purple-400 hover:bg-purple-900'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Usuários</button>
-                    </div>
-                )}
+                <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'search' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Consultar</button>
+                <button onClick={() => setActiveTab('operators')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'operators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Operadores</button>
+                {isSuperAdmin && (<div className="ml-auto pl-2 border-l border-gray-600"><button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'users' ? 'bg-purple-600 shadow-lg scale-105' : 'text-purple-400 hover:bg-purple-900'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Usuários</button></div>)}
             </div>
             {renderContent()}
         </div>
