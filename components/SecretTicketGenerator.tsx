@@ -58,7 +58,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             return;
         }
 
-        // Criar query filtrando pela flag de origem 'secret_generator'
         const q = query(
             collection(db, 'events', selectedEventId, 'tickets'), 
             where('source', '==', 'secret_generator')
@@ -71,7 +70,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             } as Ticket));
             setTickets(list);
         }, (err) => {
-            console.error("Erro no snapshot (possível falta de índice):", err);
+            console.error("Erro no snapshot:", err);
         });
 
         return () => unsub();
@@ -148,7 +147,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
         setIsGenerating(true);
         const zip = new JSZip();
-        const batch = writeBatch(db);
+        let currentBatch = writeBatch(db);
+        let batchCounter = 0;
         const eventFolder = zip.folder(formData.eventName.replace(/\s+/g, '_'));
 
         try {
@@ -157,33 +157,46 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
 
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
-                batch.set(ticketRef, {
+                currentBatch.set(ticketRef, {
                     sector: formData.sector.split('[')[0].trim(),
                     status: 'AVAILABLE',
-                    source: 'secret_generator', // Flag identificadora crucial
+                    source: 'secret_generator',
                     details: {
                         ownerName: formData.ownerName,
                         eventName: formData.eventName
                     }
                 });
-                // Evitar sobrecarga em lotes grandes
-                if (i % 20 === 0 && i > 0) {
-                    await batch.commit();
-                    await new Promise(r => setTimeout(r, 100));
+
+                batchCounter++;
+
+                // Firestore permite até 500 operações por batch. 
+                // Usamos 100 como margem de segurança antes de commitar e criar um novo objeto de batch.
+                if (batchCounter >= 100) {
+                    await currentBatch.commit();
+                    currentBatch = writeBatch(db); // Instancia um NOVO batch após o commit
+                    batchCounter = 0;
+                    await new Promise(r => setTimeout(r, 50));
                 }
             }
 
-            await batch.commit();
+            // Commita o que sobrar
+            if (batchCounter > 0) {
+                await currentBatch.commit();
+            }
+
             const zipBlob = await zip.generateAsync({ type: "blob" });
             const url = URL.createObjectURL(zipBlob);
             setLastZipUrl(url);
+            
             const link = document.createElement('a');
             link.href = url;
             link.download = `ingressos_${formData.eventName.replace(/\s+/g, '_')}.zip`;
             link.click();
+            
+            alert("Lote gerado com sucesso!");
         } catch (e) {
-            console.error(e);
-            alert("Erro ao gerar lote.");
+            console.error("Erro na geração:", e);
+            alert("Erro ao gerar lote. Verifique o console.");
         } finally {
             setIsGenerating(false);
         }
