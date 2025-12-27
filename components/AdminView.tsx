@@ -4,6 +4,7 @@ import { Ticket, DisplayableScanLog, Sector, AnalyticsData, Event, User, SectorG
 import Stats from './Stats';
 import TicketList from './TicketList';
 import SuperAdminView from './SuperAdminView'; 
+import OperatorMonitor from './OperatorMonitor';
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc, getDocs } from 'firebase/firestore';
 import { CloudDownloadIcon, CloudUploadIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon, LockClosedIcon, TicketIcon, PlusCircleIcon, FunnelIcon, VideoCameraIcon, TableCellsIcon } from './Icons';
@@ -24,7 +25,6 @@ interface AdminViewProps {
   onUpdateCurrentUser?: (user: Partial<User>) => void;
 }
 
-// DEFINIÇÃO DE PRESETS PARA O DROPDOWN
 const API_PRESETS = [
     { name: "Personalizado / Outros", url: "", type: "tickets", token: "" },
     { name: "Google Sheets (CSV)", url: "https://docs.google.com/spreadsheets/d/ID_DA_PLANILHA/export?format=csv", type: "google_sheets", token: "" },
@@ -44,7 +44,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [assigningEventId, setAssigningEventId] = useState<string | null>(null);
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
 
-    // Configurações de Importação
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
     const [activeSourceId, setActiveSourceId] = useState<string>('new');
     const [ignoreExisting, setIgnoreExisting] = useState(true);
@@ -63,7 +62,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.username === 'Administrador';
 
-    // Carrega usuários para gestão de eventos
     useEffect(() => {
         if ((activeTab === 'events' || activeTab === 'users') && isSuperAdmin) {
             const fetchUsers = async () => {
@@ -101,14 +99,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         loadConfigs();
     }, [db, selectedEvent]);
 
-    // Lógica de Auto-Importação Robusta (10 min)
     useEffect(() => {
         if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current);
         
         const sourcesToAuto = importSources.filter(s => s.autoImport);
         if (sourcesToAuto.length > 0 && selectedEvent) {
             autoImportIntervalRef.current = setInterval(() => {
-                console.log("Executando auto-import programado...");
                 sourcesToAuto.forEach(s => executeImport(s, true));
             }, 600000); // 10 Minutos
         }
@@ -124,7 +120,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const newSectors = new Set<string>();
             const ticketsToSave: Ticket[] = [];
             
-            // MAPA DE EXISTENTES PARA EVITAR SOBRESCREVER VALIDAÇÕES
             const existingTicketIds = ignoreExisting ? new Set(allTickets.map(t => String(t.id).trim())) : new Set();
 
             if (source.type === 'google_sheets') {
@@ -244,7 +239,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         } catch (e) { alert("Erro ao salvar permissão."); }
     };
 
-    // FIX: Implemented handleProcessLocators to handle manual batch import of ticket codes.
     const handleProcessLocators = async () => {
         if (!selectedEvent || !db) return;
         const codes = locatorCodes.split('\n').map(c => c.trim()).filter(c => c.length > 0);
@@ -301,7 +295,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
                         <div className="space-y-6">
-                             {/* MODO DE OPERAÇÃO */}
                              <div className="bg-gray-800 p-5 rounded-2xl border border-orange-500/30 shadow-xl">
                                 <h3 className="text-lg font-bold mb-4 text-orange-400 flex items-center"><CogIcon className="w-5 h-5 mr-2"/> Modo de Operação</h3>
                                 <div className="space-y-3">
@@ -317,7 +310,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 <button onClick={() => setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'validation'), { mode: validationMode }, { merge: true })} className="bg-green-600 w-full mt-4 p-3 rounded-xl font-bold shadow-lg hover:bg-green-700 transition-all">Salvar Modo</button>
                              </div>
 
-                             {/* GESTÃO DE SETORES */}
                              <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-xl">
                                 <h3 className="text-lg font-bold mb-3 flex items-center"><TableCellsIcon className="w-5 h-5 mr-2"/> Setores do Evento</h3>
                                 <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-2">
@@ -342,7 +334,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         </div>
 
                         <div className="space-y-6">
-                            {/* CONFIGURAÇÃO DE APIS */}
                             <div className="bg-gray-800 p-5 rounded-2xl border border-blue-500/20 shadow-xl">
                                 <h3 className="text-lg font-bold text-blue-400 mb-4 flex items-center"><CloudUploadIcon className="w-5 h-5 mr-2"/> Configuração de Importação (Múltiplas APIs)</h3>
                                 
@@ -396,7 +387,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                     </div>
                                 </div>
 
-                                {/* LISTA DE APIS ATIVAS */}
                                 <div className="mt-8 space-y-3">
                                     <p className="text-xs font-bold text-gray-500 uppercase flex items-center"><CloudDownloadIcon className="w-4 h-4 mr-2"/> Fontes Conectadas</p>
                                     {importSources.length === 0 && <p className="text-xs text-gray-600 italic py-4 border-2 border-dashed border-gray-700 rounded-xl text-center">Nenhuma API configurada para este evento.</p>}
@@ -528,25 +518,31 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'operators':
                 const operatorMonitorUrl = `${window.location.origin}${window.location.pathname}?mode=operators&eventId=${selectedEvent!.id}`;
                 return (
-                    <div className="space-y-6 animate-fade-in pb-20 text-center">
-                        <div className="bg-gray-800 p-12 rounded-3xl border border-gray-700 shadow-2xl flex flex-col items-center">
-                            <div className="bg-orange-600/20 p-8 rounded-full mb-8 border border-orange-500/30 shadow-inner">
-                                <VideoCameraIcon className="w-20 h-20 text-orange-500" />
+                    <div className="space-y-6 animate-fade-in pb-20">
+                         {/* Link copy panel - small and useful */}
+                         <div className="bg-gray-800 p-4 rounded-2xl border border-gray-700 flex flex-col md:flex-row justify-between items-center gap-4">
+                            <div className="flex items-center space-x-3">
+                                <VideoCameraIcon className="w-6 h-6 text-orange-500" />
+                                <div>
+                                    <h4 className="text-sm font-bold">Link de Monitoramento Externo</h4>
+                                    <p className="text-[10px] text-gray-500">Compartilhe este link com supervisores de portaria.</p>
+                                </div>
                             </div>
-                            <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase">Monitoramento Portarias</h2>
-                            <p className="text-gray-400 max-w-lg mb-8 text-lg font-medium leading-relaxed">
-                                Link de acesso em tempo real para supervisores de portaria acompanharem a produtividade e erros.
-                            </p>
-                            
-                            <div className="w-full max-w-2xl bg-gray-950 border border-gray-700 p-6 rounded-2xl mb-8 font-mono text-xs break-all text-orange-400 shadow-inner leading-relaxed select-all">
-                                {operatorMonitorUrl}
+                            <div className="flex items-center gap-2 w-full md:w-auto">
+                                <input readOnly value={operatorMonitorUrl} className="flex-1 md:w-64 bg-gray-900 border border-gray-700 px-3 py-1.5 rounded-lg text-[10px] font-mono outline-none" />
+                                <button 
+                                    onClick={() => { navigator.clipboard.writeText(operatorMonitorUrl).then(() => alert("Link copiado!")); }}
+                                    className="bg-blue-600 hover:bg-blue-700 px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-lg whitespace-nowrap"
+                                >
+                                    Copiar Link
+                                </button>
                             </div>
-                            
-                            <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
-                                <button onClick={() => { navigator.clipboard.writeText(operatorMonitorUrl).then(() => alert("Link de monitoramento copiado!")); }} className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-10 rounded-2xl flex items-center justify-center transition-all shadow-xl active:scale-95"><LinkIcon className="w-5 h-5 mr-3" /> Copiar Link</button>
-                                <a href={operatorMonitorUrl} target="_blank" rel="noopener noreferrer" className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-10 rounded-2xl flex items-center justify-center transition-all shadow-xl active:scale-95"><VideoCameraIcon className="w-5 h-5 mr-3" /> Abrir no Navegador</a>
-                            </div>
-                        </div>
+                         </div>
+                         
+                         {/* Integrated Monitor Component */}
+                         <div className="bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl overflow-hidden">
+                             <OperatorMonitor event={selectedEvent!} scanHistory={scanHistory} isEmbedded />
+                         </div>
                     </div>
                 );
             case 'history': return <TicketList tickets={scanHistory.filter(s => !allTickets.find(t => t.id === s.ticketId && t.source === 'secret_generator'))} sectorNames={sectorNames} />;

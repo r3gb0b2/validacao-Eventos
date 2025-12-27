@@ -7,9 +7,10 @@ interface OperatorMonitorProps {
   event: Event;
   scanHistory: DisplayableScanLog[];
   isLoading?: boolean;
+  isEmbedded?: boolean; // New prop to handle embedded view
 }
 
-const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, isLoading = false }) => {
+const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, isLoading = false, isEmbedded = false }) => {
   
   const stats = useMemo(() => {
     if (!scanHistory || scanHistory.length === 0) return [];
@@ -57,49 +58,48 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
       const sector = log.ticketSector || 'Desconhecido';
       s.sectors[sector] = (s.sectors[sector] || 0) + 1;
 
-      // Agrupamento por hora para mini gráfico
       const hour = new Date(log.timestamp).getHours().toString().padStart(2, '0') + ':00';
       s.timeline[hour] = (s.timeline[hour] || 0) + 1;
     });
 
-    // FIX: Explicitly treat lastSeen as number during sort subtraction
     return Object.values(operatorMap).sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
   }, [scanHistory]);
 
   const totalScans = scanHistory.length;
-  // FIX: Ensure lastSeen is treated as a number in filter arithmetic
   const activeNowCount = stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20">
-      <div className="w-full max-w-7xl mx-auto space-y-8">
+    <div className={`${isEmbedded ? 'p-6' : 'min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20'}`}>
+      <div className={`w-full ${isEmbedded ? '' : 'max-w-7xl mx-auto space-y-8'}`}>
         
-        {/* Header Profissional */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-2xl">
-          <div className="flex items-center space-x-4">
-            <div className="bg-orange-600 p-3 rounded-xl shadow-lg shadow-orange-900/20">
-              <VideoCameraIcon className="w-8 h-8 text-white" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold text-white tracking-tight">{event.name}</h1>
-              <p className="text-gray-400 text-sm font-medium flex items-center">
-                <UsersIcon className="w-4 h-4 mr-1.5 text-orange-500" />
-                Monitoramento de Operadores em Tempo Real
-              </p>
-            </div>
-          </div>
-          
-          <div className="flex items-center bg-gray-900/50 px-4 py-2 rounded-full border border-gray-700">
-            <span className="relative flex h-3 w-3 mr-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-            </span>
-            <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Sincronizado</span>
-          </div>
-        </header>
+        {/* Header - Only show if NOT embedded or always show for consistency */}
+        {!isEmbedded && (
+            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-2xl mb-8">
+              <div className="flex items-center space-x-4">
+                <div className="bg-orange-600 p-3 rounded-xl shadow-lg shadow-orange-900/20">
+                  <VideoCameraIcon className="w-8 h-8 text-white" />
+                </div>
+                <div>
+                  <h1 className="text-3xl font-bold text-white tracking-tight">{event.name}</h1>
+                  <p className="text-gray-400 text-sm font-medium flex items-center">
+                    <UsersIcon className="w-4 h-4 mr-1.5 text-orange-500" />
+                    Monitoramento de Operadores em Tempo Real
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center bg-gray-900/50 px-4 py-2 rounded-full border border-gray-700">
+                <span className="relative flex h-3 w-3 mr-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                </span>
+                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Sincronizado</span>
+              </div>
+            </header>
+        )}
 
         {/* Dash de Resumo */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ${isEmbedded ? 'mb-8' : ''}`}>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
             <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Total de Operadores</p>
             <p className="text-4xl font-black text-white">{stats.length}</p>
@@ -121,11 +121,8 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
         {/* Grid de Operadores */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {stats.map(op => {
-            // FIX: Ensure lastSeen is treated as a number for status calculation
             const isActive = (Date.now() - (Number(op.lastSeen) || 0)) < 300000;
-            // FIX: Ensure success rate arithmetic uses numbers and handles zero
             const successRate = (Number(op.total) || 0) > 0 ? ((Number(op.valid) / Number(op.total)) * 100).toFixed(1) : '0';
-            // FIX: Ensure sector sorting subtraction uses numbers
             const topSector = Object.entries(op.sectors).sort((a,b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))[0]?.[0] || '---';
 
             return (
@@ -149,13 +146,11 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                     </div>
                   </div>
 
-                  {/* Barras de Status Progressivas */}
                   <div className="space-y-3 pt-2">
                     <div className="flex justify-between items-end">
                       <p className="text-[10px] font-black text-gray-500 uppercase">Taxa de Sucesso</p>
                       <p className="text-sm font-black text-green-400">{successRate}%</p>
                     </div>
-                    {/* FIX: Use safe arithmetic and handle division by zero for progress bars */}
                     <div className="w-full bg-gray-900 h-2 rounded-full overflow-hidden flex">
                       <div className="bg-green-500 h-full" style={{ width: `${(Number(op.total) || 0) > 0 ? (Number(op.valid) / Number(op.total)) * 100 : 0}%` }}></div>
                       <div className="bg-red-500 h-full" style={{ width: `${(Number(op.total) || 0) > 0 ? ((Number(op.invalid) + Number(op.error)) / Number(op.total)) * 100 : 0}%` }}></div>
@@ -163,7 +158,6 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                     </div>
                   </div>
 
-                  {/* Contador de Tipos de Erro */}
                   <div className="grid grid-cols-3 gap-2">
                     <div className="bg-gray-900/50 p-2 rounded-lg border border-gray-700/50 text-center">
                       <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Inválidos</p>
@@ -198,14 +192,16 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
         </div>
       </div>
       
-      {/* Botão Flutuante Voltar */}
-      <button 
-        onClick={() => window.location.href = window.location.pathname}
-        className="fixed bottom-6 right-6 bg-gray-800 hover:bg-gray-700 text-white p-4 rounded-full shadow-2xl border border-gray-600 flex items-center space-x-2 transition-all hover:scale-105"
-      >
-        <CheckCircleIcon className="w-6 h-6 text-orange-500" />
-        <span className="font-bold text-sm">Voltar ao Início</span>
-      </button>
+      {/* Botão Flutuante Voltar - Only show if NOT embedded */}
+      {!isEmbedded && (
+          <button 
+            onClick={() => window.location.href = window.location.pathname}
+            className="fixed bottom-6 right-6 bg-gray-800 hover:bg-gray-700 text-white p-4 rounded-full shadow-2xl border border-gray-600 flex items-center space-x-2 transition-all hover:scale-105"
+          >
+            <CheckCircleIcon className="w-6 h-6 text-orange-500" />
+            <span className="font-bold text-sm">Voltar ao Início</span>
+          </button>
+      )}
     </div>
   );
 };
