@@ -64,6 +64,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [buyerSearchResults, setBuyerSearchResults] = useState<any[]>([]);
     const [showScanner, setShowScanner] = useState(false);
 
+    // "Localizadores" (Stand-by) State
+    const [locatorCodes, setLocatorCodes] = useState('');
+    const [selectedLocatorSector, setSelectedLocatorSector] = useState(sectorNames[0] || '');
+
     // Stats Configuration State
     const [statsViewMode, setStatsViewMode] = useState<'raw' | 'grouped'>('raw');
     const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
@@ -75,6 +79,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (sectorNames) {
             setEditableSectorNames(sectorNames);
             setSectorVisibility(sectorNames.map(name => !hiddenSectors.includes(name)));
+            if (!selectedLocatorSector && sectorNames.length > 0) setSelectedLocatorSector(sectorNames[0]);
         }
     }, [sectorNames, hiddenSectors]);
 
@@ -248,9 +253,65 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         setActiveSourceId('new');
     };
 
+    const handleProcessLocators = async () => {
+        if (!selectedEvent) return;
+        if (!locatorCodes.trim()) return alert("Insira ao menos um código.");
+        if (!selectedLocatorSector) return alert("Selecione um setor.");
+
+        setIsLoading(true);
+        setLoadingMessage('Processando códigos...');
+
+        try {
+            const codes = locatorCodes.split('\n').map(c => c.trim()).filter(c => c.length > 0);
+            const BATCH_SIZE = 450;
+            let addedCount = 0;
+
+            for (let i = 0; i < codes.length; i += BATCH_SIZE) {
+                const chunk = codes.slice(i, i + BATCH_SIZE);
+                const batch = writeBatch(db);
+                
+                chunk.forEach(code => {
+                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', code);
+                    batch.set(ticketRef, {
+                        sector: selectedLocatorSector,
+                        status: 'AVAILABLE',
+                        source: 'manual_locator',
+                        details: {
+                            ownerName: 'LOCALIZADOR MANUAL',
+                            eventName: selectedEvent.name
+                        }
+                    }, { merge: true });
+                    addedCount++;
+                });
+
+                await batch.commit();
+            }
+
+            setLocatorCodes('');
+            alert(`${addedCount} códigos processados com sucesso!`);
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao processar localizadores.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleDeleteTicket = async (id: string) => {
+        if (!selectedEvent) return;
+        if (!confirm(`Deseja excluir permanentemente o código ${id}?`)) return;
+        try {
+            await deleteDoc(doc(db, 'events', selectedEvent.id, 'tickets', id));
+        } catch (e) { alert("Erro ao excluir."); }
+    };
+
     const nonSecretTickets = useMemo(() => allTickets.filter(t => t.source !== 'secret_generator'), [allTickets]);
     const secretTicketIds = useMemo(() => new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id)), [allTickets]);
     const nonSecretScanHistory = useMemo(() => scanHistory.filter(log => !secretTicketIds.has(log.ticketId)), [scanHistory, secretTicketIds]);
+
+    const manualLocatorTickets = useMemo(() => {
+        return allTickets.filter(t => t.source === 'manual_locator');
+    }, [allTickets]);
 
     const renderContent = () => {
         if (activeTab === 'users') return isSuperAdmin ? <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} /> : <p>Acesso negado.</p>;
@@ -416,13 +477,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         ))}
                                     </div>
                                 </div>
-                                
-                                <div className="mt-4 p-3 bg-blue-900/20 border border-blue-500/20 rounded">
-                                    <label className="flex items-center text-xs text-blue-300 font-medium cursor-pointer">
-                                        <input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} className="mr-2 rounded text-blue-600 bg-gray-800"/>
-                                        Ignorar códigos já presentes no banco
-                                    </label>
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -460,7 +514,99 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     </div>
                 );
             case 'search': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Selecione o campo de busca no painel superior.</div>;
-            case 'locators': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Gerencie localizadores aqui.</div>;
+            case 'locators': 
+                return (
+                    <div className="space-y-6 animate-fade-in">
+                        <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
+                            <div className="flex items-center space-x-3 mb-6">
+                                <TicketIcon className="w-8 h-8 text-orange-500" />
+                                <div>
+                                    <h2 className="text-xl font-bold">Processamento de Localizadores</h2>
+                                    <p className="text-sm text-gray-400">Adicione códigos manuais para validação offline.</p>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div className="md:col-span-2 space-y-4">
+                                    <label className="block text-sm font-bold text-gray-300">Códigos (um por linha)</label>
+                                    <textarea 
+                                        value={locatorCodes}
+                                        onChange={(e) => setLocatorCodes(e.target.value)}
+                                        placeholder="Cole aqui os códigos..."
+                                        className="w-full h-64 bg-gray-900 border border-gray-700 rounded-lg p-4 font-mono text-sm focus:border-orange-500 outline-none resize-none"
+                                    />
+                                </div>
+                                <div className="space-y-6">
+                                    <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Setor de Destino</label>
+                                        <select 
+                                            value={selectedLocatorSector}
+                                            onChange={(e) => setSelectedLocatorSector(e.target.value)}
+                                            className="w-full bg-gray-800 p-3 rounded border border-gray-700 text-sm font-bold outline-none focus:border-orange-500"
+                                        >
+                                            <option value="">Selecione um setor...</option>
+                                            {sectorNames.map(s => <option key={s} value={s}>{s}</option>)}
+                                        </select>
+                                    </div>
+
+                                    <div className="bg-orange-600/10 p-4 rounded-lg border border-orange-500/20 text-xs text-orange-200">
+                                        <p className="font-bold mb-1 flex items-center"><AlertTriangleIcon className="w-3 h-3 mr-1"/> Aviso:</p>
+                                        <p>Estes códigos serão injetados diretamente no banco de dados do evento como <b>Disponíveis</b> para validação via scanner.</p>
+                                    </div>
+
+                                    <button 
+                                        onClick={handleProcessLocators}
+                                        disabled={isLoading || !locatorCodes.trim() || !selectedLocatorSector}
+                                        className="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-bold py-4 rounded-xl shadow-lg transition-all flex items-center justify-center space-x-2"
+                                    >
+                                        {isLoading ? <><ClockIcon className="w-5 h-5 animate-spin"/> <span>Processando...</span></> : <><span>Processar Códigos</span></>}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* LISTA DE REGISTROS MANUAIS */}
+                        <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden shadow-xl">
+                            <div className="p-4 bg-gray-700/50 border-b border-gray-700 flex justify-between items-center">
+                                <h3 className="font-bold text-sm uppercase flex items-center"><TableCellsIcon className="w-4 h-4 mr-2"/> Localizadores Manuais ({manualLocatorTickets.length})</h3>
+                                <div className="text-[10px] text-gray-400">Exibindo apenas entradas manuais</div>
+                            </div>
+                            <div className="max-h-96 overflow-y-auto custom-scrollbar">
+                                <table className="w-full text-left text-sm">
+                                    <thead className="sticky top-0 bg-gray-800 text-gray-500 text-[10px] uppercase border-b border-gray-700">
+                                        <tr>
+                                            <th className="px-6 py-3">Código</th>
+                                            <th className="px-6 py-3">Setor</th>
+                                            <th className="px-6 py-3">Status</th>
+                                            <th className="px-6 py-3 text-right">Ação</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-700/50">
+                                        {manualLocatorTickets.map(t => (
+                                            <tr key={t.id} className="hover:bg-gray-700/30 transition-colors">
+                                                <td className="px-6 py-4 font-mono font-bold text-orange-400">{t.id}</td>
+                                                <td className="px-6 py-4 text-xs">{t.sector}</td>
+                                                <td className="px-6 py-4">
+                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.status === 'USED' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/50 text-green-400'}`}>
+                                                        {t.status === 'USED' ? 'UTILIZADO' : 'DISPONÍVEL'}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <button onClick={() => handleDeleteTicket(t.id)} className="text-gray-500 hover:text-red-500 transition-colors"><TrashIcon className="w-4 h-4"/></button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                        {manualLocatorTickets.length === 0 && (
+                                            <tr>
+                                                <td colSpan={4} className="px-6 py-10 text-center text-gray-600 italic">Nenhum localizador manual adicionado.</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                );
             case 'history': return <TicketList tickets={nonSecretScanHistory} sectorNames={sectorNames} />;
             case 'operators': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Monitoramento de operadores em tempo real.</div>;
             default: return null;
