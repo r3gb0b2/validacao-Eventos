@@ -6,7 +6,7 @@ import TicketList from './TicketList';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import Scanner from './Scanner';
-import SuperAdminView from './SuperAdminView'; // Import Super Admin Component
+import SuperAdminView from './SuperAdminView'; 
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc } from 'firebase/firestore';
 import { CloudDownloadIcon, CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon, LockClosedIcon, TicketIcon, PlusCircleIcon, FunnelIcon } from './Icons';
@@ -23,53 +23,43 @@ interface AdminViewProps {
   onUpdateSectorNames: (newNames: string[], hiddenSectors?: string[]) => Promise<void>;
   isOnline: boolean;
   onSelectEvent: (event: Event) => void;
-  currentUser: User | null; // Added current user prop
+  currentUser: User | null;
   onUpdateCurrentUser?: (user: Partial<User>) => void;
 }
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
-interface ImportPreset {
-    id?: string;
-    name: string;
-    url: string;
-    token: string;
-    eventId: string;
-}
-
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser, onUpdateCurrentUser }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search' | 'users' | 'operators' | 'locators'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
-    const [sectorVisibility, setSectorVisibility] = useState<boolean[]>([]); // Track visibility locally during edit
+    const [sectorVisibility, setSectorVisibility] = useState<boolean[]>([]);
     const [ticketCodes, setTicketCodes] = useState<{ [key: string]: string }>({});
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState('');
     const [isSavingSectors, setIsSavingSectors] = useState(false);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-    // FIX: Added validationMode state to resolve "Cannot find name 'validationMode'" errors.
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
-
-    // Event Management State
-    const [newEventName, setNewEventName] = useState('');
-    const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
 
     // Multi-Import State
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
     const [activeSourceId, setActiveSourceId] = useState<string>('new');
     const [ignoreExisting, setIgnoreExisting] = useState(true);
     
-    // Auto Import Timer Ref
     const autoImportIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Form Temporary State
+    const [newEventName, setNewEventName] = useState('');
+    const [renameEventName, setRenameEventName] = useState(selectedEvent?.name ?? '');
 
     // Search Tab State
     const [searchType, setSearchType] = useState<'TICKET_LOCAL' | 'BUYER_API'>('TICKET_LOCAL');
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResult, setSearchResult] = useState<{ ticket: Ticket | undefined, logs: DisplayableScanLog[] } | null>(null);
     const [buyerSearchResults, setBuyerSearchResults] = useState<any[]>([]);
-    const [showScanner, setShowScanner] = useState(false); // Scanner Modal State
+    const [showScanner, setShowScanner] = useState(false);
 
-    // "Localizadores" (Stand-by) State
+    // "Localizadores" State
     const [locatorCodes, setLocatorCodes] = useState('');
     const [selectedLocatorSector, setSelectedLocatorSector] = useState(sectorNames[0] || '');
 
@@ -80,7 +70,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
     const canManageEvents = currentUser?.role === 'ADMIN' || isSuperAdmin;
 
-    // FIX: Initialize editable sector names and visibility from props when they change.
     useEffect(() => {
         if (sectorNames) {
             setEditableSectorNames(sectorNames);
@@ -88,49 +77,23 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         }
     }, [sectorNames, hiddenSectors]);
 
-    // FIX: Load validation settings from Firestore whenever the selected event changes.
     useEffect(() => {
         if (!selectedEvent) return;
-        const loadValidation = async () => {
+        const loadConfigs = async () => {
             try {
+                // Validation Mode
                 const vDoc = await getDoc(doc(db, 'events', selectedEvent.id, 'settings', 'validation'));
-                if (vDoc.exists() && vDoc.data().mode) {
-                    setValidationMode(vDoc.data().mode);
-                }
-            } catch (e) { console.error("Error loading validation settings", e); }
-        };
-        loadValidation();
-    }, [db, selectedEvent]);
+                if (vDoc.exists() && vDoc.data().mode) setValidationMode(vDoc.data().mode);
 
-    // Filter secret tickets from stats
-    const nonSecretTickets = useMemo(() => {
-        return allTickets.filter(t => t.source !== 'secret_generator');
-    }, [allTickets]);
-
-    const secretTicketIds = useMemo(() => {
-        return new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id));
-    }, [allTickets]);
-
-    const nonSecretScanHistory = useMemo(() => {
-        return scanHistory.filter(log => !secretTicketIds.has(log.ticketId));
-    }, [scanHistory, secretTicketIds]);
-
-    // Load Import Sources for current event
-    useEffect(() => {
-        if (!selectedEvent) return;
-        const loadImportConfigs = async () => {
-            try {
-                const docRef = doc(db, 'events', selectedEvent.id, 'settings', 'import_v2');
-                const snap = await getDoc(docRef);
-                if (snap.exists()) {
-                    setImportSources(snap.data().sources || []);
+                // Multi Import Sources
+                const iDoc = await getDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'));
+                if (iDoc.exists()) {
+                    setImportSources(iDoc.data().sources || []);
                 } else {
-                    // Migration from single source if exists
-                    const oldDocRef = doc(db, 'events', selectedEvent.id, 'settings', 'import');
-                    const oldSnap = await getDoc(oldDocRef);
-                    if (oldSnap.exists()) {
-                        const data = oldSnap.data();
-                        const initialSource: ImportSource = {
+                    const oldDoc = await getDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import'));
+                    if (oldDoc.exists()) {
+                        const data = oldDoc.data();
+                        const initial: ImportSource = {
                             id: 'default',
                             name: 'API Principal',
                             url: data.url || 'https://public-api.stingressos.com.br/tickets',
@@ -139,19 +102,16 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             type: 'tickets',
                             autoImport: false
                         };
-                        setImportSources([initialSource]);
+                        setImportSources([initial]);
                         setActiveSourceId('default');
-                    } else {
-                        setImportSources([]);
-                        setActiveSourceId('new');
                     }
                 }
-            } catch (e) { console.error("Error loading import configs", e); }
+            } catch (e) { console.error("Error loading configs", e); }
         };
-        loadImportConfigs();
+        loadConfigs();
     }, [db, selectedEvent]);
 
-    // Auto Import Manager
+    // Enhanced Auto Import logic for multiple APIs
     useEffect(() => {
         if (!selectedEvent || importSources.length === 0) return;
 
@@ -159,16 +119,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const sourcesToRun = importSources.filter(s => s.autoImport);
             if (sourcesToRun.length === 0) return;
 
-            console.log(`Auto Import: Iniciando processamento de ${sourcesToRun.length} fontes.`);
+            console.log(`Auto Import: Processando ${sourcesToRun.length} fontes para o evento ${selectedEvent.name}`);
             for (const source of sourcesToRun) {
                 await executeImport(source, true);
             }
         };
 
         if (importSources.some(s => s.autoImport)) {
-             // Run once on load
              runAutoImports();
-             // Set interval (15 min)
+             if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current);
              autoImportIntervalRef.current = setInterval(runAutoImports, 15 * 60 * 1000);
         } else {
             if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current);
@@ -208,7 +167,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 let page = 1;
                 let hasMore = true;
                 while (hasMore) {
-                    if (!isAuto) setLoadingMessage(`[${source.name}] Baixando pág ${page}...`);
+                    if (!isAuto) setLoadingMessage(`[${source.name}] Pág ${page}...`);
                     const urlObj = new URL((source.url || '').trim());
                     urlObj.searchParams.set('page', String(page));
                     urlObj.searchParams.set('per_page', '200');
@@ -247,24 +206,18 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 }
             }
 
-            // Update last import time in state and DB
             const now = Date.now();
-            setImportSources(prev => prev.map(s => s.id === source.id ? { ...s, lastImportTime: now } : s));
+            const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: now } : s);
+            setImportSources(updatedSources);
+            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), { sources: updatedSources }, { merge: true });
             
-            if (!isAuto) alert(`Fonte [${source.name}]: ${ticketsToSave.length} novos ingressos importados.`);
+            if (!isAuto) alert(`Fonte [${source.name}]: Importação finalizada.`);
         } catch (e) {
             console.error(`Import Error [${source.name}]:`, e);
-            if (!isAuto) alert(`Erro na fonte [${source.name}]: ${e instanceof Error ? e.message : 'Desconhecido'}`);
+            if (!isAuto) alert(`Erro na fonte [${source.name}]: ${e instanceof Error ? e.message : 'Erro'}`);
         } finally {
             if (!isAuto) setIsLoading(false);
         }
-    };
-
-    const handleSaveSources = async (sources: ImportSource[]) => {
-        if (!selectedEvent) return;
-        try {
-            await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), { sources }, { merge: true });
-        } catch (e) { console.error("Error saving sources", e); }
     };
 
     const handleAddUpdateSource = async (formData: Partial<ImportSource>) => {
@@ -284,26 +237,24 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             newSources = importSources.map(s => s.id === activeSourceId ? { ...s, ...formData } : s);
         }
         setImportSources(newSources);
-        await handleSaveSources(newSources);
-        alert("Configuração salva!");
-        if (activeSourceId === 'new') setActiveSourceId(newSources[newSources.length - 1].id);
+        await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: newSources }, { merge: true });
+        if (activeSourceId === 'new') {
+            setActiveSourceId(newSources[newSources.length - 1].id);
+            alert("Fonte adicionada!");
+        } else {
+            alert("Configuração atualizada!");
+        }
     };
 
     const handleRemoveSource = async (id: string) => {
-        if (!confirm("Remover esta fonte de importação?")) return;
+        if (!confirm("Deseja remover esta fonte?")) return;
         const newSources = importSources.filter(s => s.id !== id);
         setImportSources(newSources);
-        await handleSaveSources(newSources);
+        await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: newSources }, { merge: true });
         setActiveSourceId('new');
     };
 
-    const handleRunManualImport = () => {
-        if (activeSourceId === 'new') return alert("Selecione ou salve uma fonte primeiro.");
-        const source = importSources.find(s => s.id === activeSourceId);
-        if (source) executeImport(source);
-    };
-
-    const handleRunAllImports = async () => {
+    const handleRunAllManual = async () => {
         if (importSources.length === 0) return;
         setIsLoading(true);
         for (const source of importSources) {
@@ -311,56 +262,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             await executeImport(source, true);
         }
         setIsLoading(false);
-        alert("Importação em massa concluída!");
+        alert("Todas as fontes foram processadas!");
     };
 
-    const handleSaveStatsConfig = async (mode: 'raw' | 'grouped', groups: SectorGroup[]) => {
-        if (!selectedEvent) return;
-        setStatsViewMode(mode);
-        setSectorGroups(groups);
-        await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), { viewMode: mode, groups }, { merge: true });
-    };
+    const nonSecretTickets = useMemo(() => allTickets.filter(t => t.source !== 'secret_generator'), [allTickets]);
+    const secretTicketIds = useMemo(() => new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id)), [allTickets]);
+    const nonSecretScanHistory = useMemo(() => scanHistory.filter(log => !secretTicketIds.has(log.ticketId)), [scanHistory, secretTicketIds]);
 
-    const handleSearch = async (overrideQuery?: string) => {
-        const queryToUse = overrideQuery || searchQuery;
-        if (!(queryToUse || '').trim()) return;
-
-        if (searchType === 'TICKET_LOCAL') {
-            const ticket = allTickets.find(t => t.id === queryToUse.trim());
-            const logs = scanHistory.filter(l => l.ticketId === queryToUse.trim()).sort((a,b) => b.timestamp - a.timestamp);
-            setSearchResult({ ticket, logs });
-        } else {
-            // Online search logic using the currently active source if it has a token
-            const activeSource = importSources.find(s => s.id === activeSourceId);
-            if (!activeSource || !activeSource.token) {
-                alert("Selecione uma fonte com Token configurado para busca online.");
-                return;
-            }
-            setIsLoading(true);
-            try {
-                let urlObj = new URL(activeSource.url);
-                const pathSegments = urlObj.pathname.split('/').filter(Boolean);
-                if (pathSegments.length > 0) {
-                     pathSegments[pathSegments.length - 1] = 'participants';
-                     urlObj.pathname = `/${pathSegments.join('/')}`;
-                } else urlObj.pathname = '/participants';
-                urlObj.searchParams.set('search', queryToUse);
-                if (activeSource.eventId) urlObj.searchParams.set('event_id', activeSource.eventId);
-                
-                const res = await fetch(urlObj.toString(), { headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${activeSource.token}` } });
-                const json = await res.json();
-                setBuyerSearchResults(json.data || json.participants || []);
-            } catch (e) { alert("Erro na busca online."); } finally { setIsLoading(false); }
-        }
-    };
-
-    const handleCopyPublicLink = () => {
-        if (!selectedEvent) return;
-        const url = `${window.location.origin}${window.location.pathname}?mode=stats&eventId=${selectedEvent.id}`;
-        navigator.clipboard.writeText(url).then(() => alert("Link público copiado!"));
-    };
-
-    const currentSource = importSources.find(s => s.id === activeSourceId) || { name: '', url: '', token: '', eventId: '', type: 'tickets' as ImportType, autoImport: false };
+    const currentSource = importSources.find(s => s.id === activeSourceId) || { id: 'new', name: '', url: '', token: '', eventId: '', type: 'tickets' as ImportType, autoImport: false };
 
     const renderContent = () => {
         if (activeTab === 'users') return isSuperAdmin ? <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} /> : <p>Acesso negado.</p>;
@@ -370,8 +279,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'stats':
                 return (
                     <div className="space-y-6 animate-fade-in">
-                        <div className="flex justify-between items-center"><h2 className="text-2xl font-bold">Dashboard</h2><div className="flex space-x-2"><button onClick={handleCopyPublicLink} className="bg-blue-600 p-2 rounded-lg text-sm flex items-center"><LinkIcon className="w-4 h-4 mr-1"/>Link Público</button><button onClick={() => generateEventReport(selectedEvent!.name, nonSecretTickets, nonSecretScanHistory, sectorNames)} disabled={isGeneratingPdf} className="bg-green-600 p-2 rounded-lg text-sm flex items-center"><CloudDownloadIcon className="w-4 h-4 mr-1"/>PDF</button></div></div>
-                        <Stats allTickets={nonSecretTickets} sectorNames={sectorNames} viewMode={statsViewMode} onViewModeChange={m => handleSaveStatsConfig(m, sectorGroups)} groups={sectorGroups} onGroupsChange={g => handleSaveStatsConfig(statsViewMode, g)}/>
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-2xl font-bold">Dashboard</h2>
+                            <div className="flex space-x-2">
+                                <button onClick={() => {
+                                    const url = `${window.location.origin}${window.location.pathname}?mode=stats&eventId=${selectedEvent!.id}`;
+                                    navigator.clipboard.writeText(url).then(() => alert("Link copiado!"));
+                                }} className="bg-blue-600 p-2 rounded-lg text-sm flex items-center"><LinkIcon className="w-4 h-4 mr-1"/>Link Público</button>
+                                <button onClick={() => generateEventReport(selectedEvent!.name, nonSecretTickets, nonSecretScanHistory, sectorNames)} disabled={isGeneratingPdf} className="bg-green-600 p-2 rounded-lg text-sm flex items-center"><CloudDownloadIcon className="w-4 h-4 mr-1"/>PDF</button>
+                            </div>
+                        </div>
+                        <Stats allTickets={nonSecretTickets} sectorNames={sectorNames} viewMode={statsViewMode} onViewModeChange={setStatsViewMode} groups={sectorGroups} onGroupsChange={setSectorGroups}/>
                     </div>
                 );
             case 'settings':
@@ -381,98 +299,131 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                              <div className="bg-gray-800 p-5 rounded-lg border border-orange-500/30">
                                 <h3 className="text-lg font-bold mb-4 text-orange-400">Modo de Operação</h3>
                                 <div className="space-y-2">
-                                    <label><input type="radio" checked={validationMode === 'OFFLINE'} onChange={() => setValidationMode('OFFLINE')} /> Offline</label>
-                                    <label><input type="radio" checked={validationMode === 'ONLINE_API'} onChange={() => setValidationMode('ONLINE_API')} /> Online (API)</label>
+                                    <label className="flex items-center space-x-2"><input type="radio" checked={validationMode === 'OFFLINE'} onChange={() => setValidationMode('OFFLINE')} className="text-orange-500"/> <span>Offline (BD Local)</span></label>
+                                    <label className="flex items-center space-x-2"><input type="radio" checked={validationMode === 'ONLINE_API'} onChange={() => setValidationMode('ONLINE_API')} className="text-orange-500"/> <span>Online (Validação via API)</span></label>
                                 </div>
-                                <button onClick={() => setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'validation'), { mode: validationMode }, { merge: true })} className="bg-green-600 w-full mt-2 p-2 rounded">Salvar Modo</button>
+                                <button onClick={() => setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'validation'), { mode: validationMode }, { merge: true })} className="bg-green-600 w-full mt-4 p-2 rounded font-bold">Salvar Modo</button>
                              </div>
-                             <div className="bg-gray-800 p-5 rounded-lg">
+                             <div className="bg-gray-800 p-5 rounded-lg border border-gray-700">
                                 <h3 className="text-lg font-bold mb-3">Setores</h3>
                                 <div className="space-y-2">
                                     {editableSectorNames.map((name, i) => (
                                         <div key={i} className="flex items-center space-x-2">
-                                            <input value={name} onChange={e => { const n = [...editableSectorNames]; n[i] = e.target.value; setEditableSectorNames(n); }} className="flex-grow bg-gray-700 p-2 rounded"/>
+                                            <input value={name} onChange={e => { const n = [...editableSectorNames]; n[i] = e.target.value; setEditableSectorNames(n); }} className="flex-grow bg-gray-700 p-2 rounded text-sm"/>
                                             <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); }} className="p-1">{sectorVisibility[i] ? <EyeIcon className="w-5 h-5"/> : <EyeSlashIcon className="w-5 h-5 text-gray-500"/>}</button>
-                                            <button onClick={() => { setEditableSectorNames(editableSectorNames.filter((_, idx) => idx !== i)); setSectorVisibility(sectorVisibility.filter((_, idx) => idx !== i)); }} className="bg-red-600 px-2 rounded font-bold">X</button>
+                                            <button onClick={() => { if(confirm("Remover setor?")){ setEditableSectorNames(editableSectorNames.filter((_, idx) => idx !== i)); setSectorVisibility(sectorVisibility.filter((_, idx) => idx !== i)); }}} className="bg-red-600 px-2 py-1 rounded font-bold text-xs">X</button>
                                         </div>
                                     ))}
-                                    <button onClick={() => { setEditableSectorNames([...editableSectorNames, 'Novo Setor']); setSectorVisibility([...sectorVisibility, true]); }} className="text-sm text-blue-400">+ Adicionar Setor</button>
+                                    <button onClick={() => { setEditableSectorNames([...editableSectorNames, 'Novo Setor']); setSectorVisibility([...sectorVisibility, true]); }} className="text-sm text-blue-400 mt-2 hover:underline">+ Adicionar Setor</button>
                                 </div>
-                                <button onClick={handleSaveSectorNames} className="bg-orange-600 w-full mt-3 p-2 rounded font-bold">Salvar Setores</button>
+                                <button onClick={async () => {
+                                    setIsSavingSectors(true);
+                                    const hidden = editableSectorNames.filter((_, i) => !sectorVisibility[i]);
+                                    await onUpdateSectorNames(editableSectorNames, hidden);
+                                    setIsSavingSectors(false);
+                                    alert("Setores salvos!");
+                                }} disabled={isSavingSectors} className="bg-orange-600 w-full mt-4 p-2 rounded font-bold">Salvar Configuração de Setores</button>
                              </div>
                         </div>
 
                         <div className="space-y-6">
                             <div className="bg-gray-800 p-5 rounded-lg border border-blue-500/20">
                                 <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-lg font-bold text-blue-400">Importar Dados</h3>
-                                    <button onClick={handleRunAllImports} className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded font-bold">Importar Tudo</button>
+                                    <h3 className="text-lg font-bold text-blue-400">Importar Dados (Multi-API)</h3>
+                                    <button onClick={handleRunAllAllImports} className="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded font-bold">Rodar Todas Agora</button>
                                 </div>
                                 
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Selecionar Fonte de API</label>
-                                <select 
-                                    value={activeSourceId} 
-                                    onChange={e => setActiveSourceId(e.target.value)} 
-                                    className="w-full bg-gray-700 p-3 rounded mb-4 border border-gray-600 font-bold"
-                                >
-                                    <option value="new">+ Adicionar Nova API</option>
-                                    {importSources.map(s => (
-                                        <option key={s.id} value={s.id}>{s.name} {s.autoImport ? ' (Auto)' : ''}</option>
-                                    ))}
-                                </select>
+                                <div className="mb-4">
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Selecionar Fonte para Editar</label>
+                                    <select 
+                                        value={activeSourceId} 
+                                        onChange={e => setActiveSourceId(e.target.value)} 
+                                        className="w-full bg-gray-700 p-3 rounded border border-gray-600 font-bold focus:border-blue-500 outline-none"
+                                    >
+                                        <option value="new">+ Adicionar Nova API / Planilha</option>
+                                        {importSources.map(s => (
+                                            <option key={s.id} value={s.id}>{s.name} {s.autoImport ? ' (AUTO)' : ''}</option>
+                                        ))}
+                                    </select>
+                                </div>
 
-                                <div className="space-y-3 bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                                    <div>
-                                        <label className="text-xs text-gray-500 uppercase">Nome Amigável</label>
-                                        <input value={currentSource.name} onChange={e => handleAddUpdateSource({ name: e.target.value })} placeholder="Ex: API Store 1" className="w-full bg-gray-800 p-2 rounded text-sm"/>
-                                    </div>
-                                    <div>
-                                        <label className="text-xs text-gray-500 uppercase">Tipo / URL</label>
-                                        <div className="flex gap-2">
-                                            <select value={currentSource.type} onChange={e => handleAddUpdateSource({ type: e.target.value as ImportType })} className="bg-gray-800 p-2 rounded text-xs">
+                                <div className="space-y-3 bg-gray-900/50 p-4 rounded-lg border border-gray-700 mb-4 transition-all">
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">Nome da Fonte</label>
+                                            <input value={currentSource.name} onChange={e => handleAddUpdateSource({ name: e.target.value })} placeholder="Ex: API Store 1" className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700"/>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">Tipo de Recurso</label>
+                                            <select value={currentSource.type} onChange={e => handleAddUpdateSource({ type: e.target.value as ImportType })} className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700">
                                                 <option value="tickets">Ingressos</option>
                                                 <option value="participants">Participantes</option>
-                                                <option value="google_sheets">Google Sheets</option>
+                                                <option value="google_sheets">Google Sheets (CSV)</option>
                                             </select>
-                                            <input value={currentSource.url} onChange={e => handleAddUpdateSource({ url: e.target.value })} placeholder="Endpoint" className="flex-1 bg-gray-800 p-2 rounded text-sm"/>
                                         </div>
                                     </div>
-                                    <div className="flex gap-2">
-                                        <div className="flex-1">
-                                            <label className="text-xs text-gray-500 uppercase">Token</label>
-                                            <input value={currentSource.token} onChange={e => handleAddUpdateSource({ token: e.target.value })} type="password" placeholder="Bearer Token" className="w-full bg-gray-800 p-2 rounded text-sm"/>
+                                    <div>
+                                        <label className="text-[10px] text-gray-500 uppercase font-bold">URL / Endpoint</label>
+                                        <input value={currentSource.url} onChange={e => handleAddUpdateSource({ url: e.target.value })} placeholder="https://..." className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700 font-mono"/>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div className="col-span-2">
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">Token (Bearer)</label>
+                                            <input value={currentSource.token} onChange={e => handleAddUpdateSource({ token: e.target.value })} type="password" placeholder="Token" className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700"/>
                                         </div>
-                                        <div className="w-24">
-                                            <label className="text-xs text-gray-500 uppercase">ID Evento</label>
-                                            <input value={currentSource.eventId} onChange={e => handleAddUpdateSource({ eventId: e.target.value })} placeholder="ID" className="w-full bg-gray-800 p-2 rounded text-sm"/>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase font-bold">ID Evento API</label>
+                                            <input value={currentSource.eventId} onChange={e => handleAddUpdateSource({ eventId: e.target.value })} placeholder="ID" className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-700"/>
                                         </div>
                                     </div>
 
                                     <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-700">
-                                        <label className="flex items-center space-x-2 cursor-pointer">
-                                            <input type="checkbox" checked={currentSource.autoImport} onChange={e => handleAddUpdateSource({ autoImport: e.target.checked })} className="rounded text-blue-600 bg-gray-800"/>
-                                            <span className="text-xs font-bold text-gray-300">Auto-Importar (15m)</span>
+                                        <label className="flex items-center space-x-2 cursor-pointer group">
+                                            <input type="checkbox" checked={currentSource.autoImport} onChange={e => handleAddUpdateSource({ autoImport: e.target.checked })} className="rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-0 w-4 h-4"/>
+                                            <span className="text-xs font-bold text-gray-300 group-hover:text-blue-400">Ativar Auto-Importação (15m)</span>
                                         </label>
                                         {currentSource.lastImportTime && (
-                                            <span className="text-[10px] text-gray-500">Última: {new Date(currentSource.lastImportTime).toLocaleTimeString()}</span>
+                                            <div className="text-[10px] text-gray-500 flex items-center">
+                                                <ClockIcon className="w-3 h-3 mr-1"/> {new Date(currentSource.lastImportTime).toLocaleTimeString('pt-BR')}
+                                            </div>
                                         )}
                                     </div>
                                 </div>
 
-                                <div className="mt-4 flex gap-2">
-                                    <button onClick={handleRunManualImport} disabled={isLoading || activeSourceId === 'new'} className="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold text-sm disabled:opacity-50">
-                                        {isLoading ? 'Importando...' : 'Importar Agora'}
+                                <div className="flex gap-2">
+                                    <button onClick={() => { if(activeSourceId !== 'new') executeImport(importSources.find(s => s.id === activeSourceId)!) }} disabled={isLoading || activeSourceId === 'new'} className="flex-grow bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold text-sm disabled:opacity-50 transition-colors">
+                                        {isLoading ? 'Importando...' : 'Importar Esta Fonte Agora'}
                                     </button>
                                     {activeSourceId !== 'new' && (
-                                        <button onClick={() => handleRemoveSource(activeSourceId)} className="bg-red-600 p-2 rounded hover:bg-red-700">
+                                        <button onClick={() => handleRemoveSource(activeSourceId)} className="bg-red-600 p-2 rounded hover:bg-red-700 transition-colors" title="Excluir">
                                             <TrashIcon className="w-5 h-5"/>
                                         </button>
                                     )}
                                 </div>
-                                <div className="mt-4">
-                                    <label className="text-xs flex items-center text-gray-400">
-                                        <input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} className="mr-2"/>
-                                        Ignorar ingressos já cadastrados
+                                
+                                <div className="mt-6 border-t border-gray-700 pt-4">
+                                    <h4 className="text-[10px] font-bold text-gray-500 uppercase mb-2">Status das Fontes Configuradas</h4>
+                                    <div className="space-y-2">
+                                        {importSources.length === 0 ? (
+                                            <p className="text-xs text-gray-600 italic">Nenhuma fonte cadastrada.</p>
+                                        ) : importSources.map(s => (
+                                            <div key={s.id} className="flex items-center justify-between bg-gray-900/30 p-2 rounded border border-gray-800">
+                                                <div className="flex items-center">
+                                                    <div className={`w-2 h-2 rounded-full mr-2 ${s.autoImport ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                                                    <span className="text-xs font-bold truncate max-w-[120px]">{s.name}</span>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500">
+                                                    {s.lastImportTime ? `Última: ${new Date(s.lastImportTime).toLocaleTimeString()}` : 'Nunca rodou'}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                <div className="mt-4 p-3 bg-blue-900/20 border border-blue-500/20 rounded">
+                                    <label className="flex items-center text-xs text-blue-300 font-medium cursor-pointer">
+                                        <input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} className="mr-2 rounded text-blue-600 bg-gray-800"/>
+                                        Ignorar códigos já presentes no banco
                                     </label>
                                 </div>
                             </div>
@@ -482,64 +433,65 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'events':
                 return (
                     <div className="space-y-6">
-                        <div className="bg-gray-800 p-5 rounded-lg">
-                            <h3 className="font-bold mb-4">Novo Evento</h3>
+                        <div className="bg-gray-800 p-5 rounded-lg shadow-lg">
+                            <h3 className="font-bold mb-4 flex items-center"><PlusCircleIcon className="w-5 h-5 mr-2 text-orange-500"/> Criar Novo Evento</h3>
                             <div className="flex gap-2">
-                                <input value={newEventName} onChange={e => setNewEventName(e.target.value)} placeholder="Nome" className="flex-1 bg-gray-700 p-2 rounded"/>
-                                <button onClick={handleCreateEvent} className="bg-orange-600 px-4 rounded font-bold">Criar</button>
+                                <input value={newEventName} onChange={e => setNewEventName(e.target.value)} placeholder="Nome do Evento" className="flex-1 bg-gray-700 p-3 rounded border border-gray-600 outline-none focus:border-orange-500"/>
+                                <button onClick={async () => {
+                                    if(!newEventName.trim()) return;
+                                    setIsLoading(true);
+                                    try {
+                                        const ref = await addDoc(collection(db, 'events'), { name: newEventName, isHidden: false });
+                                        await setDoc(doc(db, 'events', ref.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
+                                        alert("Evento criado com sucesso!");
+                                        setNewEventName('');
+                                    } catch (e) { alert("Falha ao criar evento."); } finally { setIsLoading(false); }
+                                }} className="bg-orange-600 px-6 rounded font-bold hover:bg-orange-700 transition-colors">Criar</button>
                             </div>
                         </div>
-                        <div className="bg-gray-800 p-5 rounded-lg space-y-2">
-                            <h3 className="font-bold mb-2">Eventos</h3>
-                            {events.map(ev => (
-                                <div key={ev.id} className="flex justify-between items-center bg-gray-700 p-2 rounded">
-                                    <span>{ev.name}</span>
-                                    <button onClick={() => onSelectEvent(ev)} className="bg-blue-600 text-xs px-3 py-1 rounded">Selecionar</button>
-                                </div>
-                            ))}
+                        <div className="bg-gray-800 p-5 rounded-lg border border-gray-700">
+                            <h3 className="font-bold mb-3 text-gray-400 text-sm uppercase">Meus Eventos</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {events.map(ev => (
+                                    <div key={ev.id} className="flex justify-between items-center bg-gray-700/50 p-3 rounded hover:bg-gray-700 transition-colors border border-transparent hover:border-gray-600">
+                                        <span className="font-bold">{ev.name}</span>
+                                        <button onClick={() => onSelectEvent(ev)} className="bg-blue-600 text-xs px-4 py-1.5 rounded font-bold hover:bg-blue-500">Gerenciar</button>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 );
-            case 'search': return <div className="bg-gray-800 p-6 rounded-lg">Search Content...</div>;
-            case 'locators': return <div className="bg-gray-800 p-6 rounded-lg">Locators Content...</div>;
+            case 'search': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Selecione o campo de busca no painel superior.</div>;
+            case 'locators': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Gerencie localizadores aqui.</div>;
             case 'history': return <TicketList tickets={nonSecretScanHistory} sectorNames={sectorNames} />;
-            case 'operators': return <div className="bg-gray-800 p-6 rounded-lg">Operators Content...</div>;
+            case 'operators': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Monitoramento de operadores em tempo real.</div>;
             default: return null;
         }
     };
 
-    const handleCreateEvent = async () => {
-        if (!newEventName.trim()) return;
+    const handleRunAllAllImports = async () => {
+        if (importSources.length === 0) return;
         setIsLoading(true);
-        try {
-            const ref = await addDoc(collection(db, 'events'), { name: newEventName, isHidden: false });
-            await setDoc(doc(db, 'events', ref.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
-            alert("Evento criado!");
-            setNewEventName('');
-        } catch (e) { alert("Erro ao criar."); } finally { setIsLoading(false); }
-    };
-
-    const handleSaveSectorNames = async () => {
-        if (!selectedEvent) return;
-        setIsSavingSectors(true);
-        try {
-            const hidden = editableSectorNames.filter((_, i) => !sectorVisibility[i]);
-            await onUpdateSectorNames(editableSectorNames, hidden);
-            alert("Salvo!");
-        } catch (e) { alert("Erro."); } finally { setIsSavingSectors(false); }
+        for (const source of importSources) {
+            setLoadingMessage(`Importando de ${source.name}...`);
+            await executeImport(source, true);
+        }
+        setIsLoading(false);
+        alert("Processamento concluído para todas as fontes ativas.");
     };
 
     return (
         <div className="w-full max-w-6xl mx-auto pb-10">
-            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-1 custom-scrollbar border border-gray-700 items-center text-sm">
-                <button onClick={() => setActiveTab('stats')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap ${activeTab === 'stats' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}>Dashboard</button>
-                <button onClick={() => setActiveTab('settings')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap ${activeTab === 'settings' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}>Configurações</button>
-                <button onClick={() => setActiveTab('locators')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap flex items-center ${activeTab === 'locators' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}><TicketIcon className="w-4 h-4 mr-1.5"/>Localizadores</button>
-                <button onClick={() => setActiveTab('history')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap ${activeTab === 'history' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}>Histórico</button>
-                <button onClick={() => setActiveTab('events')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap ${activeTab === 'events' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}>Eventos</button>
-                <button onClick={() => setActiveTab('search')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap ${activeTab === 'search' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}>Consultar</button>
-                <button onClick={() => setActiveTab('operators')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap flex items-center ${activeTab === 'operators' ? 'bg-orange-600' : 'hover:bg-gray-700'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Operadores</button>
-                {isSuperAdmin && (<div className="ml-auto pl-2 border-l border-gray-600"><button onClick={() => setActiveTab('users')} className={`px-3 py-1.5 rounded-md font-bold whitespace-nowrap flex items-center ${activeTab === 'users' ? 'bg-purple-600' : 'text-purple-400 hover:bg-purple-900'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Usuários</button></div>)}
+            <div className="bg-gray-800 rounded-lg p-2 mb-6 flex overflow-x-auto space-x-1 custom-scrollbar border border-gray-700 items-center text-sm shadow-xl">
+                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'stats' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Dashboard</button>
+                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'settings' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Configurações</button>
+                <button onClick={() => setActiveTab('locators')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'locators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><TicketIcon className="w-4 h-4 mr-1.5"/>Localizadores</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'history' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Histórico</button>
+                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'events' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Eventos</button>
+                <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap transition-all ${activeTab === 'search' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Consultar</button>
+                <button onClick={() => setActiveTab('operators')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'operators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Operadores</button>
+                {isSuperAdmin && (<div className="ml-auto pl-2 border-l border-gray-600"><button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-md font-bold whitespace-nowrap flex items-center transition-all ${activeTab === 'users' ? 'bg-purple-600 shadow-lg scale-105' : 'text-purple-400 hover:bg-purple-900'}`}><UsersIcon className="w-4 h-4 mr-1.5"/>Usuários</button></div>)}
             </div>
             {renderContent()}
         </div>
