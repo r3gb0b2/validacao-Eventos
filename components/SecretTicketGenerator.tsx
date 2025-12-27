@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
-import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon } from './Icons';
+import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon } from './Icons';
 import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
@@ -19,10 +19,12 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [selectedEventId, setSelectedEventId] = useState<string>('');
     const [isGenerating, setIsGenerating] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
+    const [isDeletingBatch, setIsDeletingBatch] = useState(false);
     const [quantity, setQuantity] = useState(1);
     const [lastZipUrl, setLastZipUrl] = useState<string | null>(null);
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState<TicketPdfDetails>({
@@ -85,6 +87,32 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         );
     }, [tickets, searchTerm]);
 
+    // Limpar seleção quando os ingressos mudam ou filtro é aplicado
+    useEffect(() => {
+        setSelectedIds(prev => {
+            const next = new Set<string>();
+            filteredTickets.forEach(t => {
+                if (prev.has(t.id)) next.add(t.id);
+            });
+            return next;
+        });
+    }, [filteredTickets]);
+
+    const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.checked) {
+            setSelectedIds(new Set(filteredTickets.map(t => t.id)));
+        } else {
+            setSelectedIds(new Set());
+        }
+    };
+
+    const toggleSelect = (id: string) => {
+        const next = new Set(selectedIds);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        setSelectedIds(next);
+    };
+
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -141,6 +169,34 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         }
     };
 
+    const handleDeleteSelected = async () => {
+        if (!selectedEventId || selectedIds.size === 0) return;
+        if (!confirm(`Deseja remover permanentemente ${selectedIds.size} ingressos selecionados?`)) return;
+
+        setIsDeletingBatch(true);
+        try {
+            const idsArray = Array.from(selectedIds);
+            const BATCH_SIZE = 450; // Limite do Firestore é 500
+
+            for (let i = 0; i < idsArray.length; i += BATCH_SIZE) {
+                const chunk = idsArray.slice(i, i + BATCH_SIZE);
+                const batch = writeBatch(db);
+                chunk.forEach(id => {
+                    batch.delete(doc(db, 'events', selectedEventId, 'tickets', id));
+                });
+                await batch.commit();
+            }
+
+            setSelectedIds(new Set());
+            alert(`${idsArray.length} ingressos removidos com sucesso.`);
+        } catch (e) {
+            console.error("Erro ao deletar lote:", e);
+            alert("Erro ao processar exclusão em massa.");
+        } finally {
+            setIsDeletingBatch(false);
+        }
+    };
+
     const handleGenerateBatch = async () => {
         if (!selectedEventId) return alert("Selecione um evento de destino.");
         if (quantity < 1) return alert("Quantidade inválida.");
@@ -169,17 +225,14 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
                 batchCounter++;
 
-                // Firestore permite até 500 operações por batch. 
-                // Usamos 100 como margem de segurança antes de commitar e criar um novo objeto de batch.
                 if (batchCounter >= 100) {
                     await currentBatch.commit();
-                    currentBatch = writeBatch(db); // Instancia um NOVO batch após o commit
+                    currentBatch = writeBatch(db);
                     batchCounter = 0;
                     await new Promise(r => setTimeout(r, 50));
                 }
             }
 
-            // Commita o que sobrar
             if (batchCounter > 0) {
                 await currentBatch.commit();
             }
@@ -315,23 +368,44 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         <h2 className="text-xl font-bold">Ingressos Gerados Aqui</h2>
                         <span className="bg-gray-700 px-3 py-1 rounded-full text-xs font-mono">{filteredTickets.length} registros</span>
                     </div>
-                    
-                    <div className="relative w-full md:w-64">
-                        <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                        <input 
-                            type="text"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            placeholder="Buscar nesta lista..."
-                            className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:border-orange-500 outline-none"
-                        />
+
+                    <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
+                        {selectedIds.size > 0 && (
+                            <button 
+                                onClick={handleDeleteSelected}
+                                disabled={isDeletingBatch}
+                                className="bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white px-4 py-2 rounded-lg text-sm font-bold border border-red-500/30 transition-all flex items-center"
+                            >
+                                <TrashIcon className="w-4 h-4 mr-2" />
+                                {isDeletingBatch ? "Apagando..." : `Apagar Selecionados (${selectedIds.size})`}
+                            </button>
+                        )}
+                        
+                        <div className="relative w-full md:w-64">
+                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                            <input 
+                                type="text"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                placeholder="Buscar nesta lista..."
+                                className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:border-orange-500 outline-none"
+                            />
+                        </div>
                     </div>
                 </div>
 
                 <div className="overflow-x-auto max-h-[500px] custom-scrollbar">
                     <table className="w-full text-left border-collapse">
-                        <thead className="sticky top-0 bg-gray-800 shadow-sm">
+                        <thead className="sticky top-0 bg-gray-800 shadow-sm z-10">
                             <tr className="text-gray-400 text-xs uppercase border-b border-gray-700">
+                                <th className="px-6 py-4 w-10">
+                                    <input 
+                                        type="checkbox" 
+                                        className="w-4 h-4 rounded bg-gray-900 border-gray-600 text-orange-600 focus:ring-0 cursor-pointer"
+                                        checked={filteredTickets.length > 0 && selectedIds.size === filteredTickets.length}
+                                        onChange={handleSelectAll}
+                                    />
+                                </th>
                                 <th className="px-6 py-4">Código / QR</th>
                                 <th className="px-6 py-4">Participante</th>
                                 <th className="px-6 py-4">Setor</th>
@@ -341,7 +415,15 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         </thead>
                         <tbody className="divide-y divide-gray-700/50">
                             {filteredTickets.map(ticket => (
-                                <tr key={ticket.id} className="hover:bg-gray-700/30 transition-colors">
+                                <tr key={ticket.id} className={`transition-colors ${selectedIds.has(ticket.id) ? 'bg-orange-600/10' : 'hover:bg-gray-700/30'}`}>
+                                    <td className="px-6 py-4">
+                                        <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 rounded bg-gray-900 border-gray-600 text-orange-600 focus:ring-0 cursor-pointer"
+                                            checked={selectedIds.has(ticket.id)}
+                                            onChange={() => toggleSelect(ticket.id)}
+                                        />
+                                    </td>
                                     <td className="px-6 py-4">
                                         <div className="font-mono text-sm text-orange-400 font-bold">{ticket.id}</div>
                                     </td>
@@ -379,7 +461,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             ))}
                             {filteredTickets.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-12 text-center text-gray-500 italic">
+                                    <td colSpan={6} className="px-6 py-12 text-center text-gray-500 italic">
                                         Nenhum ingresso gerado pelo SecretTicket para este evento.
                                     </td>
                                 </tr>
