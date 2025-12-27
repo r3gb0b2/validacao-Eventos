@@ -25,7 +25,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   
   // Cores Oficiais ST
   const orangeSt = [255, 80, 0]; 
-  const textDarkGray = [60, 60, 60]; // Cinza escuro solicitado
+  const textDarkGray = [60, 60, 60];
   const labelGray = [140, 140, 140];
 
   // --- PÁGINA 1 ---
@@ -34,34 +34,25 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setFillColor(orangeSt[0], orangeSt[1], orangeSt[2]);
   doc.rect(10, 10, 190, 120, 'F');
 
-  // --- DESENHO DA LOGO (POLÍGONO FIEL À IMAGEM ANEXADA) ---
+  // --- DESENHO DA LOGO (SUBSTITUÍDO POLYGON POR ROUNDEDRECT PARA COMPATIBILIDADE) ---
   const logoX = 68;
   const logoY = 22;
   
-  // Ticket Branco (Formato chanfrado)
+  // Fundo Branco do Ticket
   doc.setFillColor(255, 255, 255);
-  // Caminho do ticket (um retângulo com cantos chanfrados/estilizados)
-  doc.setLineWidth(0);
-  doc.polygon([
-    [logoX + 2, logoY],         // topo esquerda
-    [logoX + 13, logoY + 1],    // topo direita chanfrado
-    [logoX + 15, logoY + 6],    // lateral direita
-    [logoX + 13, logoY + 15],   // base direita chanfrada
-    [logoX + 2, logoY + 14],    // base esquerda
-    [logoX, logoY + 8]          // lateral esquerda chanfrada
-  ], 'F');
+  doc.roundedRect(logoX, logoY, 16, 15, 3, 3, 'F');
   
-  // Recorte Laranja no Meio do Ticket (Formato M/Ticket)
+  // Recorte Laranja no Meio do Ticket
   doc.setFillColor(orangeSt[0], orangeSt[1], orangeSt[2]);
-  doc.roundedRect(logoX + 3.5, logoY + 4, 8, 7, 1, 1, 'F');
+  doc.roundedRect(logoX + 4, logoY + 4, 8, 7, 1, 1, 'F');
   
-  // Os 3 Pontos Brancos (Conforme imagem)
+  // Os 3 Pontos Brancos
   doc.setFillColor(255, 255, 255);
-  doc.circle(logoX + 5.5, logoY + 6, 0.6, 'F');
-  doc.circle(logoX + 7.5, logoY + 6, 0.6, 'F');
-  doc.circle(logoX + 9.5, logoY + 6, 0.6, 'F');
+  doc.circle(logoX + 6, logoY + 6.5, 0.6, 'F');
+  doc.circle(logoX + 8, logoY + 6.5, 0.6, 'F');
+  doc.circle(logoX + 10, logoY + 6.5, 0.6, 'F');
 
-  // --- TEXTO "STingressos" (ST BOLD / ingressos NORMAL) ---
+  // --- TEXTO "STingressos" ---
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(26);
   doc.setFont('helvetica', 'bold');
@@ -82,7 +73,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setFont('helvetica', 'normal');
   doc.text('C A R T Ã O   D E   A C E S S O', 105, 50, { align: 'center' });
 
-  // Nome do Evento (Grande e Bold)
+  // Nome do Evento
   doc.setFontSize(28);
   doc.setFont('helvetica', 'bold');
   doc.text(details.eventName.toUpperCase(), 105, 65, { align: 'center' });
@@ -90,8 +81,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   // Linha pontilhada branca 2
   doc.line(20, 75, 190, 75);
 
-  // --- INFORMAÇÕES DO EVENTO (NORMAL RÓTULO / BOLD VALOR) ---
-  // Mais próximas conforme solicitado (espaçamento 6mm)
+  // --- INFORMAÇÕES DO EVENTO ---
   doc.setFontSize(10.5);
   
   const drawInlineInfo = (label: string, value: string, y: number) => {
@@ -117,23 +107,19 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   drawInlineInfo('Produzido: ', details.producer, 108);
   drawInlineInfo('Contato: ', details.contact, 114);
 
-  // --- ÁREA DE INFORMAÇÕES DO CLIENTE (CINZA ESCURO / BRANCO) ---
-  
-  // Rótulos (Cinza Claro)
+  // --- ÁREA DE INFORMAÇÕES DO CLIENTE ---
   doc.setTextColor(labelGray[0], labelGray[1], labelGray[2]);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
   doc.text('Ingresso', 15, 145);
   doc.text('Participante', 195, 145, { align: 'right' });
   
-  // Dados (Cinza Escuro e Bold)
   doc.setTextColor(textDarkGray[0], textDarkGray[1], textDarkGray[2]);
   doc.setFontSize(13);
   doc.setFont('helvetica', 'bold');
   doc.text(details.sector, 15, 153);
   doc.text(details.ownerName, 195, 153, { align: 'right' });
 
-  // Segunda linha de dados (Códigos)
   doc.setTextColor(labelGray[0], labelGray[1], labelGray[2]);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
@@ -146,7 +132,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.text(purchaseCode, 15, 176);
   doc.text(ticketCode, 195, 176, { align: 'right' });
 
-  // Linha divisória pontilhada
   doc.setDrawColor(220, 220, 220);
   doc.setLineDashPattern([1, 1], 0);
   doc.line(15, 185, 195, 185);
@@ -161,17 +146,17 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
       doc.addImage(img, 'PNG', 70, 195, 70, 70);
       resolve(true);
     };
+    img.onerror = () => resolve(false);
   });
 
   // --- PÁGINA 2 (TERMOS) ---
   doc.addPage();
-  
-  doc.setDrawColor(255, 0, 80); 
+  doc.setDrawColor(orangeSt[0], orangeSt[1], orangeSt[2]); 
   doc.setLineWidth(0.4);
   doc.setLineDashPattern([], 0);
   doc.rect(10, 10, 190, 277);
 
-  doc.setTextColor(255, 0, 80);
+  doc.setTextColor(orangeSt[0], orangeSt[1], orangeSt[2]);
   doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
   doc.text('INFORMAÇÃO IMPORTANTE!', 105, 25, { align: 'center' });
