@@ -74,3 +74,16 @@ export interface SectorGroup {
     name: string;
     includedSectors: string[];
 }
+
+export type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
+
+export interface ImportSource {
+    id: string;
+    name: string;
+    url: string;
+    token: string;
+    eventId: string;
+    type: ImportType;
+    autoImport: boolean;
+    lastImportTime?: number;
+}
