@@ -6,7 +6,6 @@ import TicketList from './TicketList';
 import SuperAdminView from './SuperAdminView'; 
 import { generateEventReport } from '../utils/pdfGenerator';
 import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc, getDocs } from 'firebase/firestore';
-// FIX: Added missing TableCellsIcon to the import list.
 import { CloudDownloadIcon, CloudUploadIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon, LockClosedIcon, TicketIcon, PlusCircleIcon, FunnelIcon, VideoCameraIcon, TableCellsIcon } from './Icons';
 import Papa from 'papaparse';
 
@@ -25,6 +24,14 @@ interface AdminViewProps {
   onUpdateCurrentUser?: (user: Partial<User>) => void;
 }
 
+// DEFINIÇÃO DE PRESETS PARA O DROPDOWN
+const API_PRESETS = [
+    { name: "Personalizado / Outros", url: "", type: "tickets", token: "" },
+    { name: "Google Sheets (CSV)", url: "https://docs.google.com/spreadsheets/d/ID_DA_PLANILHA/export?format=csv", type: "google_sheets", token: "" },
+    { name: "E-Inscrição (Participantes)", url: "https://api.e-inscricao.com/v1/eventos/[ID_EVENTO]/participantes", type: "participants", token: "SEU_TOKEN_AQUI" },
+    { name: "Sympla (Check-ins)", url: "https://api.sympla.com.br/v3/events/[ID_EVENTO]/participants", type: "participants", token: "TOKEN_SYMPLA" }
+];
+
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser, onUpdateCurrentUser }) => {
     const [activeTab, setActiveTab] = useState<'stats' | 'settings' | 'history' | 'events' | 'search' | 'users' | 'operators' | 'locators'>('stats');
     const [editableSectorNames, setEditableSectorNames] = useState<string[]>([]);
@@ -33,10 +40,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [isSavingSectors, setIsSavingSectors] = useState(false);
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-    // Gestão de Usuários e Eventos
     const [allUsers, setAllUsers] = useState<User[]>([]);
     const [assigningEventId, setAssigningEventId] = useState<string | null>(null);
-
     const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
 
     // Configurações de Importação
@@ -65,7 +70,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 try {
                     const snap = await getDocs(collection(db, 'users'));
                     setAllUsers(snap.docs.map(d => ({ id: d.id, ...d.data() } as User)));
-                } catch (e) { console.error("Erro ao carregar usuários:", e); }
+                } catch (e) { console.error("Erro:", e); }
             };
             fetchUsers();
         }
@@ -96,16 +101,16 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         loadConfigs();
     }, [db, selectedEvent]);
 
-    // Lógica de Auto-Importação (10 min)
+    // Lógica de Auto-Importação Robusta (10 min)
     useEffect(() => {
         if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current);
         
         const sourcesToAuto = importSources.filter(s => s.autoImport);
         if (sourcesToAuto.length > 0 && selectedEvent) {
             autoImportIntervalRef.current = setInterval(() => {
-                console.log("Executando auto-import de 10 minutos...");
+                console.log("Executando auto-import programado...");
                 sourcesToAuto.forEach(s => executeImport(s, true));
-            }, 600000); // 10 minutos
+            }, 600000); // 10 Minutos
         }
         
         return () => { if (autoImportIntervalRef.current) clearInterval(autoImportIntervalRef.current); };
@@ -119,8 +124,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const newSectors = new Set<string>();
             const ticketsToSave: Ticket[] = [];
             
-            // Lógica de ignorar existentes (se ativo, não sobrescreve os que já estão no banco)
-            const existingTicketIds = ignoreExisting ? new Set(allTickets.map(t => t.id)) : new Set();
+            // MAPA DE EXISTENTES PARA EVITAR SOBRESCREVER VALIDAÇÕES
+            const existingTicketIds = ignoreExisting ? new Set(allTickets.map(t => String(t.id).trim())) : new Set();
 
             if (source.type === 'google_sheets') {
                  let fetchUrl = (source.url || '').trim();
@@ -152,12 +157,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     const json = await res.json();
                     let pageItems = json.data || json.participants || json.tickets || json.buyers || (Array.isArray(json) ? json : []);
                     
-                    if (pageItems.length === 0 || (json.last_page && page >= json.last_page)) {
-                        hasMore = false;
-                    }
+                    if (pageItems.length === 0 || (json.last_page && page >= json.last_page)) hasMore = false;
                     allItems.push(...pageItems);
                     page++;
-                    if (page > 50) break; // Trava de segurança
+                    if (page > 30) break; 
                 }
 
                 allItems.forEach(item => {
@@ -174,7 +177,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 if (Array.from(newSectors).some(s => !sectorNames.includes(s))) {
                     await onUpdateSectorNames(Array.from(new Set([...sectorNames, ...newSectors])));
                 }
-                const BATCH_SIZE = 450;
+                const BATCH_SIZE = 400;
                 for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
                     const chunk = ticketsToSave.slice(i, i + BATCH_SIZE);
                     const batch = writeBatch(db);
@@ -187,14 +190,27 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: now } : s);
             setImportSources(updatedSources);
             await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), { sources: updatedSources, ignoreExisting }, { merge: true });
+            if (!isAuto) alert(`${ticketsToSave.length} novos ingressos importados!`);
         } catch (e) { 
             console.error(e); 
-            if (!isAuto) alert("Erro na importação: " + (e as any).message);
+            if (!isAuto) alert("Erro: " + (e as any).message);
         } finally { if (!isAuto) setIsLoading(false); }
     };
 
+    const handleApplyPreset = (presetName: string) => {
+        const preset = API_PRESETS.find(p => p.name === presetName);
+        if (preset) {
+            setEditSource(prev => ({
+                ...prev,
+                url: preset.url,
+                type: preset.type as ImportType,
+                token: preset.token
+            }));
+        }
+    };
+
     const handleSaveEditSource = async () => {
-        if (!editSource.name || !editSource.url) return alert("Preencha ao menos Nome e URL.");
+        if (!editSource.name || !editSource.url) return alert("Preencha Nome e URL.");
         let newSources: ImportSource[];
         if (activeSourceId === 'new') {
             const newSource: ImportSource = {
@@ -207,13 +223,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 autoImport: editSource.autoImport || false
             };
             newSources = [...importSources, newSource];
-            setActiveSourceId(newSource.id);
         } else {
             newSources = importSources.map(s => s.id === activeSourceId ? { ...s, ...editSource } as ImportSource : s);
         }
         setImportSources(newSources);
         await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: newSources, ignoreExisting }, { merge: true });
-        alert("Fonte salva!");
+        alert("Configuração salva!");
         setEditSource({ name: '', url: '', token: '', eventId: '', type: 'tickets', autoImport: false });
         setActiveSourceId('new');
     };
@@ -229,34 +244,41 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         } catch (e) { alert("Erro ao salvar permissão."); }
     };
 
+    // FIX: Implemented handleProcessLocators to handle manual batch import of ticket codes.
     const handleProcessLocators = async () => {
-        if (!selectedEvent || !locatorCodes.trim() || !selectedLocatorSector) return;
+        if (!selectedEvent || !db) return;
+        const codes = locatorCodes.split('\n').map(c => c.trim()).filter(c => c.length > 0);
+        if (codes.length === 0) return alert("Nenhum código inserido.");
+        
         setIsLoading(true);
         try {
-            const codes = locatorCodes.split('\n').map(c => c.trim()).filter(c => c.length > 0);
-            const batch = writeBatch(db);
-            codes.forEach(code => {
-                batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), {
-                    sector: selectedLocatorSector,
-                    status: 'AVAILABLE',
-                    source: 'manual_locator',
-                    details: { ownerName: 'LOCALIZADOR MANUAL', eventName: selectedEvent.name }
-                }, { merge: true });
-            });
-            await batch.commit();
+            const BATCH_SIZE = 450;
+            for (let i = 0; i < codes.length; i += BATCH_SIZE) {
+                const chunk = codes.slice(i, i + BATCH_SIZE);
+                const batch = writeBatch(db);
+                chunk.forEach(code => {
+                    batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), {
+                        id: code,
+                        sector: selectedLocatorSector,
+                        status: 'AVAILABLE',
+                        source: 'manual_locator'
+                    }, { merge: true });
+                });
+                await batch.commit();
+            }
             setLocatorCodes('');
-            alert("Processado!");
-        } catch (e) { alert("Erro."); } finally { setIsLoading(false); }
+            alert(`${codes.length} localizadores importados com sucesso.`);
+        } catch (e) {
+            console.error("Erro ao processar localizadores:", e);
+            alert("Erro ao processar localizadores.");
+        } finally {
+            setIsLoading(false);
+        }
     };
-
-    const nonSecretTickets = useMemo(() => allTickets.filter(t => t.source !== 'secret_generator'), [allTickets]);
-    const secretTicketIds = useMemo(() => new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id)), [allTickets]);
-    const nonSecretScanHistory = useMemo(() => scanHistory.filter(log => !secretTicketIds.has(log.ticketId)), [scanHistory, secretTicketIds]);
-    const manualLocatorTickets = useMemo(() => allTickets.filter(t => t.source === 'manual_locator'), [allTickets]);
 
     const renderContent = () => {
         if (activeTab === 'users') return isSuperAdmin ? <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} /> : <p>Acesso negado.</p>;
-        if (!selectedEvent && activeTab !== 'events') return <div className="p-10 text-center text-gray-400 bg-gray-800 rounded-lg">Selecione um evento na aba 'Eventos'.</div>;
+        if (!selectedEvent && activeTab !== 'events') return <div className="p-10 text-center text-gray-400 bg-gray-800 rounded-lg shadow-inner">Selecione um evento na aba 'Eventos'.</div>;
         
         switch (activeTab) {
             case 'stats':
@@ -268,101 +290,142 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 <button onClick={() => {
                                     const url = `${window.location.origin}${window.location.pathname}?mode=stats&eventId=${selectedEvent!.id}`;
                                     navigator.clipboard.writeText(url).then(() => alert("Link copiado!"));
-                                }} className="bg-blue-600 p-2 rounded-lg text-sm flex items-center"><LinkIcon className="w-4 h-4 mr-1"/>Link Público</button>
-                                <button onClick={() => generateEventReport(selectedEvent!.name, nonSecretTickets, nonSecretScanHistory, sectorNames)} disabled={isGeneratingPdf} className="bg-green-600 p-2 rounded-lg text-sm flex items-center"><CloudDownloadIcon className="w-4 h-4 mr-1"/>PDF</button>
+                                }} className="bg-blue-600 p-2 rounded-lg text-sm flex items-center hover:bg-blue-700"><LinkIcon className="w-4 h-4 mr-1"/>Link Público</button>
+                                <button onClick={() => generateEventReport(selectedEvent!.name, allTickets.filter(t => t.source !== 'secret_generator'), scanHistory.filter(s => !allTickets.find(t => t.id === s.ticketId && t.source === 'secret_generator')), sectorNames)} disabled={isGeneratingPdf} className="bg-green-600 p-2 rounded-lg text-sm flex items-center hover:bg-green-700"><CloudDownloadIcon className="w-4 h-4 mr-1"/>Gerar PDF</button>
                             </div>
                         </div>
-                        <Stats allTickets={nonSecretTickets} sectorNames={sectorNames} hiddenSectors={hiddenSectors} viewMode={statsViewMode} onViewModeChange={setStatsViewMode} groups={sectorGroups} onGroupsChange={setSectorGroups}/>
+                        <Stats allTickets={allTickets.filter(t => t.source !== 'secret_generator')} sectorNames={sectorNames} hiddenSectors={hiddenSectors} viewMode={statsViewMode} onViewModeChange={setStatsViewMode} groups={sectorGroups} onGroupsChange={setSectorGroups}/>
                     </div>
                 );
             case 'settings':
                 return (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
                         <div className="space-y-6">
-                             <div className="bg-gray-800 p-5 rounded-lg border border-orange-500/30 shadow-lg">
-                                <h3 className="text-lg font-bold mb-4 text-orange-400">Modo de Operação</h3>
+                             {/* MODO DE OPERAÇÃO */}
+                             <div className="bg-gray-800 p-5 rounded-2xl border border-orange-500/30 shadow-xl">
+                                <h3 className="text-lg font-bold mb-4 text-orange-400 flex items-center"><CogIcon className="w-5 h-5 mr-2"/> Modo de Operação</h3>
                                 <div className="space-y-3">
-                                    <label className="flex items-center space-x-3 p-2 rounded hover:bg-gray-700 cursor-pointer">
-                                        <input type="radio" checked={validationMode === 'OFFLINE'} onChange={() => setValidationMode('OFFLINE')} className="w-4 h-4 text-orange-500"/> 
-                                        <span>Offline (Base Local)</span>
+                                    <label className="flex items-center space-x-3 p-3 rounded-xl hover:bg-gray-700/50 cursor-pointer border border-transparent hover:border-gray-600 transition-all">
+                                        <input type="radio" checked={validationMode === 'OFFLINE'} onChange={() => setValidationMode('OFFLINE')} className="w-5 h-5 text-orange-500"/> 
+                                        <span>Validação Offline (BD Local do App)</span>
                                     </label>
-                                    <label className="flex items-center space-x-3 p-2 rounded hover:bg-gray-700 cursor-pointer">
-                                        <input type="radio" checked={validationMode === 'ONLINE_API'} onChange={() => setValidationMode('ONLINE_API')} className="w-4 h-4 text-orange-500"/> 
-                                        <span>Online (API Externa)</span>
+                                    <label className="flex items-center space-x-3 p-3 rounded-xl hover:bg-gray-700/50 cursor-pointer border border-transparent hover:border-gray-600 transition-all">
+                                        <input type="radio" checked={validationMode === 'ONLINE_API'} onChange={() => setValidationMode('ONLINE_API')} className="w-5 h-5 text-orange-500"/> 
+                                        <span>Validação Online (API Externa Direta)</span>
                                     </label>
                                 </div>
-                                <button onClick={() => setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'validation'), { mode: validationMode }, { merge: true })} className="bg-green-600 w-full mt-4 p-2 rounded font-bold shadow-lg hover:bg-green-700">Salvar Modo</button>
+                                <button onClick={() => setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'validation'), { mode: validationMode }, { merge: true })} className="bg-green-600 w-full mt-4 p-3 rounded-xl font-bold shadow-lg hover:bg-green-700 transition-all">Salvar Modo</button>
                              </div>
 
-                             <div className="bg-gray-800 p-5 rounded-lg border border-gray-700">
-                                <h3 className="text-lg font-bold mb-3">Setores do Evento</h3>
+                             {/* GESTÃO DE SETORES */}
+                             <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-xl">
+                                <h3 className="text-lg font-bold mb-3 flex items-center"><TableCellsIcon className="w-5 h-5 mr-2"/> Setores do Evento</h3>
                                 <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-2">
                                     {editableSectorNames.map((name, i) => (
                                         <div key={i} className="flex items-center space-x-2">
-                                            <input value={name} onChange={e => { const n = [...editableSectorNames]; n[i] = e.target.value; setEditableSectorNames(n); }} className="flex-grow bg-gray-700 p-2 rounded text-sm border border-gray-600"/>
-                                            <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); }} className="p-2 bg-gray-700 rounded hover:bg-gray-600 transition-colors">
+                                            <input value={name} onChange={e => { const n = [...editableSectorNames]; n[i] = e.target.value; setEditableSectorNames(n); }} className="flex-grow bg-gray-900 border border-gray-700 p-3 rounded-xl text-sm focus:border-orange-500 outline-none transition-all"/>
+                                            <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); }} className="p-3 bg-gray-900 rounded-xl hover:bg-gray-700 transition-all border border-gray-700">
                                                 {sectorVisibility[i] ? <EyeIcon className="w-5 h-5 text-blue-400"/> : <EyeSlashIcon className="w-5 h-5 text-gray-500"/>}
                                             </button>
                                         </div>
                                     ))}
-                                    <button onClick={() => { setEditableSectorNames([...editableSectorNames, 'Novo Setor']); setSectorVisibility([...sectorVisibility, true]); }} className="text-sm text-orange-400 mt-2 hover:underline flex items-center"><PlusCircleIcon className="w-4 h-4 mr-1"/> Adicionar Setor</button>
+                                    <button onClick={() => { setEditableSectorNames([...editableSectorNames, 'Novo Setor']); setSectorVisibility([...sectorVisibility, true]); }} className="text-sm text-orange-400 mt-2 hover:underline flex items-center font-bold px-2 py-1"><PlusCircleIcon className="w-4 h-4 mr-1"/> Adicionar Setor</button>
                                 </div>
                                 <button onClick={async () => {
                                     setIsSavingSectors(true);
                                     const hidden = editableSectorNames.filter((_, i) => !sectorVisibility[i]);
                                     await onUpdateSectorNames(editableSectorNames, hidden);
                                     setIsSavingSectors(false);
-                                    alert("Setores salvos!");
-                                }} disabled={isSavingSectors} className="bg-orange-600 w-full mt-4 p-2 rounded font-bold shadow-lg">Salvar Configuração</button>
+                                    alert("Setores atualizados!");
+                                }} disabled={isSavingSectors} className="bg-orange-600 w-full mt-4 p-3 rounded-xl font-bold shadow-lg hover:bg-orange-700 transition-all">Salvar Configuração</button>
                              </div>
                         </div>
 
                         <div className="space-y-6">
-                            <div className="bg-gray-800 p-5 rounded-lg border border-blue-500/20 shadow-lg">
-                                <h3 className="text-lg font-bold text-blue-400 mb-4 flex items-center"><CloudUploadIcon className="w-5 h-5 mr-2"/> Importar Dados (APIs)</h3>
+                            {/* CONFIGURAÇÃO DE APIS */}
+                            <div className="bg-gray-800 p-5 rounded-2xl border border-blue-500/20 shadow-xl">
+                                <h3 className="text-lg font-bold text-blue-400 mb-4 flex items-center"><CloudUploadIcon className="w-5 h-5 mr-2"/> Configuração de Importação (Múltiplas APIs)</h3>
                                 
-                                <div className="bg-gray-900/50 p-3 rounded border border-gray-700 mb-4">
-                                    <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
-                                        <input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} className="rounded text-blue-500 bg-gray-800"/>
-                                        <span>Ignorar códigos já existentes (não apagar validações)</span>
+                                <div className="bg-blue-600/10 p-4 rounded-xl border border-blue-500/20 mb-6">
+                                    <label className="flex items-center space-x-3 text-sm text-blue-100 cursor-pointer">
+                                        <input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} className="w-5 h-5 rounded text-blue-500 bg-gray-800 border-blue-500/50"/>
+                                        <div className="flex flex-col">
+                                            <span className="font-bold">Proteger Validações Existentes</span>
+                                            <span className="text-[10px] text-blue-300 opacity-80">Se marcado, o sistema nunca apagará ou sobrescreverá o status de um ingresso que já está no banco de dados.</span>
+                                        </div>
                                     </label>
                                 </div>
 
-                                <div className="space-y-3 bg-gray-900/30 p-4 rounded-xl border border-gray-700">
-                                    <p className="text-xs font-bold text-gray-500 uppercase">{activeSourceId === 'new' ? 'Nova Fonte' : 'Editando Fonte'}</p>
-                                    <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Ex: Venda Online / Google Sheets" className="w-full bg-gray-700 p-2 rounded text-sm border border-gray-600"/>
-                                    <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL da API ou CSV" className="w-full bg-gray-700 p-2 rounded text-sm border border-gray-600"/>
-                                    <div className="flex gap-2">
-                                        <input value={editSource.token} onChange={e => setEditSource({...editSource, token: e.target.value})} placeholder="Token (opcional)" className="flex-1 bg-gray-700 p-2 rounded text-xs border border-gray-600"/>
-                                        <label className="flex items-center space-x-1 text-[10px] text-gray-400 bg-gray-700 px-2 rounded border border-gray-600">
-                                            <input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})}/>
-                                            <span>Auto-Import (10m)</span>
-                                        </label>
+                                <div className="space-y-4 bg-gray-900/50 p-5 rounded-2xl border border-gray-700 shadow-inner">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <p className="text-xs font-bold text-gray-500 uppercase">{activeSourceId === 'new' ? 'Cadastrar Nova API' : 'Editar Configuração'}</p>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] text-gray-500 font-bold">PRESETS:</span>
+                                            <select 
+                                                onChange={(e) => handleApplyPreset(e.target.value)}
+                                                className="bg-gray-800 border border-gray-600 text-[10px] p-1 rounded outline-none"
+                                            >
+                                                {API_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                                            </select>
+                                        </div>
                                     </div>
-                                    <div className="flex gap-2">
-                                        <button onClick={handleSaveEditSource} className="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold text-sm">Salvar Fonte</button>
-                                        {activeSourceId !== 'new' && <button onClick={() => { setActiveSourceId('new'); setEditSource({name:'', url:'', token:'', type:'tickets', autoImport:false}); }} className="bg-gray-600 px-3 rounded text-xs">Cancelar</button>}
+
+                                    <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Nome da Fonte (Ex: Sympla / Portaria)" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500 transition-all"/>
+                                    <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL da API ou Link CSV do Google Sheets" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500 transition-all"/>
+                                    
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <input value={editSource.token} onChange={e => setEditSource({...editSource, token: e.target.value})} placeholder="Token (Bearer)" className="bg-gray-800 border border-gray-700 p-3 rounded-xl text-xs outline-none focus:border-blue-500 transition-all"/>
+                                        <input value={editSource.eventId} onChange={e => setEditSource({...editSource, eventId: e.target.value})} placeholder="ID do Evento na API" className="bg-gray-800 border border-gray-700 p-3 rounded-xl text-xs outline-none focus:border-blue-500 transition-all"/>
+                                    </div>
+
+                                    <div className="flex items-center justify-between p-2 bg-gray-800/50 rounded-xl border border-gray-700">
+                                        <label className="flex items-center space-x-2 text-xs font-bold text-gray-400 cursor-pointer px-2">
+                                            <input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="w-4 h-4 text-blue-500 rounded"/>
+                                            <span>Sincronização Automática (10 min)</span>
+                                        </label>
+                                        <select value={editSource.type} onChange={e => setEditSource({...editSource, type: e.target.value as ImportType})} className="bg-gray-900 border border-gray-700 text-[10px] p-2 rounded-lg outline-none">
+                                            <option value="tickets">Ingressos (Geral)</option>
+                                            <option value="google_sheets">Google Sheets</option>
+                                            <option value="participants">Participantes</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="flex gap-2 pt-2">
+                                        <button onClick={handleSaveEditSource} className="flex-1 bg-blue-600 hover:bg-blue-700 py-3 rounded-xl font-bold text-sm shadow-lg transition-all">Salvar API</button>
+                                        {activeSourceId !== 'new' && <button onClick={() => { setActiveSourceId('new'); setEditSource({name:'', url:'', token:'', type:'tickets', autoImport:false}); }} className="bg-gray-700 px-4 rounded-xl text-xs font-bold border border-gray-600">Cancelar</button>}
                                     </div>
                                 </div>
 
-                                <div className="mt-6 space-y-2">
-                                    <p className="text-xs font-bold text-gray-500 uppercase">Fontes Ativas</p>
+                                {/* LISTA DE APIS ATIVAS */}
+                                <div className="mt-8 space-y-3">
+                                    <p className="text-xs font-bold text-gray-500 uppercase flex items-center"><CloudDownloadIcon className="w-4 h-4 mr-2"/> Fontes Conectadas</p>
+                                    {importSources.length === 0 && <p className="text-xs text-gray-600 italic py-4 border-2 border-dashed border-gray-700 rounded-xl text-center">Nenhuma API configurada para este evento.</p>}
                                     {importSources.map(s => (
-                                        <div key={s.id} className="flex justify-between items-center bg-gray-700/50 p-3 rounded border border-gray-600 hover:border-blue-500/50 transition-all">
-                                            <div className="flex-1 min-w-0" onClick={() => { setActiveSourceId(s.id); setEditSource(s); }}>
-                                                <p className="text-sm font-bold text-white truncate">{s.name}</p>
-                                                <p className="text-[10px] text-gray-400 truncate">{s.autoImport ? 'Auto-Sync: Ativo' : 'Sincronização Manual'}</p>
+                                        <div key={s.id} className="flex flex-col bg-gray-700/30 p-4 rounded-2xl border border-gray-600 hover:border-blue-500/50 transition-all shadow-md">
+                                            <div className="flex justify-between items-start mb-3">
+                                                <div className="cursor-pointer" onClick={() => { setActiveSourceId(s.id); setEditSource(s); }}>
+                                                    <p className="text-sm font-bold text-white flex items-center">{s.name} {s.autoImport && <span className="ml-2 text-[8px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded-full border border-green-500/30">AUTO-SYNC ON</span>}</p>
+                                                    <p className="text-[9px] text-gray-500 truncate max-w-[200px]">{s.url}</p>
+                                                </div>
+                                                <div className="flex items-center space-x-2">
+                                                    <button onClick={() => executeImport(s)} disabled={isLoading} className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold flex items-center shadow-md transition-all active:scale-95">
+                                                        {isLoading ? '...' : <><SearchIcon className="w-3 h-3 mr-1.5"/> Sincronizar Agora</>}
+                                                    </button>
+                                                    <button onClick={async () => {
+                                                        if(confirm("Deseja realmente remover esta fonte?")) {
+                                                            const filtered = importSources.filter(src => src.id !== s.id);
+                                                            setImportSources(filtered);
+                                                            await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: filtered, ignoreExisting }, { merge: true });
+                                                        }
+                                                    }} className="p-2 bg-red-900/30 text-red-400 rounded-xl hover:bg-red-600 hover:text-white transition-all border border-red-500/20"><TrashIcon className="w-4 h-4"/></button>
+                                                </div>
                                             </div>
-                                            <div className="flex items-center space-x-2 ml-4">
-                                                <button onClick={() => executeImport(s)} className="text-[10px] bg-green-600 px-3 py-1.5 rounded font-bold hover:bg-green-700">Sincronizar</button>
-                                                <button onClick={async () => {
-                                                    if(confirm("Remover esta fonte?")) {
-                                                        const filtered = importSources.filter(src => src.id !== s.id);
-                                                        setImportSources(filtered);
-                                                        await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: filtered, ignoreExisting }, { merge: true });
-                                                    }
-                                                }} className="p-1.5 bg-red-900/50 text-red-400 rounded hover:bg-red-900"><TrashIcon className="w-4 h-4"/></button>
-                                            </div>
+                                            {s.lastImportTime && (
+                                                <div className="text-[9px] text-gray-500 border-t border-gray-600/50 pt-2 flex justify-between">
+                                                    <span>Último sync: {new Date(s.lastImportTime).toLocaleString()}</span>
+                                                    <span className="text-blue-400 font-bold uppercase">{s.type}</span>
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
@@ -373,10 +436,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'events':
                 return (
                     <div className="space-y-6">
-                        <div className="bg-gray-800 p-5 rounded-lg shadow-lg border border-gray-700">
-                            <h3 className="font-bold mb-4 flex items-center"><PlusCircleIcon className="w-5 h-5 mr-2 text-orange-500"/> Criar Novo Evento</h3>
-                            <div className="flex gap-2">
-                                <input value={newEventName} onChange={e => setNewEventName(e.target.value)} placeholder="Nome do Evento" className="flex-1 bg-gray-700 p-3 rounded border border-gray-600 outline-none focus:border-orange-500"/>
+                        <div className="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700">
+                            <h3 className="font-bold mb-4 flex items-center text-lg"><PlusCircleIcon className="w-6 h-6 mr-2 text-orange-500"/> Criar Novo Evento</h3>
+                            <div className="flex gap-3">
+                                <input value={newEventName} onChange={e => setNewEventName(e.target.value)} placeholder="Digite o nome do evento..." className="flex-1 bg-gray-900 border border-gray-700 p-4 rounded-xl outline-none focus:border-orange-500 transition-all"/>
                                 <button onClick={async () => {
                                     if(!newEventName.trim()) return;
                                     setIsLoading(true);
@@ -385,54 +448,57 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         await setDoc(doc(db, 'events', ref.id, 'settings', 'main'), { sectorNames: ['Pista', 'VIP'] });
                                         alert("Evento criado com sucesso!");
                                         setNewEventName('');
-                                    } catch (e) { alert("Erro ao criar evento."); } finally { setIsLoading(false); }
-                                }} className="bg-orange-600 px-6 rounded font-bold hover:bg-orange-700 transition-colors shadow-lg">Criar</button>
+                                    } catch (e) { alert("Erro ao criar."); } finally { setIsLoading(false); }
+                                }} className="bg-orange-600 px-8 rounded-xl font-bold hover:bg-orange-700 transition-all shadow-lg active:scale-95">Criar Evento</button>
                             </div>
                         </div>
-                        <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-lg">
-                            <h3 className="font-bold mb-3 text-gray-400 text-sm uppercase flex items-center"><TableCellsIcon className="w-4 h-4 mr-2"/> Gerenciar Meus Eventos</h3>
+                        <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
+                            <h3 className="font-bold mb-5 text-gray-400 text-sm uppercase flex items-center tracking-widest"><TableCellsIcon className="w-5 h-5 mr-2"/> Gerenciar Acessos por Evento</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {events.map(ev => {
                                     const assignedAdmins = allUsers.filter(u => Array.isArray(u.allowedEvents) && u.allowedEvents.includes(ev.id));
                                     const isAssigning = assigningEventId === ev.id;
                                     return (
-                                        <div key={ev.id} className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 hover:border-orange-500/50 transition-all flex flex-col">
+                                        <div key={ev.id} className="bg-gray-700/40 p-5 rounded-2xl border border-gray-600 hover:border-orange-500/40 transition-all flex flex-col group">
                                             <div className="flex justify-between items-start mb-4">
-                                                <span className="font-bold text-lg text-white">{ev.name}</span>
+                                                <div className="flex flex-col">
+                                                    <span className="font-black text-xl text-white group-hover:text-orange-400 transition-colors">{ev.name}</span>
+                                                    <span className="text-[10px] text-gray-500 uppercase font-bold mt-1">ID: {ev.id}</span>
+                                                </div>
                                                 <div className="flex space-x-2">
                                                     {isSuperAdmin && (
                                                         <button 
                                                             onClick={() => setAssigningEventId(isAssigning ? null : ev.id)} 
-                                                            className={`p-1.5 rounded-lg border transition-colors ${isAssigning ? 'bg-orange-600 border-orange-500' : 'bg-gray-800 border-gray-600 hover:bg-gray-700'}`} 
-                                                            title="Atribuir Admins"
+                                                            className={`p-2 rounded-xl border transition-all ${isAssigning ? 'bg-orange-600 border-orange-500' : 'bg-gray-800 border-gray-700 hover:bg-gray-700'}`} 
+                                                            title="Gerenciar Permissões"
                                                         >
                                                             <UsersIcon className="w-5 h-5" />
                                                         </button>
                                                     )}
-                                                    <button onClick={() => onSelectEvent(ev)} className="bg-blue-600 text-xs px-4 py-1.5 rounded font-bold hover:bg-blue-700 shadow-md">Painel</button>
+                                                    <button onClick={() => onSelectEvent(ev)} className="bg-blue-600 text-xs px-5 py-2 rounded-xl font-black uppercase tracking-tighter hover:bg-blue-700 shadow-lg active:scale-95 transition-all">Selecionar</button>
                                                 </div>
                                             </div>
 
                                             {isSuperAdmin && (
-                                                <div className="mt-2 pt-2 border-t border-gray-600">
+                                                <div className="mt-2 pt-4 border-t border-gray-600/50">
                                                     {isAssigning ? (
-                                                        <div className="bg-gray-800 p-3 rounded-lg border border-orange-500/30 animate-fade-in shadow-inner">
-                                                            <p className="text-[10px] text-orange-400 uppercase font-black mb-2">Vincular Administradores:</p>
-                                                            <div className="grid grid-cols-1 gap-1 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                                                        <div className="bg-gray-900/80 p-4 rounded-xl border border-orange-500/30 animate-fade-in shadow-inner">
+                                                            <p className="text-[11px] text-orange-400 uppercase font-black mb-3">Vincular Usuários:</p>
+                                                            <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
                                                                 {allUsers.filter(u => u.role !== 'SUPER_ADMIN').map(u => (
-                                                                    <label key={u.id} className="flex items-center p-2 rounded hover:bg-gray-700 cursor-pointer transition-colors border border-transparent hover:border-gray-600">
-                                                                        <input type="checkbox" checked={Array.isArray(u.allowedEvents) && u.allowedEvents.includes(ev.id)} onChange={() => handleToggleUserAccess(u.id, ev.id)} className="w-4 h-4 text-orange-600 rounded bg-gray-900 border-gray-600"/>
-                                                                        <span className="ml-2 text-xs font-medium text-gray-200">{u.username}</span>
+                                                                    <label key={u.id} className="flex items-center p-3 rounded-xl hover:bg-gray-800 cursor-pointer transition-all border border-transparent hover:border-gray-700">
+                                                                        <input type="checkbox" checked={Array.isArray(u.allowedEvents) && u.allowedEvents.includes(ev.id)} onChange={() => handleToggleUserAccess(u.id, ev.id)} className="w-5 h-5 text-orange-600 rounded bg-gray-950 border-gray-700"/>
+                                                                        <span className="ml-3 text-xs font-bold text-gray-300">{u.username}</span>
                                                                     </label>
                                                                 ))}
                                                             </div>
-                                                            <button onClick={() => setAssigningEventId(null)} className="w-full mt-3 text-[10px] text-gray-400 hover:text-white font-black py-2 border border-gray-600 rounded uppercase">Fechar Atribuição</button>
+                                                            <button onClick={() => setAssigningEventId(null)} className="w-full mt-4 text-[10px] text-gray-400 hover:text-white font-black py-3 border border-gray-700 rounded-xl uppercase transition-all">Fechar</button>
                                                         </div>
                                                     ) : (
-                                                        <div className="flex flex-wrap gap-1">
+                                                        <div className="flex flex-wrap gap-1.5">
                                                             {assignedAdmins.length > 0 ? assignedAdmins.map(u => (
-                                                                <span key={u.id} className="text-[10px] bg-gray-800 px-2 py-0.5 rounded text-gray-300 border border-gray-600">{u.username}</span>
-                                                            )) : <span className="text-[10px] italic text-gray-600">Nenhum admin vinculado</span>}
+                                                                <span key={u.id} className="text-[9px] bg-gray-800 px-2.5 py-1 rounded-full text-gray-400 border border-gray-700 font-bold">{u.username}</span>
+                                                            )) : <span className="text-[10px] italic text-gray-600 flex items-center"><XCircleIcon className="w-3 h-3 mr-1"/> Sem usuários vinculados</span>}
                                                         </div>
                                                     )}
                                                 </div>
@@ -444,94 +510,47 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         </div>
                     </div>
                 );
-            case 'search': return <div className="bg-gray-800 p-10 text-center text-gray-500 rounded-lg border border-gray-700 shadow-inner italic">Use o botão de busca no painel superior para pesquisar ingressos.</div>;
             case 'locators': 
                 return (
-                    <div className="space-y-6 animate-fade-in">
-                        <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
-                            <h2 className="text-xl font-bold mb-4 flex items-center"><TicketIcon className="w-6 h-6 mr-2 text-orange-500"/> Localizadores Manuais</h2>
-                            <textarea value={locatorCodes} onChange={e => setLocatorCodes(e.target.value)} placeholder="Insira os códigos (um por linha)" className="w-full h-48 bg-gray-900 border border-gray-700 rounded-xl p-4 mb-4 font-mono text-sm outline-none focus:border-orange-500 transition-all shadow-inner"/>
+                    <div className="space-y-6 animate-fade-in pb-20">
+                        <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-2xl">
+                            <h2 className="text-xl font-bold mb-4 flex items-center text-orange-500"><TicketIcon className="w-6 h-6 mr-2"/> Localizadores Manuais</h2>
+                            <textarea value={locatorCodes} onChange={e => setLocatorCodes(e.target.value)} placeholder="Cole os códigos um abaixo do outro..." className="w-full h-48 bg-gray-900 border border-gray-700 rounded-2xl p-5 mb-4 font-mono text-sm outline-none focus:border-orange-500 transition-all shadow-inner"/>
                             <div className="flex gap-4">
-                                <select value={selectedLocatorSector} onChange={e => setSelectedLocatorSector(e.target.value)} className="flex-1 bg-gray-700 p-3 rounded-xl border border-gray-700 text-sm outline-none">
+                                <select value={selectedLocatorSector} onChange={e => setSelectedLocatorSector(e.target.value)} className="flex-1 bg-gray-700 p-4 rounded-2xl border border-gray-600 text-sm font-bold outline-none">
                                     {sectorNames.map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
-                                <button onClick={handleProcessLocators} className="bg-orange-600 px-10 rounded-xl font-bold hover:bg-orange-700 shadow-lg transition-transform active:scale-95">Importar</button>
-                            </div>
-                        </div>
-                        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-2xl">
-                            <div className="max-h-96 overflow-y-auto custom-scrollbar">
-                                <table className="w-full text-left text-sm">
-                                    <thead className="bg-gray-700 text-gray-400 text-[10px] uppercase font-black tracking-widest">
-                                        <tr><th className="p-4">Código</th><th className="p-4">Setor Alocado</th><th className="p-4">Situação</th></tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-700">
-                                        {manualLocatorTickets.map(t => (
-                                            <tr key={t.id} className="hover:bg-gray-700/30 transition-colors">
-                                                <td className="p-4 font-mono font-bold text-orange-400">{t.id}</td>
-                                                <td className="p-4">{t.sector}</td>
-                                                <td className="p-4">
-                                                    <span className={`px-3 py-1 rounded-full text-[10px] font-black tracking-tight ${t.status === 'USED' ? 'bg-red-900/50 text-red-400 border border-red-500/20' : 'bg-green-900/50 text-green-400 border border-green-500/20'}`}>
-                                                        {t.status === 'USED' ? 'UTILIZADO' : 'DISPONÍVEL'}
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                <button onClick={handleProcessLocators} className="bg-orange-600 px-12 rounded-2xl font-black uppercase tracking-tighter hover:bg-orange-700 shadow-xl transition-all active:scale-95">Importar</button>
                             </div>
                         </div>
                     </div>
                 );
-            case 'history': return <TicketList tickets={nonSecretScanHistory} sectorNames={sectorNames} />;
             case 'operators':
                 const operatorMonitorUrl = `${window.location.origin}${window.location.pathname}?mode=operators&eventId=${selectedEvent!.id}`;
                 return (
-                    <div className="space-y-6 animate-fade-in">
-                        <div className="bg-gray-800 p-10 rounded-3xl border border-gray-700 shadow-2xl flex flex-col items-center text-center">
-                            <div className="bg-orange-600/20 p-8 rounded-full mb-6 border border-orange-500/20 shadow-inner">
+                    <div className="space-y-6 animate-fade-in pb-20 text-center">
+                        <div className="bg-gray-800 p-12 rounded-3xl border border-gray-700 shadow-2xl flex flex-col items-center">
+                            <div className="bg-orange-600/20 p-8 rounded-full mb-8 border border-orange-500/30 shadow-inner">
                                 <VideoCameraIcon className="w-20 h-20 text-orange-500" />
                             </div>
-                            <h2 className="text-4xl font-black mb-4 tracking-tighter">Monitoramento de Operadores</h2>
+                            <h2 className="text-4xl font-black mb-4 tracking-tighter uppercase">Monitoramento Portarias</h2>
                             <p className="text-gray-400 max-w-lg mb-8 text-lg font-medium leading-relaxed">
-                                Visualize o desempenho de cada portaria em tempo real através do nosso painel de monitoramento dinâmico.
+                                Link de acesso em tempo real para supervisores de portaria acompanharem a produtividade e erros.
                             </p>
                             
-                            <div className="w-full max-w-2xl bg-gray-900 border border-gray-700 p-5 rounded-2xl mb-8 font-mono text-xs break-all text-orange-300 shadow-inner leading-relaxed">
+                            <div className="w-full max-w-2xl bg-gray-950 border border-gray-700 p-6 rounded-2xl mb-8 font-mono text-xs break-all text-orange-400 shadow-inner leading-relaxed select-all">
                                 {operatorMonitorUrl}
                             </div>
                             
                             <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
-                                <button 
-                                    onClick={() => {
-                                        navigator.clipboard.writeText(operatorMonitorUrl).then(() => alert("Link de monitoramento copiado!"));
-                                    }}
-                                    className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-10 rounded-2xl flex items-center justify-center transition-all shadow-xl"
-                                >
-                                    <LinkIcon className="w-5 h-5 mr-3" />
-                                    Copiar Link de Acesso
-                                </button>
-                                <a 
-                                    href={operatorMonitorUrl} 
-                                    target="_blank" 
-                                    rel="noopener noreferrer"
-                                    className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-10 rounded-2xl flex items-center justify-center transition-all shadow-xl"
-                                >
-                                    <VideoCameraIcon className="w-5 h-5 mr-3" />
-                                    Abrir Monitoramento Agora
-                                </a>
+                                <button onClick={() => { navigator.clipboard.writeText(operatorMonitorUrl).then(() => alert("Link de monitoramento copiado!")); }} className="bg-gray-700 hover:bg-gray-600 text-white font-bold py-4 px-10 rounded-2xl flex items-center justify-center transition-all shadow-xl active:scale-95"><LinkIcon className="w-5 h-5 mr-3" /> Copiar Link</button>
+                                <a href={operatorMonitorUrl} target="_blank" rel="noopener noreferrer" className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 px-10 rounded-2xl flex items-center justify-center transition-all shadow-xl active:scale-95"><VideoCameraIcon className="w-5 h-5 mr-3" /> Abrir no Navegador</a>
                             </div>
-                        </div>
-                        <div className="bg-orange-600/10 border border-orange-500/20 p-6 rounded-2xl text-orange-200">
-                            <h4 className="font-bold flex items-center mb-2">
-                                <AlertTriangleIcon className="w-5 h-5 mr-3" />
-                                Monitoramento Externo
-                            </h4>
-                            <p className="text-sm leading-relaxed text-orange-200/70">
-                                Este link é público e ideal para ser compartilhado com coordenadores de acesso. Ele permite visualizar estatísticas de falhas, repetidos e produtividade por portaria sem dar acesso administrativo ao sistema.
-                            </p>
                         </div>
                     </div>
                 );
+            case 'history': return <TicketList tickets={scanHistory.filter(s => !allTickets.find(t => t.id === s.ticketId && t.source === 'secret_generator'))} sectorNames={sectorNames} />;
+            case 'search': return <div className="bg-gray-800 p-20 text-center text-gray-500 rounded-3xl border border-gray-700 shadow-inner italic">Use a busca global no menu superior para localizar ingressos.</div>;
             default: return null;
         }
     };
@@ -539,15 +558,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     return (
         <div className="w-full max-w-6xl mx-auto pb-10 px-4">
             <div className="bg-gray-800 rounded-2xl p-2 mb-6 flex overflow-x-auto space-x-1 custom-scrollbar border border-gray-700 items-center text-sm shadow-2xl no-scrollbar">
-                <button onClick={() => setActiveTab('stats')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'stats' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Dashboard</button>
-                <button onClick={() => setActiveTab('settings')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'settings' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Configurações</button>
-                <button onClick={() => setActiveTab('locators')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap flex items-center transition-all uppercase tracking-tighter ${activeTab === 'locators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><TicketIcon className="w-4 h-4 mr-2"/>Localizadores</button>
-                <button onClick={() => setActiveTab('history')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'history' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Histórico</button>
-                <button onClick={() => setActiveTab('events')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'events' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Eventos</button>
-                <button onClick={() => setActiveTab('operators')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap flex items-center transition-all uppercase tracking-tighter ${activeTab === 'operators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><UsersIcon className="w-4 h-4 mr-2"/>Operadores</button>
+                <button onClick={() => setActiveTab('stats')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'stats' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Dashboard</button>
+                <button onClick={() => setActiveTab('settings')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'settings' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Configurações</button>
+                <button onClick={() => setActiveTab('locators')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap flex items-center transition-all uppercase tracking-tighter ${activeTab === 'locators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><TicketIcon className="w-4 h-4 mr-2"/>Localizadores</button>
+                <button onClick={() => setActiveTab('history')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'history' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Histórico</button>
+                <button onClick={() => setActiveTab('events')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap transition-all uppercase tracking-tighter ${activeTab === 'events' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}>Eventos</button>
+                <button onClick={() => setActiveTab('operators')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap flex items-center transition-all uppercase tracking-tighter ${activeTab === 'operators' ? 'bg-orange-600 shadow-lg scale-105' : 'hover:bg-gray-700 text-gray-400'}`}><UsersIcon className="w-4 h-4 mr-2"/>Operadores</button>
                 {isSuperAdmin && (
                     <div className="ml-auto pl-2 border-l border-gray-600">
-                        <button onClick={() => setActiveTab('users')} className={`px-6 py-2.5 rounded-xl font-black whitespace-nowrap flex items-center transition-all uppercase tracking-tighter ${activeTab === 'users' ? 'bg-purple-600 shadow-lg scale-105' : 'text-purple-400 hover:bg-purple-900'}`}><UsersIcon className="w-4 h-4 mr-2"/>Usuários</button>
+                        <button onClick={() => setActiveTab('users')} className={`px-6 py-3 rounded-xl font-black whitespace-nowrap flex items-center transition-all uppercase tracking-tighter ${activeTab === 'users' ? 'bg-purple-600 shadow-lg scale-105' : 'text-purple-400 hover:bg-purple-900'}`}><UsersIcon className="w-4 h-4 mr-2"/>Usuários</button>
                     </div>
                 )}
             </div>
