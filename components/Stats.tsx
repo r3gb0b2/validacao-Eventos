@@ -1,5 +1,4 @@
 
-
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Ticket, SectorGroup } from '../types';
 import { TableCellsIcon, FunnelIcon, PlusCircleIcon, TrashIcon, CogIcon } from './Icons';
@@ -31,7 +30,7 @@ const Stats: React.FC<StatsProps> = ({
     const [newGroupName, setNewGroupName] = useState('');
     const [newGroupSectors, setNewGroupSectors] = useState<string[]>([]);
 
-    // Filter State (UI Only - Viewer can filter locally if they want, or we can hide it too. Usually filtering is fine for viewers)
+    // Filter State (UI Only)
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const filterRef = useRef<HTMLDivElement>(null);
@@ -127,12 +126,16 @@ const Stats: React.FC<StatsProps> = ({
                 return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
             });
 
-            // "Total de Ingressos" should NOT include stand-by tickets
-            const total = filteredTicketsBySelection.filter(t => t.status !== 'STANDBY').length;
-            // "Scanned" SHOULD include stand-by tickets that were used
+            // TOTAL: Não conta localizadores AVAILABLE. Conta apenas se source != locator OU status == USED
+            const total = filteredTicketsBySelection.filter(t => 
+                t.status !== 'STANDBY' && 
+                (t.source !== 'manual_locator' || t.status === 'USED')
+            ).length;
+
+            // SCANNED: Conta todos os validados
             const scanned = filteredTicketsBySelection.filter(t => t.status === 'USED').length;
 
-            const remaining = total - scanned;
+            const remaining = Math.max(0, total - scanned);
             const percentage = total > 0 ? ((scanned / total) * 100).toFixed(1) : '0.0';
             
             return { total, scanned, remaining, percentage };
@@ -148,7 +151,6 @@ const Stats: React.FC<StatsProps> = ({
         try {
             const statsMap: Record<string, { total: number; scanned: number; displayName: string; isGroup?: boolean; subSectors?: string[] }> = {};
             const handledSectors = new Set<string>();
-            // Use all tickets for processing, but filter out STANDBY from totals later
             const safeAllTickets = Array.isArray(allTickets) ? allTickets : [];
             
             // If Grouped Mode is ON
@@ -164,8 +166,13 @@ const Stats: React.FC<StatsProps> = ({
                         const isInGroup = group.includedSectors.some(s => normalize(s) === tSector);
                         
                         if (isInGroup) {
-                            if (ticket.status !== 'STANDBY') groupTotal++;
-                            if (ticket.status === 'USED') groupScanned++;
+                            // Regra: source manual_locator disponível não conta no total do grupo
+                            if (ticket.status !== 'STANDBY' && (ticket.source !== 'manual_locator' || ticket.status === 'USED')) {
+                                groupTotal++;
+                            }
+                            if (ticket.status === 'USED') {
+                                groupScanned++;
+                            }
                         }
                     });
 
@@ -193,8 +200,13 @@ const Stats: React.FC<StatsProps> = ({
 
                  safeAllTickets.forEach(ticket => {
                      if (ticket && normalize(ticket.sector) === normalize(sectorName)) {
-                         if (ticket.status !== 'STANDBY') total++;
-                         if (ticket.status === 'USED') scanned++;
+                         // Regra: source manual_locator disponível não conta no total do setor
+                         if (ticket.status !== 'STANDBY' && (ticket.source !== 'manual_locator' || ticket.status === 'USED')) {
+                             total++;
+                         }
+                         if (ticket.status === 'USED') {
+                             scanned++;
+                         }
                      }
                  });
 
@@ -224,7 +236,7 @@ const Stats: React.FC<StatsProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* 1. Top Summary Cards */}
+      {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-gray-800 p-4 rounded-lg border-l-4 border-blue-500 shadow-md">
               <p className="text-gray-400 text-sm font-medium uppercase">Total de Ingressos</p>
@@ -247,7 +259,7 @@ const Stats: React.FC<StatsProps> = ({
           </div>
       </div>
 
-      {/* 2. Controls & Configuration */}
+      {/* Controls & Configuration */}
       <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="flex items-center space-x-2">
@@ -256,7 +268,6 @@ const Stats: React.FC<StatsProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                     {/* View Mode Toggle - ONLY IF NOT READ ONLY */}
                     {!isReadOnly && onViewModeChange && (
                         <div className="bg-gray-700 p-1 rounded-lg flex text-sm font-bold">
                             <button 
@@ -274,7 +285,6 @@ const Stats: React.FC<StatsProps> = ({
                         </div>
                     )}
 
-                    {/* Manage Groups Button - ONLY IF NOT READ ONLY */}
                     {!isReadOnly && onGroupsChange && (
                         <button 
                             onClick={() => setIsConfiguringGroups(!isConfiguringGroups)}
@@ -287,7 +297,6 @@ const Stats: React.FC<StatsProps> = ({
                         </button>
                     )}
 
-                    {/* Filter Button - Allowed for Public View too (local filter) */}
                     <div className="relative" ref={filterRef}>
                         <button 
                             onClick={() => setIsFilterOpen(!isFilterOpen)}
@@ -325,15 +334,13 @@ const Stats: React.FC<StatsProps> = ({
                 </div>
             </div>
 
-            {/* GROUP CONFIGURATION UI - ONLY IF NOT READ ONLY */}
             {isConfiguringGroups && !isReadOnly && (
                 <div className="mt-4 p-4 bg-gray-700/50 rounded-lg border border-gray-600 animate-fade-in">
                     <h4 className="font-bold text-white mb-3">Criar/Editar Grupos de Setores</h4>
                     
-                    {/* Creator */}
                     <div className="flex flex-col md:flex-row gap-4 mb-6">
                         <div className="flex-1">
-                            <label className="text-xs text-gray-400 mb-1 block">Nome do Grupo (ex: "VIP")</label>
+                            <label className="text-xs text-gray-400 mb-1 block">Nome do Grupo</label>
                             <input 
                                 type="text" 
                                 value={newGroupName}
@@ -343,7 +350,7 @@ const Stats: React.FC<StatsProps> = ({
                             />
                         </div>
                         <div className="flex-[2]">
-                            <label className="text-xs text-gray-400 mb-1 block">Selecione os Setores para agrupar:</label>
+                            <label className="text-xs text-gray-400 mb-1 block">Setores do grupo:</label>
                             <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-gray-900 rounded border border-gray-600">
                                 {safeSectorNames.map(sector => (
                                     <label key={sector} className="inline-flex items-center bg-gray-800 px-2 py-1 rounded cursor-pointer hover:bg-gray-700 border border-gray-700">
@@ -369,7 +376,6 @@ const Stats: React.FC<StatsProps> = ({
                         </div>
                     </div>
 
-                    {/* List of Existing Groups */}
                     <div className="border-t border-gray-600 pt-4">
                         <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({Array.isArray(safeGroups) ? safeGroups.length : 0})</h5>
                         {(!safeGroups || safeGroups.length === 0) ? (
@@ -400,7 +406,7 @@ const Stats: React.FC<StatsProps> = ({
             )}
       </div>
 
-      {/* 3. Detailed Table */}
+      {/* Detailed Table */}
       <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-700 z-10 relative">
           <div className="overflow-x-auto">
               <table className="w-full text-left">
@@ -416,7 +422,7 @@ const Stats: React.FC<StatsProps> = ({
                   </thead>
                   <tbody className="divide-y divide-gray-700">
                       {tableData.map((stats) => {
-                          const remaining = stats.total - stats.scanned;
+                          const remaining = Math.max(0, stats.total - stats.scanned);
                           const percentage = stats.total > 0 ? ((stats.scanned / stats.total) * 100).toFixed(1) : '0.0';
                           
                           return (
