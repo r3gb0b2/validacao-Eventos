@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
 import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon } from './Icons';
-import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -51,19 +51,27 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         loadEvents();
     }, [db]);
 
-    // Escutar ingressos do evento selecionado
+    // Escutar APENAS ingressos gerados por este gerador
     useEffect(() => {
         if (!selectedEventId) {
             setTickets([]);
             return;
         }
 
-        const unsub = onSnapshot(collection(db, 'events', selectedEventId, 'tickets'), (snap) => {
+        // Criar query filtrando pela flag de origem 'secret_generator'
+        const q = query(
+            collection(db, 'events', selectedEventId, 'tickets'), 
+            where('source', '==', 'secret_generator')
+        );
+
+        const unsub = onSnapshot(q, (snap) => {
             const list = snap.docs.map(d => ({
                 id: d.id,
                 ...d.data()
             } as Ticket));
             setTickets(list);
+        }, (err) => {
+            console.error("Erro no snapshot (possível falta de índice):", err);
         });
 
         return () => unsub();
@@ -152,12 +160,17 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 batch.set(ticketRef, {
                     sector: formData.sector.split('[')[0].trim(),
                     status: 'AVAILABLE',
+                    source: 'secret_generator', // Flag identificadora crucial
                     details: {
                         ownerName: formData.ownerName,
                         eventName: formData.eventName
                     }
                 });
-                if (i % 5 === 0) await new Promise(r => setTimeout(r, 50));
+                // Evitar sobrecarga em lotes grandes
+                if (i % 20 === 0 && i > 0) {
+                    await batch.commit();
+                    await new Promise(r => setTimeout(r, 100));
+                }
             }
 
             await batch.commit();
@@ -184,8 +197,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     <div className="flex items-center space-x-4">
                         <TicketIcon className="w-10 h-10 text-white" />
                         <div>
-                            <h1 className="text-2xl font-bold">Gerador em Lote Inteligente</h1>
-                            <p className="text-orange-100 text-sm">Criação secreta de ingressos com exportação em ZIP.</p>
+                            <h1 className="text-2xl font-bold">Gerador SecretTicket</h1>
+                            <p className="text-orange-100 text-sm">Lista restrita apenas aos ingressos gerados aqui.</p>
                         </div>
                     </div>
                     
@@ -281,13 +294,13 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 </div>
             </div>
 
-            {/* LISTA DE REGISTROS GERADOS */}
+            {/* LISTA DE REGISTROS GERADOS (FILTRADA) */}
             <div className="w-full max-w-5xl bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden">
                 <div className="p-6 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center space-x-3">
                         <TableCellsIcon className="w-6 h-6 text-orange-500" />
-                        <h2 className="text-xl font-bold">Registros no Banco de Dados</h2>
-                        <span className="bg-gray-700 px-3 py-1 rounded-full text-xs font-mono">{filteredTickets.length} ingressos</span>
+                        <h2 className="text-xl font-bold">Ingressos Gerados Aqui</h2>
+                        <span className="bg-gray-700 px-3 py-1 rounded-full text-xs font-mono">{filteredTickets.length} registros</span>
                     </div>
                     
                     <div className="relative w-full md:w-64">
@@ -296,7 +309,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             type="text"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            placeholder="Buscar código ou nome..."
+                            placeholder="Buscar nesta lista..."
                             className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:border-orange-500 outline-none"
                         />
                     </div>
@@ -309,7 +322,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <th className="px-6 py-4">Código / QR</th>
                                 <th className="px-6 py-4">Participante</th>
                                 <th className="px-6 py-4">Setor</th>
-                                <th className="px-6 py-4">Status</th>
+                                <th className="px-6 py-4">Uso</th>
                                 <th className="px-6 py-4 text-right">Ações</th>
                             </tr>
                         </thead>
@@ -336,7 +349,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                         ) : (
                                             <div className="flex items-center text-green-400 text-xs font-bold uppercase">
                                                 <ClockIcon className="w-4 h-4 mr-1" />
-                                                Disponível
+                                                Livre
                                             </div>
                                         )}
                                     </td>
@@ -354,7 +367,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             {filteredTickets.length === 0 && (
                                 <tr>
                                     <td colSpan={5} className="px-6 py-12 text-center text-gray-500 italic">
-                                        Nenhum ingresso encontrado para este evento.
+                                        Nenhum ingresso gerado pelo SecretTicket para este evento.
                                     </td>
                                 </tr>
                             )}
