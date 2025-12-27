@@ -23,6 +23,11 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
     const [viewMode, setViewMode] = useState<'raw' | 'grouped'>('raw');
     const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
 
+    // Filtragem de ingressos secretos para não poluir os dados públicos
+    const nonSecretTickets = useMemo(() => {
+        return allTickets.filter(t => t.source !== 'secret_generator');
+    }, [allTickets]);
+
     useEffect(() => {
         if (!event) return;
         const loadConfig = async () => {
@@ -40,14 +45,11 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         loadConfig();
     }, [event]);
 
-    // Logic extracted from AdminView to calculate charts data with GROUPING support
-    // UPDATED: Now uses allTickets (looking for USED status) instead of just scanHistory
-    // This provides a full historical view, including imported usage data.
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        // 1. Extract valid used tickets with timestamps
-        const validUsedTickets = (allTickets || []).filter(t => 
+        // 1. Extract valid used NON-SECRET tickets with timestamps
+        const validUsedTickets = (nonSecretTickets || []).filter(t => 
             t && 
             t.status === 'USED' && 
             t.usedAt && 
@@ -125,11 +127,11 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             .sort((a, b) => a.time.localeCompare(b.time));
 
         return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [allTickets, sectorNames, isLoading, viewMode, sectorGroups]);
+    }, [nonSecretTickets, sectorNames, isLoading, viewMode, sectorGroups]);
 
      const pieChartData = useMemo(() => {
         if (isLoading) return [];
-        const usedTickets = (allTickets || []).filter(t => t && t.status === 'USED');
+        const usedTickets = (nonSecretTickets || []).filter(t => t && t.status === 'USED');
         if (usedTickets.length === 0) return [];
         
         const counts: Record<string, number> = {};
@@ -151,7 +153,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
-    }, [allTickets, sectorNames, isLoading, viewMode, sectorGroups]);
+    }, [nonSecretTickets, sectorNames, isLoading, viewMode, sectorGroups]);
 
     // Helper for safe date formatting
     const safeFormatTime = (timestamp: number | null) => {
@@ -203,7 +205,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                     <div className="space-y-6 animate-fade-in">
                         {/* Main Stats Component (KPIs + Table) - Read Only Mode with Config from DB */}
                         <Stats 
-                            allTickets={allTickets || []} 
+                            allTickets={nonSecretTickets || []} 
                             sectorNames={sectorNames || []}
                             viewMode={viewMode}
                             groups={sectorGroups}

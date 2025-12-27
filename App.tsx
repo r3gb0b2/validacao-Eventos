@@ -312,6 +312,7 @@ const App: React.FC = () => {
                     id: doc.id,
                     sector: data.sector,
                     status: data.status,
+                    source: data.source, // Garantir que a fonte seja carregada
                     details: data.details ? { 
                         ownerName: data.details.ownerName, 
                         eventName: data.details.eventName,

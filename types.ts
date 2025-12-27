@@ -1,3 +1,4 @@
+
 import { Timestamp, FieldValue } from 'firebase/firestore';
 
 export interface Event {
@@ -15,6 +16,7 @@ export interface Ticket {
   sector: Sector;
   status: TicketStatus;
   usedAt?: number; // Milliseconds since epoch for client-side use
+  source?: string; // Origem do ingresso (ex: 'secret_generator')
   details?: {
     ownerName?: string;
     eventName?: string;

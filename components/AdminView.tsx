@@ -98,6 +98,20 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
     const canManageEvents = currentUser?.role === 'ADMIN' || isSuperAdmin;
 
+    // --- FILTRAGEM DE INGRESSOS SECRETOS ---
+    // Removemos os ingressos gerados pelo SecretTicket das estatísticas do Admin
+    const nonSecretTickets = useMemo(() => {
+        return allTickets.filter(t => t.source !== 'secret_generator');
+    }, [allTickets]);
+
+    const secretTicketIds = useMemo(() => {
+        return new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id));
+    }, [allTickets]);
+
+    const nonSecretScanHistory = useMemo(() => {
+        return scanHistory.filter(log => !secretTicketIds.has(log.ticketId));
+    }, [scanHistory, secretTicketIds]);
+
     // Enforce Ignore Existing for non-super admins
     useEffect(() => {
         if (!isSuperAdmin) {
@@ -272,9 +286,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     // Calculate Locator Stats
     const locatorStats = useMemo(() => {
-        if (!allTickets) return { sectorTotal: 0, sectorUsed: 0, globalTotal: 0, globalUsed: 0 };
+        // Usamos nonSecretTickets para não misturar locators secretos nas estatísticas do Admin
+        if (!nonSecretTickets) return { sectorTotal: 0, sectorUsed: 0, globalTotal: 0, globalUsed: 0 };
         
-        const locators = allTickets.filter(t => t.details?.ownerName === 'Localizador');
+        const locators = nonSecretTickets.filter(t => t.details?.ownerName === 'Localizador');
         
         // Filter by currently selected sector in the Locators tab
         const currentSectorLocators = locators.filter(t => t.sector === selectedLocatorSector);
@@ -285,7 +300,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             globalTotal: locators.length,
             globalUsed: locators.filter(t => t.status === 'USED').length
         };
-    }, [allTickets, selectedLocatorSector]);
+    }, [nonSecretTickets, selectedLocatorSector]);
 
     const handleImportTypeChange = (type: ImportType) => {
         setImportType(type);
@@ -367,10 +382,10 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const analyticsData: AnalyticsData = useMemo(() => {
         try {
-            if (!Array.isArray(allTickets)) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
+            if (!Array.isArray(nonSecretTickets)) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
             
-            // Use USED tickets from the main list, not scan history, for accuracy.
-            const usedTickets = allTickets.filter(t => t && t.status === 'USED' && t.usedAt && !isNaN(Number(t.usedAt)));
+            // Use USED non-secret tickets from the main list
+            const usedTickets = nonSecretTickets.filter(t => t && t.status === 'USED' && t.usedAt && !isNaN(Number(t.usedAt)));
 
             if (usedTickets.length === 0) {
                 return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
@@ -435,12 +450,12 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             console.error("Analytics Calculation Error", e);
             return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
         }
-    }, [allTickets, sectorNames, statsViewMode, sectorGroups]);
+    }, [nonSecretTickets, sectorNames, statsViewMode, sectorGroups]);
 
      const pieChartData = useMemo(() => {
         try {
-            if (!Array.isArray(allTickets)) return [];
-            const usedTickets = allTickets.filter(t => t && t.status === 'USED');
+            if (!Array.isArray(nonSecretTickets)) return [];
+            const usedTickets = nonSecretTickets.filter(t => t && t.status === 'USED');
             if (usedTickets.length === 0) return [];
             
             const counts: Record<string, number> = {};
@@ -467,14 +482,15 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             return [];
         }
 
-    }, [allTickets, sectorNames, statsViewMode, sectorGroups]);
+    }, [nonSecretTickets, sectorNames, statsViewMode, sectorGroups]);
     
     // Calculate Operator Stats
     const operatorStats = useMemo(() => {
-        if (!scanHistory) return [];
+        // Filtramos para não mostrar performance de operadores baseada em ingressos secretos no histórico global
+        if (!nonSecretScanHistory) return [];
         const stats = new Map<string, { name: string; validScans: number; devices: Set<string> }>();
 
-        scanHistory.forEach(scan => {
+        nonSecretScanHistory.forEach(scan => {
             const operatorName = scan.operator || 'Desconhecido';
             if (!stats.has(operatorName)) {
                 stats.set(operatorName, {
@@ -493,7 +509,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         });
 
         return Array.from(stats.values()).sort((a, b) => b.validScans - a.validScans);
-    }, [scanHistory]);
+    }, [nonSecretScanHistory]);
 
 
     const handleSaveSectorNames = async () => {
@@ -757,7 +773,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         if (!apiToken) return alert("Token da API é necessário.");
 
-        const usedTickets = allTickets.filter(t => t.status === 'USED');
+        // Sincronizamos apenas ingressos NÃO secretos
+        const usedTickets = nonSecretTickets.filter(t => t.status === 'USED');
         if (usedTickets.length === 0) return alert("Não há ingressos utilizados para sincronizar.");
         
         const missingOriginalIdCount = usedTickets.filter(t => !t.details?.originalId).length;
@@ -1041,7 +1058,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (!selectedEvent) return;
         setIsGeneratingPdf(true);
         try {
-            generateEventReport(selectedEvent.name, allTickets, scanHistory, sectorNames);
+            // Passamos as versões filtradas para o relatório PDF também
+            generateEventReport(selectedEvent.name, nonSecretTickets, nonSecretScanHistory, sectorNames);
         } catch (e) { alert("Erro ao gerar PDF."); } finally { setIsGeneratingPdf(false); }
     };
 
@@ -1128,7 +1146,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return (
                     <div className="space-y-6 animate-fade-in">
                         <div className="flex justify-between items-center"><h2 className="text-2xl font-bold">Dashboard</h2><div className="flex space-x-2"><button onClick={handleCopyPublicLink} className="bg-blue-600 p-2 rounded-lg text-sm flex items-center"><LinkIcon className="w-4 h-4 mr-1"/>Link Público</button><button onClick={handleDownloadReport} disabled={isGeneratingPdf} className="bg-green-600 p-2 rounded-lg text-sm flex items-center"><CloudDownloadIcon className="w-4 h-4 mr-1"/>PDF</button></div></div>
-                        <Stats allTickets={allTickets} sectorNames={sectorNames} viewMode={statsViewMode} onViewModeChange={handleStatsViewModeChange} groups={sectorGroups} onGroupsChange={handleSectorGroupsChange}/>
+                        <Stats allTickets={nonSecretTickets} sectorNames={sectorNames} viewMode={statsViewMode} onViewModeChange={handleStatsViewModeChange} groups={sectorGroups} onGroupsChange={handleSectorGroupsChange}/>
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><PieChart data={pieChartData} title="Distribuição"/><AnalyticsChart data={analyticsData} sectorNames={sectorNames} /></div>
                         <div><h3 className="text-xl font-bold mb-4">Análise Temporal</h3><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><div className="bg-gray-800 p-4 rounded-lg"><p className="text-xs text-gray-400">Primeiro Acesso</p><p className="text-2xl font-bold">{analyticsData.firstAccess ? new Date(analyticsData.firstAccess).toLocaleTimeString('pt-BR') : '--:--'}</p></div><div className="bg-gray-800 p-4 rounded-lg"><p className="text-xs text-gray-400">Último Acesso</p><p className="text-2xl font-bold">{analyticsData.lastAccess ? new Date(analyticsData.lastAccess).toLocaleTimeString('pt-BR') : '--:--'}</p></div><div className="bg-gray-800 p-4 rounded-lg"><p className="text-xs text-gray-400">Pico ({analyticsData.peak.time})</p><p className="text-2xl font-bold">{analyticsData.peak.count} entradas</p></div></div></div>
                     </div>
@@ -1255,7 +1273,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     </div>
                 );
             case 'history':
-                return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
+                // Passamos apenas o histórico não-secreto para o Admin
+                return <TicketList tickets={nonSecretScanHistory} sectorNames={sectorNames} />;
             case 'locators':
                  return (
                     <div className="bg-gray-800 p-6 rounded-lg shadow-lg border border-gray-700 animate-fade-in">
