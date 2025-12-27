@@ -916,7 +916,7 @@ const App: React.FC = () => {
     if (firebaseStatus === 'error') return <SetupInstructions />;
 
     if (view === 'public_stats' && selectedEvent) {
-        return <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} isLoading={!ticketsLoaded} />;
+        return <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />;
     }
     
     // RENDERIZAR GERADOR OCULTO

@@ -12,21 +12,26 @@ interface PublicStatsViewProps {
   allTickets: Ticket[];
   scanHistory: DisplayableScanLog[];
   sectorNames: string[];
+  hiddenSectors?: string[]; // Propriedade adicionada
   isLoading?: boolean;
 }
 
 const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316', '#10b981'];
 
-const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [], scanHistory = [], sectorNames = [], isLoading = false }) => {
+const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [], scanHistory = [], sectorNames = [], hiddenSectors = [], isLoading = false }) => {
     
     // Config State (Loaded from Firestore to match Admin view)
     const [viewMode, setViewMode] = useState<'raw' | 'grouped'>('raw');
     const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
 
-    // Filtragem de ingressos secretos para não poluir os dados públicos
-    const nonSecretTickets = useMemo(() => {
-        return allTickets.filter(t => t.source !== 'secret_generator');
-    }, [allTickets]);
+    // CÁLCULO PRINCIPAL: Ingressos visíveis (não secretos e de setores não ocultos)
+    const visibleTickets = useMemo(() => {
+        return (allTickets || []).filter(t => 
+            t &&
+            t.source !== 'secret_generator' && 
+            !hiddenSectors.includes(t.sector)
+        );
+    }, [allTickets, hiddenSectors]);
 
     useEffect(() => {
         if (!event) return;
@@ -48,8 +53,8 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        // 1. Extract valid used NON-SECRET tickets with timestamps
-        const validUsedTickets = (nonSecretTickets || []).filter(t => 
+        // 1. Extract valid used VISIBLE tickets with timestamps
+        const validUsedTickets = (visibleTickets || []).filter(t => 
             t && 
             t.status === 'USED' && 
             t.usedAt && 
@@ -88,13 +93,13 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                 const initialCounts: Record<string, number> = {};
                  if (viewMode === 'grouped') {
                      sectorGroups.forEach(g => initialCounts[g.name] = 0);
-                     // Also add sectors not in any group
-                     sectorNames.forEach(name => {
+                     // Also add sectors not in any group (and visible)
+                     sectorNames.filter(s => !hiddenSectors.includes(s)).forEach(name => {
                         const isGrouped = sectorGroups.some(g => g.includedSectors.some(s => s.toLowerCase() === name.toLowerCase()));
                         if (!isGrouped) initialCounts[name] = 0;
                     });
                 } else {
-                     sectorNames.forEach(name => initialCounts[name] = 0);
+                     sectorNames.filter(s => !hiddenSectors.includes(s)).forEach(name => initialCounts[name] = 0);
                 }
                 buckets.set(key, initialCounts);
             }
@@ -127,11 +132,11 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             .sort((a, b) => a.time.localeCompare(b.time));
 
         return { timeBuckets, firstAccess, lastAccess, peak };
-    }, [nonSecretTickets, sectorNames, isLoading, viewMode, sectorGroups]);
+    }, [visibleTickets, sectorNames, hiddenSectors, isLoading, viewMode, sectorGroups]);
 
      const pieChartData = useMemo(() => {
         if (isLoading) return [];
-        const usedTickets = (nonSecretTickets || []).filter(t => t && t.status === 'USED');
+        const usedTickets = (visibleTickets || []).filter(t => t && t.status === 'USED');
         if (usedTickets.length === 0) return [];
         
         const counts: Record<string, number> = {};
@@ -153,7 +158,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             value: counts[name],
             color: PIE_CHART_COLORS[index % PIE_CHART_COLORS.length],
         })).filter(item => item.value > 0);
-    }, [nonSecretTickets, sectorNames, isLoading, viewMode, sectorGroups]);
+    }, [visibleTickets, sectorNames, hiddenSectors, isLoading, viewMode, sectorGroups]);
 
     // Helper for safe date formatting
     const safeFormatTime = (timestamp: number | null) => {
@@ -184,7 +189,6 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                 </header>
 
                 {isLoading ? (
-                    /* Loading Skeleton */
                     <div className="space-y-6 animate-pulse">
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                             {[1, 2, 3, 4].map(i => (
@@ -203,26 +207,24 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                     </div>
                 ) : (
                     <div className="space-y-6 animate-fade-in">
-                        {/* Main Stats Component (KPIs + Table) - Read Only Mode with Config from DB */}
                         <Stats 
-                            allTickets={nonSecretTickets || []} 
+                            allTickets={visibleTickets || []} 
                             sectorNames={sectorNames || []}
+                            hiddenSectors={hiddenSectors}
                             viewMode={viewMode}
                             groups={sectorGroups}
                             isReadOnly={true}
                         />
 
-                        {/* Charts Section */}
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                                     <PieChart data={pieChartData} title="Distribuição por Setor"/>
                                 </div>
                             <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
-                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames || []} />
+                                <AnalyticsChart data={analyticsData} sectorNames={sectorNames.filter(s => !hiddenSectors.includes(s)) || []} />
                             </div>
                         </div>
 
-                        {/* Temporal Analysis Cards */}
                         <div>
                             <h3 className="text-xl font-bold text-white mb-4">Análise Temporal</h3>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
