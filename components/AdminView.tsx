@@ -28,8 +28,10 @@ interface AdminViewProps {
 const API_PRESETS = [
     { name: "Personalizado / Outros", url: "", type: "tickets", token: "" },
     { name: "Google Sheets (CSV)", url: "https://docs.google.com/spreadsheets/d/ID_DA_PLANILHA/export?format=csv", type: "google_sheets", token: "" },
-    { name: "E-Inscrição (Participantes)", url: "https://api.e-inscricao.com/v1/eventos/[ID_EVENTO]/participantes", type: "participants", token: "SEU_TOKEN_AQUI" },
-    { name: "Sympla (Check-ins)", url: "https://api.sympla.com.br/v3/events/[ID_EVENTO]/participants", type: "participants", token: "TOKEN_SYMPLA" }
+    { name: "E-Inscrição (Participantes)", url: "https://api.e-inscricao.com/v1/eventos/[ID_EVENTO]/participantes", type: "participants", token: "" },
+    { name: "E-Inscrição (Ingressos)", url: "https://api.e-inscricao.com/v1/eventos/[ID_EVENTO]/ingressos", type: "tickets", token: "" },
+    { name: "E-Inscrição (Check-ins)", url: "https://api.e-inscricao.com/v1/eventos/[ID_EVENTO]/checkins", type: "checkins", token: "" },
+    { name: "Sympla (Participantes)", url: "https://api.sympla.com.br/v3/events/[ID_EVENTO]/participants", type: "participants", token: "" }
 ];
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames, hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser, onUpdateCurrentUser }) => {
@@ -197,6 +199,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         if (preset) {
             setEditSource(prev => ({
                 ...prev,
+                name: prev.name || preset.name,
                 url: preset.url,
                 type: preset.type as ImportType,
                 token: preset.token
@@ -348,42 +351,58 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 </div>
 
                                 <div className="space-y-4 bg-gray-900/50 p-5 rounded-2xl border border-gray-700 shadow-inner">
-                                    <div className="flex justify-between items-center mb-2">
-                                        <p className="text-xs font-bold text-gray-500 uppercase">{activeSourceId === 'new' ? 'Cadastrar Nova API' : 'Editar Configuração'}</p>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] text-gray-500 font-bold">PRESETS:</span>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <p className="text-xs font-bold text-gray-500 uppercase">{activeSourceId === 'new' ? 'Cadastrar Nova API' : 'Editar Configuração'}</p>
+                                            <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Nome da Fonte" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500 transition-all"/>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <p className="text-xs font-bold text-gray-500 uppercase">Escolher Modelo / Preset</p>
                                             <select 
                                                 onChange={(e) => handleApplyPreset(e.target.value)}
-                                                className="bg-gray-800 border border-gray-600 text-[10px] p-1 rounded outline-none"
+                                                className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500"
                                             >
+                                                <option value="">Selecione um Preset para autopreencher...</option>
                                                 {API_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
                                             </select>
                                         </div>
                                     </div>
 
-                                    <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Nome da Fonte (Ex: Sympla / Portaria)" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500 transition-all"/>
-                                    <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL da API ou Link CSV do Google Sheets" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500 transition-all"/>
+                                    <div className="space-y-2">
+                                        <p className="text-[10px] font-bold text-gray-600 uppercase">Endpoint / URL da API</p>
+                                        <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL Completa do Recurso" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500 transition-all"/>
+                                    </div>
                                     
                                     <div className="grid grid-cols-2 gap-3">
-                                        <input value={editSource.token} onChange={e => setEditSource({...editSource, token: e.target.value})} placeholder="Token (Bearer)" className="bg-gray-800 border border-gray-700 p-3 rounded-xl text-xs outline-none focus:border-blue-500 transition-all"/>
-                                        <input value={editSource.eventId} onChange={e => setEditSource({...editSource, eventId: e.target.value})} placeholder="ID do Evento na API" className="bg-gray-800 border border-gray-700 p-3 rounded-xl text-xs outline-none focus:border-blue-500 transition-all"/>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-bold text-gray-600 uppercase">Chave de Autorização</p>
+                                            <input value={editSource.token} onChange={e => setEditSource({...editSource, token: e.target.value})} placeholder="Bearer Token" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-xs outline-none focus:border-blue-500 transition-all"/>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-bold text-gray-600 uppercase">ID Externo</p>
+                                            <input value={editSource.eventId} onChange={e => setEditSource({...editSource, eventId: e.target.value})} placeholder="ID do Evento na Origem" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-xs outline-none focus:border-blue-500 transition-all"/>
+                                        </div>
                                     </div>
 
-                                    <div className="flex items-center justify-between p-2 bg-gray-800/50 rounded-xl border border-gray-700">
+                                    <div className="flex flex-col md:flex-row items-center justify-between p-3 bg-gray-800/50 rounded-xl border border-gray-700 gap-4">
                                         <label className="flex items-center space-x-2 text-xs font-bold text-gray-400 cursor-pointer px-2">
                                             <input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="w-4 h-4 text-blue-500 rounded"/>
-                                            <span>Sincronização Automática (10 min)</span>
+                                            <span>Auto-Sincronização (10 min)</span>
                                         </label>
-                                        <select value={editSource.type} onChange={e => setEditSource({...editSource, type: e.target.value as ImportType})} className="bg-gray-900 border border-gray-700 text-[10px] p-2 rounded-lg outline-none">
-                                            <option value="tickets">Ingressos (Geral)</option>
-                                            <option value="google_sheets">Google Sheets</option>
-                                            <option value="participants">Participantes</option>
-                                        </select>
+                                        <div className="flex items-center gap-3 w-full md:w-auto">
+                                            <span className="text-[10px] font-bold text-gray-500 uppercase">Formato:</span>
+                                            <select value={editSource.type} onChange={e => setEditSource({...editSource, type: e.target.value as ImportType})} className="flex-1 md:flex-none bg-gray-900 border border-gray-700 text-xs p-2 rounded-lg outline-none font-bold text-blue-400">
+                                                <option value="tickets">Ingressos (Geral)</option>
+                                                <option value="google_sheets">Google Sheets (CSV)</option>
+                                                <option value="participants">Participantes</option>
+                                                <option value="checkins">Base de Check-ins</option>
+                                            </select>
+                                        </div>
                                     </div>
 
                                     <div className="flex gap-2 pt-2">
-                                        <button onClick={handleSaveEditSource} className="flex-1 bg-blue-600 hover:bg-blue-700 py-3 rounded-xl font-bold text-sm shadow-lg transition-all">Salvar API</button>
-                                        {activeSourceId !== 'new' && <button onClick={() => { setActiveSourceId('new'); setEditSource({name:'', url:'', token:'', type:'tickets', autoImport:false}); }} className="bg-gray-700 px-4 rounded-xl text-xs font-bold border border-gray-600">Cancelar</button>}
+                                        <button onClick={handleSaveEditSource} className="flex-1 bg-blue-600 hover:bg-blue-700 py-3 rounded-xl font-bold text-sm shadow-lg transition-all active:scale-95">Salvar Configuração</button>
+                                        {activeSourceId !== 'new' && <button onClick={() => { setActiveSourceId('new'); setEditSource({name:'', url:'', token:'', type:'tickets', autoImport:false}); }} className="bg-gray-700 px-4 rounded-xl text-xs font-bold border border-gray-600">Limpar</button>}
                                     </div>
                                 </div>
 

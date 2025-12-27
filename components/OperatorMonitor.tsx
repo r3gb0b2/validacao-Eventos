@@ -62,17 +62,17 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
       s.timeline[hour] = (s.timeline[hour] || 0) + 1;
     });
 
-    return Object.values(operatorMap).sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
+    return Object.values(operatorMap).sort((a, b) => (Number(b.valid) || 0) - (Number(a.valid) || 0));
   }, [scanHistory]);
 
   const totalScans = scanHistory.length;
+  const totalValid = useMemo(() => stats.reduce((acc, curr) => acc + curr.valid, 0), [stats]);
   const activeNowCount = stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
 
   return (
     <div className={`${isEmbedded ? 'p-6' : 'min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20'}`}>
       <div className={`w-full ${isEmbedded ? '' : 'max-w-7xl mx-auto space-y-8'}`}>
         
-        {/* Header - Only show if NOT embedded or always show for consistency */}
         {!isEmbedded && (
             <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-2xl mb-8">
               <div className="flex items-center space-x-4">
@@ -101,20 +101,20 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
         {/* Dash de Resumo */}
         <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ${isEmbedded ? 'mb-8' : ''}`}>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Total de Operadores</p>
-            <p className="text-4xl font-black text-white">{stats.length}</p>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Check-ins Válidos</p>
+            <p className="text-4xl font-black text-green-400">{totalValid}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Trabalhando Agora</p>
-            <p className="text-4xl font-black text-green-400">{activeNowCount}</p>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Operadores Online</p>
+            <p className="text-4xl font-black text-white">{activeNowCount}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Volume Total</p>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Tentativas Totais</p>
             <p className="text-4xl font-black text-blue-400">{totalScans}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Média p/ Operador</p>
-            <p className="text-4xl font-black text-orange-400">{stats.length > 0 ? (totalScans / stats.length).toFixed(0) : 0}</p>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Erros / Recusados</p>
+            <p className="text-4xl font-black text-red-500">{totalScans - totalValid}</p>
           </div>
         </div>
 
@@ -146,9 +146,20 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                     </div>
                   </div>
 
+                  <div className="flex items-center justify-between bg-gray-900/80 p-3 rounded-xl border border-gray-700 shadow-inner">
+                    <div className="text-center flex-1 border-r border-gray-700">
+                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Check-ins</p>
+                      <p className="text-xl font-black text-green-400">{op.valid}</p>
+                    </div>
+                    <div className="text-center flex-1">
+                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Total Geral</p>
+                      <p className="text-xl font-black text-white">{op.total}</p>
+                    </div>
+                  </div>
+
                   <div className="space-y-3 pt-2">
                     <div className="flex justify-between items-end">
-                      <p className="text-[10px] font-black text-gray-500 uppercase">Taxa de Sucesso</p>
+                      <p className="text-[10px] font-black text-gray-500 uppercase">Qualidade da Operação</p>
                       <p className="text-sm font-black text-green-400">{successRate}%</p>
                     </div>
                     <div className="w-full bg-gray-900 h-2 rounded-full overflow-hidden flex">
@@ -174,7 +185,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                   </div>
 
                   <div className="pt-4 border-t border-gray-700 flex justify-between items-center text-[10px] font-bold">
-                    <span className="text-gray-500 uppercase">Setor Principal:</span>
+                    <span className="text-gray-500 uppercase">Portaria / Setor Principal:</span>
                     <span className="text-gray-300">{topSector}</span>
                   </div>
                 </div>
@@ -190,9 +201,70 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
             </div>
           )}
         </div>
+
+        {/* Resumo de Produtividade em Tabela (Ranking) */}
+        {stats.length > 0 && (
+            <div className="mt-12 bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl overflow-hidden">
+                <div className="bg-gray-700/50 p-6 border-b border-gray-700 flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                        <TableCellsIcon className="w-6 h-6 text-orange-500" />
+                        <h2 className="text-xl font-bold">Resumo de Produtividade</h2>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-gray-900/50 text-gray-400 text-xs uppercase font-black tracking-widest">
+                            <tr>
+                                <th className="px-6 py-4">Operador / Portaria</th>
+                                <th className="px-6 py-4 text-center">Check-ins Válidos</th>
+                                <th className="px-6 py-4 text-center">Total de Scans</th>
+                                <th className="px-6 py-4 text-center">% de Erros</th>
+                                <th className="px-6 py-4 text-right">Última Atividade</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-700">
+                            {stats.map((op, idx) => (
+                                <tr key={op.name} className="hover:bg-gray-700/30 transition-colors">
+                                    <td className="px-6 py-4 font-bold flex items-center gap-3">
+                                        <span className="text-xs text-gray-600 font-mono">#{idx+1}</span>
+                                        {op.name}
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        <span className="bg-green-500/10 text-green-400 px-3 py-1 rounded-full font-black border border-green-500/20">
+                                            {op.valid}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-center font-medium text-gray-300">
+                                        {op.total}
+                                    </td>
+                                    <td className="px-6 py-4 text-center">
+                                        <span className="text-red-400 font-bold">
+                                            {(((op.total - op.valid) / op.total) * 100).toFixed(1)}%
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 text-right text-xs text-gray-500 font-mono">
+                                        {new Date(op.lastSeen).toLocaleTimeString()}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                        <tfoot className="bg-gray-900/80 font-black text-white">
+                            <tr>
+                                <td className="px-6 py-4 uppercase">Total do Evento</td>
+                                <td className="px-6 py-4 text-center text-green-400 text-lg">{totalValid}</td>
+                                <td className="px-6 py-4 text-center text-blue-400 text-lg">{totalScans}</td>
+                                <td className="px-6 py-4 text-center text-red-400">
+                                    {(((totalScans - totalValid) / totalScans) * 100).toFixed(1)}%
+                                </td>
+                                <td className="px-6 py-4"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        )}
       </div>
       
-      {/* Botão Flutuante Voltar - Only show if NOT embedded */}
       {!isEmbedded && (
           <button 
             onClick={() => window.location.href = window.location.pathname}
