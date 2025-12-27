@@ -6,47 +6,45 @@ import { TableCellsIcon, FunnelIcon, PlusCircleIcon, TrashIcon, CogIcon } from '
 interface StatsProps {
   allTickets: Ticket[];
   sectorNames: string[];
-  // New props for controlled mode
+  hiddenSectors?: string[]; // Propriedade para identificar setores desativados
   viewMode: 'raw' | 'grouped';
   onViewModeChange?: (mode: 'raw' | 'grouped') => void;
   groups: SectorGroup[];
   onGroupsChange?: (groups: SectorGroup[]) => void;
-  isReadOnly?: boolean; // If true, hides controls
+  isReadOnly?: boolean; 
 }
 
 const Stats: React.FC<StatsProps> = ({ 
     allTickets = [], 
     sectorNames = [], 
+    hiddenSectors = [],
     viewMode, 
     onViewModeChange, 
     groups = [], 
     onGroupsChange,
     isReadOnly = false 
 }) => {
-    // --- LOCAL STATE (UI Only) ---
     const [isConfiguringGroups, setIsConfiguringGroups] = useState(false);
-    
-    // Config Form State
     const [newGroupName, setNewGroupName] = useState('');
     const [newGroupSectors, setNewGroupSectors] = useState<string[]>([]);
-
-    // Filter State (UI Only)
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const filterRef = useRef<HTMLDivElement>(null);
 
-    // Safety wrappers for rendering
-    const safeSectorNames = Array.isArray(sectorNames) ? sectorNames : [];
+    // Filtra os nomes dos setores que não estão ocultos
+    const visibleSectorNames = useMemo(() => {
+        return (sectorNames || []).filter(name => !hiddenSectors.includes(name));
+    }, [sectorNames, hiddenSectors]);
+
     const safeGroups = Array.isArray(groups) ? groups : [];
 
-    // Initialize selected sectors when sectorNames changes
+    // Inicializa os setores selecionados apenas com os visíveis
     useEffect(() => {
-        if (Array.isArray(sectorNames) && sectorNames.length > 0) {
-            setSelectedSectors(sectorNames);
+        if (visibleSectorNames.length > 0) {
+            setSelectedSectors(visibleSectorNames);
         }
-    }, [sectorNames]);
+    }, [visibleSectorNames]);
 
-    // Close filter dropdown on outside click
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
@@ -57,10 +55,8 @@ const Stats: React.FC<StatsProps> = ({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // --- HELPERS ---
     const normalize = (s: string) => (s || '').trim().toLowerCase();
 
-    // Toggle a sector in the filter
     const toggleSectorFilter = (sector: string) => {
         if (selectedSectors.includes(sector)) {
              setSelectedSectors(selectedSectors.filter(s => s !== sector));
@@ -69,38 +65,24 @@ const Stats: React.FC<StatsProps> = ({
         }
     };
     
-    const handleSelectAll = () => setSelectedSectors(safeSectorNames);
+    const handleSelectAll = () => setSelectedSectors(visibleSectorNames);
     const handleClearAll = () => setSelectedSectors([]);
 
-    // --- GROUP MANAGEMENT ---
     const handleAddGroup = () => {
-        if (!newGroupName.trim()) {
-            alert("Digite um nome para o grupo.");
-            return;
-        }
-        if (newGroupSectors.length === 0) {
-            alert("Selecione pelo menos um setor para o grupo.");
-            return;
-        }
-        
+        if (!newGroupName.trim() || newGroupSectors.length === 0) return;
         const newGroup: SectorGroup = {
             id: Date.now().toString(),
             name: newGroupName.trim(),
             includedSectors: newGroupSectors
         };
-
-        if (onGroupsChange) {
-            onGroupsChange([...safeGroups, newGroup]);
-        }
+        if (onGroupsChange) onGroupsChange([...safeGroups, newGroup]);
         setNewGroupName('');
         setNewGroupSectors([]);
     };
 
     const handleDeleteGroup = (id: string) => {
-        if (confirm("Excluir este grupo?")) {
-            if (onGroupsChange) {
-                onGroupsChange(safeGroups.filter(g => g.id !== id));
-            }
+        if (confirm("Excluir este grupo?") && onGroupsChange) {
+            onGroupsChange(safeGroups.filter(g => g.id !== id));
         }
     };
 
@@ -112,85 +94,79 @@ const Stats: React.FC<StatsProps> = ({
         }
     };
 
-    // --- STATS CALCULATION ---
+    // --- CÁLCULOS FILTRANDO SETORES OCULTOS ---
 
-    // 1. Calculate General Stats (KPIs) based on SELECTED filters
     const generalStats = useMemo(() => {
         try {
             if (!Array.isArray(allTickets)) return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
             
-            // Base tickets for calculation based on selected sectors
             const filteredTicketsBySelection = allTickets.filter(t => {
                 if (!t || !t.sector) return false;
                 const ticketSectorNorm = normalize(t.sector);
+                // IMPORTANTE: Só conta se o setor for visível E estiver selecionado no filtro
                 return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
             });
 
-            // TOTAL: Não conta localizadores AVAILABLE. Conta apenas se source != locator OU status == USED
             const total = filteredTicketsBySelection.filter(t => 
                 t.status !== 'STANDBY' && 
                 (t.source !== 'manual_locator' || t.status === 'USED')
             ).length;
 
-            // SCANNED: Conta todos os validados
             const scanned = filteredTicketsBySelection.filter(t => t.status === 'USED').length;
-
             const remaining = Math.max(0, total - scanned);
             const percentage = total > 0 ? ((scanned / total) * 100).toFixed(1) : '0.0';
             
             return { total, scanned, remaining, percentage };
-
         } catch (e) {
-            console.error("General Stats Calc Error", e);
             return { total: 0, scanned: 0, remaining: 0, percentage: '0.0' };
         }
     }, [allTickets, selectedSectors]);
 
-    // 2. Calculate Table Data (Rows)
     const tableData = useMemo(() => {
         try {
             const statsMap: Record<string, { total: number; scanned: number; displayName: string; isGroup?: boolean; subSectors?: string[] }> = {};
             const handledSectors = new Set<string>();
             const safeAllTickets = Array.isArray(allTickets) ? allTickets : [];
             
-            // If Grouped Mode is ON
             if (viewMode === 'grouped') {
                 safeGroups.forEach(group => {
                     if (!group || !Array.isArray(group.includedSectors)) return;
+                    
+                    // Só processa o grupo se ele contiver algum setor que não esteja oculto
+                    const visibleGroupSectors = group.includedSectors.filter(s => !hiddenSectors.includes(s));
+                    if (visibleGroupSectors.length === 0) return;
+
                     let groupTotal = 0;
                     let groupScanned = 0;
                     
                     safeAllTickets.forEach(ticket => {
                         if (!ticket) return;
                         const tSector = normalize(ticket.sector || 'Desconhecido');
-                        const isInGroup = group.includedSectors.some(s => normalize(s) === tSector);
+                        const isInGroup = visibleGroupSectors.some(s => normalize(s) === tSector);
                         
                         if (isInGroup) {
-                            // Regra: source manual_locator disponível não conta no total do grupo
                             if (ticket.status !== 'STANDBY' && (ticket.source !== 'manual_locator' || ticket.status === 'USED')) {
                                 groupTotal++;
                             }
-                            if (ticket.status === 'USED') {
-                                groupScanned++;
-                            }
+                            if (ticket.status === 'USED') groupScanned++;
                         }
                     });
 
-                    group.includedSectors.forEach(s => handledSectors.add(normalize(s)));
+                    visibleGroupSectors.forEach(s => handledSectors.add(normalize(s)));
 
                     statsMap[`group_${group.id}`] = {
                         total: groupTotal,
                         scanned: groupScanned,
                         displayName: group.name,
                         isGroup: true,
-                        subSectors: group.includedSectors
+                        subSectors: visibleGroupSectors
                     };
                 });
             }
 
             const sectorsToProcess = viewMode === 'raw' 
-                ? safeSectorNames 
-                : safeSectorNames.filter(s => !handledSectors.has(normalize(s)));
+                ? visibleSectorNames 
+                : visibleSectorNames.filter(s => !handledSectors.has(normalize(s)));
 
             sectorsToProcess.forEach(sectorName => {
                  if (!selectedSectors.includes(sectorName)) return;
@@ -200,13 +176,10 @@ const Stats: React.FC<StatsProps> = ({
 
                  safeAllTickets.forEach(ticket => {
                      if (ticket && normalize(ticket.sector) === normalize(sectorName)) {
-                         // Regra: source manual_locator disponível não conta no total do setor
                          if (ticket.status !== 'STANDBY' && (ticket.source !== 'manual_locator' || ticket.status === 'USED')) {
                              total++;
                          }
-                         if (ticket.status === 'USED') {
-                             scanned++;
-                         }
+                         if (ticket.status === 'USED') scanned++;
                      }
                  });
 
@@ -219,7 +192,6 @@ const Stats: React.FC<StatsProps> = ({
             });
             
             let result = Object.values(statsMap);
-            
             result.sort((a, b) => {
                 if (a.isGroup && !b.isGroup) return -1;
                 if (!a.isGroup && b.isGroup) return 1;
@@ -228,15 +200,12 @@ const Stats: React.FC<StatsProps> = ({
 
             return result;
         } catch (e) {
-            console.error("Table Stats Calc Error", e);
             return [];
         }
-
-    }, [allTickets, safeSectorNames, viewMode, safeGroups, selectedSectors]);
+    }, [allTickets, visibleSectorNames, hiddenSectors, viewMode, safeGroups, selectedSectors]);
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-gray-800 p-4 rounded-lg border-l-4 border-blue-500 shadow-md">
               <p className="text-gray-400 text-sm font-medium uppercase">Total de Ingressos</p>
@@ -259,7 +228,6 @@ const Stats: React.FC<StatsProps> = ({
           </div>
       </div>
 
-      {/* Controls & Configuration */}
       <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <div className="flex items-center space-x-2">
@@ -301,7 +269,7 @@ const Stats: React.FC<StatsProps> = ({
                         <button 
                             onClick={() => setIsFilterOpen(!isFilterOpen)}
                             className={`flex items-center px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${
-                                selectedSectors.length < safeSectorNames.length 
+                                selectedSectors.length < visibleSectorNames.length 
                                 ? 'bg-blue-600 text-white border-blue-500' 
                                 : 'bg-gray-800 text-gray-300 border-gray-600 hover:border-gray-500'
                             }`}
@@ -312,11 +280,11 @@ const Stats: React.FC<StatsProps> = ({
                          {isFilterOpen && (
                             <div className="absolute right-0 mt-2 w-64 bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 p-2">
                                 <div className="flex justify-between mb-2 pb-2 border-b border-gray-700">
-                                    <button onClick={handleSelectAll} className="text-xs text-blue-400 hover:text-blue-300">Todos</button>
+                                    <button onClick={handleSelectAll} className="text-xs text-blue-400 hover:text-blue-300">Todos Visíveis</button>
                                     <button onClick={handleClearAll} className="text-xs text-red-400 hover:text-red-300">Nenhum</button>
                                 </div>
                                 <div className="max-h-60 overflow-y-auto custom-scrollbar space-y-1">
-                                    {safeSectorNames.map(sector => (
+                                    {visibleSectorNames.map(sector => (
                                         <label key={sector} className="flex items-center p-2 rounded hover:bg-gray-700 cursor-pointer">
                                             <input 
                                                 type="checkbox" 
@@ -350,9 +318,9 @@ const Stats: React.FC<StatsProps> = ({
                             />
                         </div>
                         <div className="flex-[2]">
-                            <label className="text-xs text-gray-400 mb-1 block">Setores do grupo:</label>
+                            <label className="text-xs text-gray-400 mb-1 block">Setores do grupo (apenas visíveis):</label>
                             <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-gray-900 rounded border border-gray-600">
-                                {safeSectorNames.map(sector => (
+                                {visibleSectorNames.map(sector => (
                                     <label key={sector} className="inline-flex items-center bg-gray-800 px-2 py-1 rounded cursor-pointer hover:bg-gray-700 border border-gray-700">
                                         <input 
                                             type="checkbox"
@@ -375,38 +343,10 @@ const Stats: React.FC<StatsProps> = ({
                             </button>
                         </div>
                     </div>
-
-                    <div className="border-t border-gray-600 pt-4">
-                        <h5 className="text-sm font-bold text-gray-300 mb-2">Grupos Ativos ({Array.isArray(safeGroups) ? safeGroups.length : 0})</h5>
-                        {(!safeGroups || safeGroups.length === 0) ? (
-                            <p className="text-xs text-gray-500 italic">Nenhum grupo criado ainda.</p>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                {safeGroups.map(group => (
-                                    <div key={group.id} className="bg-gray-800 p-3 rounded border border-gray-600 flex justify-between items-start">
-                                        <div>
-                                            <p className="font-bold text-orange-400 text-sm">{group.name}</p>
-                                            <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-                                                {Array.isArray(group.includedSectors) ? group.includedSectors.join(', ') : 'Sem setores'}
-                                            </p>
-                                        </div>
-                                        <button 
-                                            onClick={() => handleDeleteGroup(group.id)}
-                                            className="text-gray-500 hover:text-red-500 p-1"
-                                            title="Excluir Grupo"
-                                        >
-                                            <TrashIcon className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
                 </div>
             )}
       </div>
 
-      {/* Detailed Table */}
       <div className="bg-gray-800 rounded-lg shadow-md overflow-hidden border border-gray-700 z-10 relative">
           <div className="overflow-x-auto">
               <table className="w-full text-left">
@@ -456,11 +396,6 @@ const Stats: React.FC<StatsProps> = ({
                   </tbody>
               </table>
           </div>
-          {tableData.length === 0 && (
-              <div className="p-6 text-center text-gray-500">
-                  Nenhum setor encontrado para a configuração atual.
-              </div>
-          )}
       </div>
     </div>
   );
