@@ -98,7 +98,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l1Label2, curX, 105); curX += doc.getTextWidth(l1Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l1Val2, curX, 105);
 
-  // --- AJUSTE DE MARGEM E CENTRALIZAÇÃO DO ENDEREÇO (LINHA A LINHA) ---
+  // --- ENDEREÇO CENTRALIZADO COM QUEBRA DE LINHA ---
   const addrFontSize = 12.5;
   doc.setFontSize(addrFontSize);
   const addrValue = details.address || 'Não informado';
@@ -106,24 +106,23 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   // Margem de 10% nas laterais (210 - 42 = 168mm de largura útil)
   const maxWidthAddress = 168; 
 
-  // Rótulo centralizado em sua linha
+  // Rótulo centralizado
   doc.setFont('helvetica', 'normal');
   doc.text('Endereço:', 105, 113, { align: 'center' });
   
-  // Valor centralizado linha a linha
+  // Valor centralizado individualmente por linha
   doc.setFont('helvetica', 'bold');
   const splitAddr = doc.splitTextToSize(addrValue, maxWidthAddress);
   
-  // Desenha cada linha do endereço centralizada
   let currentAddrY = 119;
   splitAddr.forEach((line: string) => {
-    doc.text(line, 105, currentAddrY, { align: 'center' });
-    currentAddrY += 6; // Espaçamento entre linhas do endereço
+    doc.text(line.trim(), 105, currentAddrY, { align: 'center' });
+    currentAddrY += 6; 
   });
   
   doc.setFontSize(headerFontSize);
-  // O produtor desce dinamicamente conforme o número de linhas do endereço
-  const prodY = currentAddrY - 1; 
+  // O produtor desce dinamicamente
+  const prodY = Math.max(126, currentAddrY - 1); 
   const l3Label1 = 'Produzido: ';
   const l3Val1 = details.producer || 'Organização';
   const l3Label2 = '   Contato: ';
@@ -191,7 +190,9 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFontSize(13);
   doc.setLineHeightFactor(1.4);
   const infoText = `Você está recebendo apenas um ingresso da compra ${purchaseCode}. Este ingresso estará sujeito a cancelamentos, ou mudanças por parte do comprador. No dia do evento, documentos de identificação pessoal e da compra poderão ser exigidos na entrada do evento. Lembre-se que a forma mais segura de você comprar ingressos é diretamente na nossa plataforma.\nCaso essa compra fira nossos termos de uso ou a legislação vigente, você poderá ser responsabilizado. Qualquer dúvida leia nossos termos de uso ou entre em contato conosco.`;
-  doc.text(infoText, 15, 48, { maxWidth: 180, align: 'justify' });
+  
+  // Margem de segurança para o texto não vazar: 175mm largura
+  doc.text(infoText, 17.5, 48, { maxWidth: 175, align: 'justify' });
 
   // Termos de Uso em CINZA e NORMAL
   doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
@@ -200,14 +201,19 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setLineHeightFactor(1.2);
   const terms = `A SeuTickets emitiu este ingresso por força de contrato de prestação de serviço celebrado com o promotor do evento. O mesmo é o único responsável pela realização, cancelamento ou adiamento do evento e/ou espetáculo, bem como pela restituição do valor do ingresso. Seu ingresso e as informações nele contidas são de sua responsabilidade. Não compartilhe fotos nem informações sobre ele com outras pessoas. Qualquer uso por outra pessoa do seu ingresso não será de responsabilidade da SeuTickets. Este ingresso possui itens de segurança e estará sujeito à verificação na portaria do evento. O código de barras contido neste ingresso é único e não se repete, garantindo acesso apenas uma única vez ao evento. A organização do evento reserva-se o direito de solicitar um documento com foto e o cartão utilizado na compra na entrada do evento. Este evento poderá ser gerado, filmado ou fotografado. Ao participar do evento, o portador deste ingresso concorda e autoriza a utilização gratuita de sua imagem por prazo indeterminado. Meia entrada: é obrigatório a apresentação de documento que comprove o direito do benefício, juntamente com a carteira de identidade, na compra do ingresso e na entrada do evento. Caso exista suspeita de fraude no seu ingresso o mesmo poderá ser cancelado por livre iniciativa da SeuTickets. Por isso, sempre compre seu ingresso por meio de um canal oficial da SeuTickets ou do produtor do evento. Caso seu ingresso seja cancelado o valor será automaticamente estornado para o cartão que realizou a compra do ingresso. Caso a compra tenha sido feita via boleto, entre em contato com o nosso suporte para depósito em conta. A SeuTickets não se responsabiliza por ingressos adquiridos fora dos pontos de venda oficiais ou internet. É de suma importância que você conheça os termos de uso da plataforma disponíveis em https://www.stingressos.com.br/termos`;
   
-  const splitTerms = doc.splitTextToSize(terms, 180);
+  const termsX = 17.5;
   const termsY = 115;
-  doc.text(splitTerms, 15, termsY, { align: 'justify' });
+  const termsMaxWidth = 175;
+  
+  // Imprime os termos respeitando a largura máxima para não vazar das margens
+  doc.text(terms, termsX, termsY, { maxWidth: termsMaxWidth, align: 'justify' });
 
-  // --- CONTORNO DINÂMICO (COR VERMELHA) ---
-  // Calcula a altura final do texto dos termos para fechar o contorno
-  const termsHeight = splitTerms.length * (9.5 * 0.35 * 1.2); // ajuste aproximado de altura de linha em mm
-  const finalBoxHeight = (termsY + termsHeight - 10) + 10; // Fim do texto + margem inferior
+  // --- CONTORNO DINÂMICO ---
+  // Calcula a altura aproximada baseada no split para fechar a caixa
+  const splitTerms = doc.splitTextToSize(terms, termsMaxWidth);
+  const termsLineHeight = (9.5 * 1.2 * 0.3527); // Converte fontSize * lineHeight para mm
+  const totalTermsHeight = splitTerms.length * termsLineHeight;
+  const finalBoxHeight = (termsY + totalTermsHeight - 10) + 10; 
 
   doc.setDrawColor(redAlert[0], redAlert[1], redAlert[2]); 
   doc.setLineWidth(0.4);
