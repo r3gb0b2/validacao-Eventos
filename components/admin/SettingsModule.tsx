@@ -111,89 +111,78 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                 
-                // Construção da URL inicial forçando 100 itens por página
-                let initialRequestUrl = `${baseUrl}/${endpoint}`;
-                const urlObj = new URL(initialRequestUrl, window.location.origin);
-                
-                if (source.externalEventId) {
-                    urlObj.searchParams.set('event_id', source.externalEventId);
-                }
-                urlObj.searchParams.set('per_page', '100');
-                
-                let nextUrl: string | null = urlObj.toString();
-                let pageCount = 0;
+                // LÓGICA DE PAGINAÇÃO POR CONTADOR MANUAL (A que funcionava anteriormente)
+                let currentPage = 1;
+                let hasMorePages = true;
 
-                while (nextUrl) {
-                    pageCount++;
-                    console.log(`Buscando Página ${pageCount}: ${nextUrl}`);
+                while (hasMorePages) {
+                    console.log(`Solicitando página ${currentPage}...`);
                     
-                    const res = await fetch(nextUrl, { headers, mode: 'cors' });
+                    const urlObj = new URL(`${baseUrl}/${endpoint}`, window.location.origin);
+                    urlObj.searchParams.set('page', String(currentPage));
+                    urlObj.searchParams.set('per_page', '100'); // Solicita 100 por vez para ser eficiente
+                    
+                    if (source.externalEventId) {
+                        urlObj.searchParams.set('event_id', source.externalEventId);
+                    }
+                    
+                    const res = await fetch(urlObj.toString(), { headers, mode: 'cors' });
                     
                     if (!res.ok) {
-                        const errText = await res.text();
-                        // Tenta fallback para ID no Path se o primeiro falhar com 404
-                        if (res.status === 404 && pageCount === 1 && source.externalEventId) {
+                        // Fallback para ID no Path se o primeiro falhar com 404 (comum em algumas rotas da ST)
+                        if (res.status === 404 && currentPage === 1 && source.externalEventId) {
                             const fallbackPath = `${baseUrl}/${endpoint}/${source.externalEventId}?per_page=100`;
-                            console.log("Tentando Fallback Path:", fallbackPath);
                             const resFallback = await fetch(fallbackPath, { headers, mode: 'cors' });
                             if (resFallback.ok) {
                                 const jsonFallback = await resFallback.json();
-                                processPageData(jsonFallback);
+                                processPageItems(jsonFallback);
+                                hasMorePages = false; // Geralmente rotas de ID direto não paginam
                                 break;
                             }
                         }
-                        throw new Error(`Erro na API: ${res.status} - ${errText || res.statusText}`);
+                        throw new Error(`Erro na API Página ${currentPage}: ${res.status}`);
                     }
 
                     const json = await res.json();
-                    
-                    // Processa os dados da página atual
-                    processPageData(json);
-
-                    // LÓGICA DE PRÓXIMA PÁGINA
-                    let foundNext = json.links?.next || json.next_page_url || json.pagination?.next_page_url || null;
-                    
-                    // Se o link de próxima página for um objeto (comum em algumas APIs)
-                    if (foundNext && typeof foundNext !== 'string') {
-                        foundNext = foundNext.url || null;
-                    }
-
-                    // Se não encontrou link direto, mas existem metadados, calcula a URL manual
-                    if (!foundNext) {
-                        const meta = json.meta || json.pagination || {};
-                        const current = Number(meta.current_page || meta.page || 0);
-                        const last = Number(meta.last_page || meta.total_pages || 0);
-                        
-                        if (current > 0 && last > 0 && current < last) {
-                            const nextUrlObj = new URL(nextUrl, window.location.origin);
-                            nextUrlObj.searchParams.set('page', (current + 1).toString());
-                            foundNext = nextUrlObj.toString();
-                        }
-                    }
-
-                    nextUrl = foundNext;
-                    if (pageCount > 500) break; // Segurança
-                }
-
-                function processPageData(json: any) {
                     const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
                     
-                    if (!items || !Array.isArray(items)) return;
+                    if (!items || items.length === 0) {
+                        hasMorePages = false;
+                        break;
+                    }
+
+                    processPageItems(json);
+
+                    // Verifica se chegamos na última página informada pela API
+                    const lastPage = json.last_page || json.meta?.last_page || json.pagination?.total_pages || 0;
+                    if (lastPage > 0 && currentPage >= lastPage) {
+                        hasMorePages = false;
+                    } else {
+                        currentPage++;
+                    }
+
+                    // Segurança contra loops infinitos
+                    if (currentPage > 500) hasMorePages = false;
+                }
+
+                function processPageItems(json: any) {
+                    const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
+                    if (!Array.isArray(items)) return;
 
                     items.forEach((item: any) => {
                         totalItemsFoundInApi++;
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
                         if (!code) return;
 
-                        // Mapeamento de Setor
-                        let rawSector = 'Geral';
-                        if (typeof item.sector_name === 'string') rawSector = item.sector_name;
-                        else if (item.category && typeof item.category.name === 'string') rawSector = item.category.name;
-                        else if (typeof item.category === 'string') rawSector = item.category;
-                        else if (typeof item.sector === 'string') rawSector = item.sector;
-                        else if (item.ticket_type && typeof item.ticket_type.name === 'string') rawSector = item.ticket_type.name;
+                        // Mapeamento resiliente de setores
+                        let sector = 'Geral';
+                        if (item.sector_name) sector = item.sector_name;
+                        else if (item.category?.name) sector = item.category.name;
+                        else if (item.category) sector = item.category;
+                        else if (item.sector) sector = item.sector;
+                        else if (item.ticket_type?.name) sector = item.ticket_type.name;
                         
-                        const sector = rawSector.trim() || 'Geral';
+                        sector = String(sector).trim();
                         discoveredSectors.add(sector);
 
                         const existing = existingTicketsMap.get(code);
@@ -210,7 +199,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 source: 'api_import',
                                 details: { 
                                     ownerName: String(item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado'),
-                                    originalId: item.id ?? null
+                                    originalId: item.id || null
                                 }
                             });
                         } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
@@ -225,14 +214,13 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            // Atualizar lista de setores no Firestore se houver novos
+            // Atualiza setores se novos foram encontrados
             const newSectorList = Array.from(discoveredSectors).sort();
-            const sectorsChanged = JSON.stringify(newSectorList) !== JSON.stringify(sectorNames);
-            if (sectorsChanged) {
+            if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
             }
 
-            // Salvar no Firestore em lotes de 450
+            // Salva no Firestore em lotes
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
@@ -245,13 +233,12 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            // Alerta de sucesso detalhado como solicitado
             alert(
-                `Importação Concluída!\n\n` +
-                `• Ingressos localizados na API: ${totalItemsFoundInApi}\n` +
-                `• Novos adicionados: ${newItemsAdded}\n` +
-                `• Atualizados para 'Usado': ${updatedItems}\n` +
-                `• Setores mapeados: ${discoveredSectors.size}`
+                `Sincronização Concluída!\n\n` +
+                `• Ingressos na API: ${totalItemsFoundInApi}\n` +
+                `• Novos Importados: ${newItemsAdded}\n` +
+                `• Marcados como Usados: ${updatedItems}\n` +
+                `• Setores Identificados: ${discoveredSectors.size}`
             );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
@@ -259,7 +246,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
-            alert(`Falha na Importação:\n${e.message}\n\nVerifique o Token e o ID do evento.`);
+            alert(`Falha na Importação:\n${e.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -454,8 +441,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 <AlertTriangleIcon className="w-8 h-8 text-blue-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
                     <p className="font-bold text-blue-400 uppercase tracking-widest">Dica de Importação:</p>
-                    <p>• O sistema agora percorre todas as páginas da API automaticamente.</p>
-                    <p>• Setores encontrados na API são cadastrados automaticamente.</p>
+                    <p>• O sistema percorre todas as páginas da API solicitando blocos de 100 registros.</p>
+                    <p>• A importação para automaticamente ao detectar o fim dos dados.</p>
                 </div>
             </div>
         </div>
