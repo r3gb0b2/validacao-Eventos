@@ -19,6 +19,7 @@ interface SettingsModuleProps {
 }
 
 const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sectorNames, hiddenSectors, importSources, onUpdateSectorNames, onUpdateImportSources, isLoading, setIsLoading, allTickets }) => {
+    const [importProgress, setImportProgress] = useState<string>('');
     const [editSource, setEditSource] = useState<Partial<ImportSource>>({ 
         name: '', 
         url: 'https://public-api.stingressos.com.br', 
@@ -60,6 +61,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
+        setImportProgress('Iniciando...');
         let totalItemsFoundInApi = 0;
         let newItemsAdded = 0;
         let updatedItems = 0;
@@ -81,6 +83,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             }
 
             if (source.type === 'google_sheets') {
+                setImportProgress('Baixando planilha...');
                 if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                 const res = await fetch(fetchUrl);
                 const csvText = await res.text();
@@ -115,6 +118,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 let hasMorePages = true;
 
                 while (hasMorePages) {
+                    setImportProgress(`Processando página ${currentPage}...`);
                     console.log(`Solicitando página ${currentPage}...`);
                     
                     const urlObj = new URL(`${baseUrl}/${endpoint}`, window.location.origin);
@@ -127,7 +131,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     
                     const res = await fetch(urlObj.toString(), { headers, mode: 'cors' });
                     
-                    // TRATAMENTO DE ERRO 404: Se falhar após a página 1, assumimos que os dados acabaram.
                     if (!res.ok) {
                         if (res.status === 404 && currentPage > 1) {
                             console.log("Fim da lista alcançado (404 na página seguinte).");
@@ -135,7 +138,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             break;
                         }
                         
-                        // Fallback apenas para a primeira tentativa
                         if (res.status === 404 && currentPage === 1 && source.externalEventId) {
                             const fallbackPath = `${baseUrl}/${endpoint}/${source.externalEventId}?per_page=100`;
                             const resFallback = await fetch(fallbackPath, { headers, mode: 'cors' });
@@ -163,7 +165,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
                     processPageItems(json);
 
-                    // Verifica se chegamos na última página informada pela API
                     const lastPage = json.last_page || json.meta?.last_page || json.pagination?.total_pages || 0;
                     if (lastPage > 0 && currentPage >= lastPage) {
                         hasMorePages = false;
@@ -222,16 +223,16 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            // Atualiza setores no Firebase para que apareçam no Dashboard
+            setImportProgress('Salvando no banco...');
             const newSectorList = Array.from(discoveredSectors).sort();
             if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
             }
 
-            // Salva no Firestore em lotes mesmo que tenha havido erro de 404 em páginas futuras
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
+                    setImportProgress(`Gravando lote ${Math.floor(i / BATCH_SIZE) + 1}...`);
                     const chunk = allTicketsToSave.slice(i, i + BATCH_SIZE);
                     const batch = writeBatch(db);
                     chunk.forEach(t => {
@@ -241,6 +242,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
+            setImportProgress('');
             alert(
                 `Sincronização Finalizada!\n\n` +
                 `• Ingressos lidos da API: ${totalItemsFoundInApi}\n` +
@@ -254,14 +256,28 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
+            setImportProgress('');
             alert(`Falha Crítica na Importação:\n${e.message}\n\nVerifique se o Token é válido para este evento.`);
         } finally {
             setIsLoading(false);
+            setImportProgress('');
         }
     };
 
     return (
-        <div className="space-y-8 pb-32 animate-fade-in">
+        <div className="space-y-8 pb-32 animate-fade-in relative">
+            {/* Overlay de Progresso */}
+            {isLoading && importProgress && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+                    <div className="bg-gray-800 border border-orange-500/50 p-8 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm w-full text-center">
+                        <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                        <h3 className="text-xl font-bold text-white mb-2">Importação em Curso</h3>
+                        <p className="text-orange-400 font-mono text-sm animate-pulse">{importProgress}</p>
+                        <p className="text-gray-400 text-xs mt-4">Por favor, não feche esta aba até a conclusão.</p>
+                    </div>
+                </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 {/* CONFIGURAÇÃO DE FONTES DE DADOS */}
                 <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-2xl space-y-5">
