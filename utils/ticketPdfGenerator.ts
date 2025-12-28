@@ -25,14 +25,14 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   const ticketCode = forcedCode || generateCode();
   const purchaseCode = generateCode();
   
-  // Nova Cor Solicitada: #506c7b (R: 80, G: 108, B: 123)
-  const primaryColor = [80, 108, 123]; 
-  const labelGray = [140, 140, 140];
+  // Cores Solicitadas
+  const orangeHeader = [254, 85, 29]; // #fe551d
+  const textPrimary = [80, 108, 123]; // #506c7b
 
   // --- PÁGINA 1 ---
   
-  // Fundo com a cor principal no topo
-  doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  // Fundo Laranja do Topo (Corrigido para #fe551d)
+  doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
   // --- LOGO ---
@@ -42,7 +42,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFillColor(255, 255, 255);
   doc.roundedRect(logoX, logoY, 13, 13, 2.5, 2.5, 'F');
   
-  doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.roundedRect(logoX + 3.5, logoY + 3.5, 6, 6, 1, 1, 'F');
   
   doc.setFillColor(255, 255, 255);
@@ -130,30 +130,32 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
 
   // --- ÁREA BRANCA (DADOS COMPACTOS E GORDINHOS) ---
   const startDataY = 155;
-  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold'); // Rótulos agora são bold (gordinhos)
+  doc.setFont('helvetica', 'bold'); 
   doc.text('Ingresso', 15, startDataY);
   doc.text('Participante', 195, startDataY, { align: 'right' });
   
   doc.setFontSize(15);
-  // Reduzi o offset de 8 para 5 para ficarem "bem juntinhos"
+  // Texto do valor logo abaixo do rótulo
   doc.text(details.sector || 'Geral', 15, startDataY + 5.5);
   doc.text(details.ownerName || 'Convidado', 195, startDataY + 5.5, { align: 'right' });
 
-  // Bloco de Códigos
-  const secondDataY = 180; // Subi um pouco a posição Y para manter harmonia
+  // Bloco de Códigos (Ajustado para ficar 40% mais perto da linha acima)
+  // Antes era ~180. Reduzido para 168 para aproximar as linhas de texto.
+  const secondDataY = 169.5; 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.text('Código da Compra', 15, secondDataY);
   doc.text('Código do ingresso', 195, secondDataY, { align: 'right' });
 
-  doc.setFontSize(16); // Aumentei um pouco o tamanho para destacar a fonte gordinha
+  doc.setFontSize(16);
+  // Valor logo abaixo do rótulo
   doc.text(purchaseCode, 15, secondDataY + 5.5);
   doc.text(ticketCode, 195, secondDataY + 5.5, { align: 'right' });
 
-  // Linha separadora antes do QR
-  doc.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  // Linha separadora antes do QR (Corrigida para #506c7b)
+  doc.setDrawColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setLineWidth(0.1);
   doc.setLineDashPattern([1.5, 1], 0);
   doc.line(15, 202, 195, 202);
@@ -171,14 +173,14 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
     img.onerror = () => resolve(false);
   });
 
-  // --- PÁGINA 2 (TERMOS COM A NOVA COR) ---
+  // --- PÁGINA 2 (TERMOS) ---
   doc.addPage();
-  doc.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]); 
+  doc.setDrawColor(textPrimary[0], textPrimary[1], textPrimary[2]); 
   doc.setLineWidth(0.4);
   doc.setLineDashPattern([], 0);
   doc.roundedRect(10, 10, 190, 277, 4, 4);
 
-  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
   doc.text('INFORMAÇÃO IMPORTANTE!', 105, 30, { align: 'center' });
@@ -189,7 +191,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   
   doc.text(infoText, 15, 48, { maxWidth: 180, align: 'justify' });
 
-  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]); // Mudança para cor solicitada também nos termos
+  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFontSize(9.5);
   doc.setFont('helvetica', 'normal');
   doc.setLineHeightFactor(1.2);
