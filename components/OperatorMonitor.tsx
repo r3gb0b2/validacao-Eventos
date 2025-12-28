@@ -1,16 +1,17 @@
 
 import React, { useMemo } from 'react';
-import { DisplayableScanLog, Event } from '../types';
+import { DisplayableScanLog, Event, Ticket } from '../types';
 import { UsersIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, VideoCameraIcon, TableCellsIcon } from './Icons';
 
 interface OperatorMonitorProps {
   event: Event;
+  allTickets: Ticket[];
   scanHistory: DisplayableScanLog[];
   isLoading?: boolean;
-  isEmbedded?: boolean; // New prop to handle embedded view
+  isEmbedded?: boolean; 
 }
 
-const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, isLoading = false, isEmbedded = false }) => {
+const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, scanHistory, isLoading = false, isEmbedded = false }) => {
   
   const stats = useMemo(() => {
     if (!scanHistory || scanHistory.length === 0) return [];
@@ -19,8 +20,8 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
       name: string;
       total: number;
       valid: number;
-      invalid: number; // Não encontrado
-      used: number;    // Repetidos/Duplicados
+      invalid: number; 
+      used: number;    
       wrongSector: number;
       error: number;
       lastSeen: number;
@@ -66,7 +67,12 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
   }, [scanHistory]);
 
   const totalScans = scanHistory.length;
-  const totalValid = useMemo(() => stats.reduce((acc, curr) => acc + curr.valid, 0), [stats]);
+  
+  // Fonte da verdade: Ingressos com status USED no banco
+  const totalValidGlobal = useMemo(() => {
+      return allTickets.filter(t => t.status === 'USED').length;
+  }, [allTickets]);
+
   const activeNowCount = stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
 
   return (
@@ -83,7 +89,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                   <h1 className="text-3xl font-bold text-white tracking-tight">{event.name}</h1>
                   <p className="text-gray-400 text-sm font-medium flex items-center">
                     <UsersIcon className="w-4 h-4 mr-1.5 text-orange-500" />
-                    Monitoramento de Operadores em Tempo Real
+                    Monitoramento de Operadores (Sincronizado)
                   </p>
                 </div>
               </div>
@@ -93,28 +99,28 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
                 </span>
-                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Sincronizado</span>
+                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Tempo Real</span>
               </div>
             </header>
         )}
 
         {/* Dash de Resumo */}
         <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ${isEmbedded ? 'mb-8' : ''}`}>
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Check-ins Válidos</p>
-            <p className="text-4xl font-black text-green-400">{totalValid}</p>
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-green-500">
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total Validado (Banco)</p>
+            <p className="text-4xl font-black text-green-400">{totalValidGlobal}</p>
           </div>
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Operadores Online</p>
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-blue-500">
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Operadores Online</p>
             <p className="text-4xl font-black text-white">{activeNowCount}</p>
           </div>
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Tentativas Totais</p>
-            <p className="text-4xl font-black text-blue-400">{totalScans}</p>
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-orange-500">
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total de Tentativas</p>
+            <p className="text-4xl font-black text-orange-400">{totalScans}</p>
           </div>
-          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl">
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-2">Erros / Recusados</p>
-            <p className="text-4xl font-black text-red-500">{totalScans - totalValid}</p>
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-red-500">
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Recusados (Scan)</p>
+            <p className="text-4xl font-black text-red-500">{totalScans - stats.reduce((acc, curr) => acc + curr.valid, 0)}</p>
           </div>
         </div>
 
@@ -137,7 +143,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                         <h3 className="font-bold text-lg text-white group-hover:text-orange-400 transition-colors">{op.name}</h3>
                         <p className="text-[10px] text-gray-500 font-bold uppercase flex items-center">
                           <ClockIcon className="w-3 h-3 mr-1" />
-                          Último scan: {new Date(op.lastSeen).toLocaleTimeString()}
+                          Último: {new Date(op.lastSeen).toLocaleTimeString()}
                         </p>
                       </div>
                     </div>
@@ -152,7 +158,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                       <p className="text-xl font-black text-green-400">{op.valid}</p>
                     </div>
                     <div className="text-center flex-1">
-                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Total Geral</p>
+                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Bruto (Scans)</p>
                       <p className="text-xl font-black text-white">{op.total}</p>
                     </div>
                   </div>
@@ -185,8 +191,8 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                   </div>
 
                   <div className="pt-4 border-t border-gray-700 flex justify-between items-center text-[10px] font-bold">
-                    <span className="text-gray-500 uppercase">Portaria / Setor Principal:</span>
-                    <span className="text-gray-300">{topSector}</span>
+                    <span className="text-gray-500 uppercase">Filtro / Setor:</span>
+                    <span className="text-gray-300 truncate max-w-[120px]">{topSector}</span>
                   </div>
                 </div>
               </div>
@@ -196,8 +202,8 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
           {stats.length === 0 && (
             <div className="col-span-full py-20 text-center bg-gray-800/50 rounded-3xl border-2 border-dashed border-gray-700">
               <TableCellsIcon className="w-16 h-16 mx-auto text-gray-700 mb-4" />
-              <p className="text-xl font-bold text-gray-500">Aguardando as primeiras validações...</p>
-              <p className="text-gray-600">Os dados aparecerão aqui em tempo real.</p>
+              <p className="text-xl font-bold text-gray-500">Nenhum operador detectado...</p>
+              <p className="text-gray-600">Aguardando scans no histórico (Limite: 2000).</p>
             </div>
           )}
         </div>
@@ -208,25 +214,24 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                 <div className="bg-gray-700/50 p-6 border-b border-gray-700 flex items-center justify-between">
                     <div className="flex items-center space-x-3">
                         <TableCellsIcon className="w-6 h-6 text-orange-500" />
-                        <h2 className="text-xl font-bold">Resumo de Produtividade</h2>
+                        <h2 className="text-xl font-bold">Produtividade (Baseado nos últimos 2000 scans)</h2>
                     </div>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-900/50 text-gray-400 text-xs uppercase font-black tracking-widest">
                             <tr>
-                                <th className="px-6 py-4">Operador / Portaria</th>
-                                <th className="px-6 py-4 text-center">Check-ins Válidos</th>
-                                <th className="px-6 py-4 text-center">Total de Scans</th>
-                                <th className="px-6 py-4 text-center">% de Erros</th>
-                                <th className="px-6 py-4 text-right">Última Atividade</th>
+                                <th className="px-6 py-4">Operador</th>
+                                <th className="px-6 py-4 text-center">Válidos</th>
+                                <th className="px-6 py-4 text-center">Tentativas</th>
+                                <th className="px-6 py-4 text-center">Taxa Sucesso</th>
+                                <th className="px-6 py-4 text-right">Última</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-700">
                             {stats.map((op, idx) => (
                                 <tr key={op.name} className="hover:bg-gray-700/30 transition-colors">
-                                    <td className="px-6 py-4 font-bold flex items-center gap-3">
-                                        <span className="text-xs text-gray-600 font-mono">#{idx+1}</span>
+                                    <td className="px-6 py-4 font-bold">
                                         {op.name}
                                     </td>
                                     <td className="px-6 py-4 text-center">
@@ -238,8 +243,8 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                                         {op.total}
                                     </td>
                                     <td className="px-6 py-4 text-center">
-                                        <span className="text-red-400 font-bold">
-                                            {(((op.total - op.valid) / op.total) * 100).toFixed(1)}%
+                                        <span className="text-blue-400 font-bold">
+                                            {((op.valid / op.total) * 100).toFixed(1)}%
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-right text-xs text-gray-500 font-mono">
@@ -248,17 +253,6 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, scanHistory, i
                                 </tr>
                             ))}
                         </tbody>
-                        <tfoot className="bg-gray-900/80 font-black text-white">
-                            <tr>
-                                <td className="px-6 py-4 uppercase">Total do Evento</td>
-                                <td className="px-6 py-4 text-center text-green-400 text-lg">{totalValid}</td>
-                                <td className="px-6 py-4 text-center text-blue-400 text-lg">{totalScans}</td>
-                                <td className="px-6 py-4 text-center text-red-400">
-                                    {(((totalScans - totalValid) / totalScans) * 100).toFixed(1)}%
-                                </td>
-                                <td className="px-6 py-4"></td>
-                            </tr>
-                        </tfoot>
                     </table>
                 </div>
             </div>

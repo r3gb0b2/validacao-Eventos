@@ -26,10 +26,12 @@ interface AdminViewProps {
 }
 
 const API_PRESETS = [
-    { name: "Personalizado / Outros", url: "", type: "tickets", token: "" },
+    { name: "E-Inscrição (Ingressos)", url: "https://api.e-inscricao.com/v1/eventos/[ID_DO_EVENTO]/ingressos", type: "tickets", token: "" },
+    { name: "E-Inscrição (Participantes)", url: "https://api.e-inscricao.com/v1/eventos/[ID_DO_EVENTO]/participantes", type: "participants", token: "" },
+    { name: "E-Inscrição (Check-ins)", url: "https://api.e-inscricao.com/v1/eventos/[ID_DO_EVENTO]/checkins", type: "checkins", token: "" },
+    { name: "Sympla (Participantes)", url: "https://api.sympla.com.br/v3/events/[ID_DO_EVENTO]/participants", type: "participants", token: "" },
     { name: "Google Sheets (CSV)", url: "https://docs.google.com/spreadsheets/d/ID_DA_PLANILHA/export?format=csv", type: "google_sheets", token: "" },
-    { name: "E-Inscrição (Participantes)", url: "https://api.e-inscricao.com/v1/eventos/[ID_EVENTO]/participantes", type: "participants", token: "" },
-    { name: "Sympla (Participantes)", url: "https://api.sympla.com.br/v3/events/[ID_EVENTO]/participants", type: "participants", token: "" }
+    { name: "Personalizado / Outros", url: "", type: "tickets", token: "" }
 ];
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
@@ -125,7 +127,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const handleApplyPreset = (name: string) => {
         const p = API_PRESETS.find(x => x.name === name);
-        if (p) setEditSource(prev => ({ ...prev, name: p.name, url: p.url, type: p.type as ImportType }));
+        if (p) {
+            setEditSource(prev => ({ 
+                ...prev, 
+                name: prev.name || p.name, 
+                url: p.url, 
+                type: p.type as ImportType 
+            }));
+        }
     };
 
     const handleSaveEditSource = async () => {
@@ -146,9 +155,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         
         setIsLoading(true);
         try {
-            // Criar um Set de IDs existentes para busca rápida O(1)
             const existingIds = new Set(allTickets.map(t => String(t.id).trim()));
-            
             let addedCount = 0;
             let alreadyExistsCount = 0;
             const ticketsToCreate: { id: string, sector: string }[] = [];
@@ -173,12 +180,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             sector: t.sector,
                             status: 'AVAILABLE',
                             source: 'manual_locator'
-                        }); // Sem merge true para garantir que é criação pura, mas como filtramos antes, dá no mesmo.
+                        });
                     });
                     await batch.commit();
                 }
             }
-
             setLocatorCodes('');
             alert(`${addedCount} novos localizadores importados com sucesso. ${alreadyExistsCount} códigos já existiam no sistema e foram ignorados.`);
         } catch (e) {
@@ -199,43 +205,59 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 return (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
                         <div className="bg-gray-800 p-5 rounded-2xl border border-blue-500/20 shadow-xl">
-                            <h3 className="font-bold mb-4 flex items-center text-blue-400"><CloudUploadIcon className="w-5 h-5 mr-2" /> APIs de Importação</h3>
+                            <h3 className="font-bold mb-4 flex items-center text-blue-400"><CloudUploadIcon className="w-5 h-5 mr-2" /> Configuração de Importação (APIs)</h3>
                             <div className="space-y-3 bg-gray-900/50 p-4 rounded-xl mb-4">
-                                <select onChange={(e) => handleApplyPreset(e.target.value)} className="w-full bg-gray-800 border border-gray-700 p-2 rounded-lg text-xs">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase">Preencher com Modelo:</p>
+                                <select onChange={(e) => handleApplyPreset(e.target.value)} className="w-full bg-gray-800 border border-gray-700 p-2 rounded-lg text-xs outline-none">
                                     <option value="">Escolher Preset...</option>
                                     {API_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
                                 </select>
-                                <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Nome da Fonte" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none" />
-                                <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL / Endpoint" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none" />
-                                <div className="flex items-center justify-between p-2">
-                                    <label className="text-xs flex items-center"><input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="mr-2" /> Auto-Sync (10 min)</label>
-                                    <select value={editSource.type} onChange={e => setEditSource({...editSource, type: e.target.value as ImportType})} className="bg-gray-800 text-xs p-1 rounded">
-                                        <option value="tickets">Ingressos</option>
-                                        <option value="google_sheets">Google Sheets</option>
-                                        <option value="participants">Participantes</option>
-                                    </select>
+                                <hr className="border-gray-700 my-2" />
+                                <input value={editSource.name} onChange={e => setEditSource({...editSource, name: e.target.value})} placeholder="Nome da Fonte" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500" />
+                                <input value={editSource.url} onChange={e => setEditSource({...editSource, url: e.target.value})} placeholder="URL da API (Endpoint)" className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm outline-none focus:border-blue-500" />
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="flex flex-col">
+                                        <label className="text-[10px] text-gray-500 mb-1 ml-1">Autorização (Bearer)</label>
+                                        <input value={editSource.token} onChange={e => setEditSource({...editSource, token: e.target.value})} placeholder="Token..." className="bg-gray-800 border border-gray-700 p-2 rounded-lg text-xs outline-none" />
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <label className="text-[10px] text-gray-500 mb-1 ml-1">Tipo de Dado</label>
+                                        <select value={editSource.type} onChange={e => setEditSource({...editSource, type: e.target.value as ImportType})} className="bg-gray-800 border border-gray-700 text-xs p-2 rounded-lg outline-none">
+                                            <option value="tickets">Ingressos</option>
+                                            <option value="participants">Participantes</option>
+                                            <option value="checkins">Base de Check-ins</option>
+                                            <option value="google_sheets">Google Sheets (CSV)</option>
+                                        </select>
+                                    </div>
                                 </div>
-                                <button onClick={handleSaveEditSource} className="w-full bg-blue-600 p-3 rounded-xl font-bold">Salvar Configuração</button>
+                                <div className="flex items-center justify-between p-2">
+                                    <label className="text-xs flex items-center font-bold text-gray-400 cursor-pointer"><input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="mr-2" /> Auto-Sincronização (10 min)</label>
+                                </div>
+                                <button onClick={handleSaveEditSource} className="w-full bg-blue-600 hover:bg-blue-700 p-3 rounded-xl font-bold shadow-lg transition-all active:scale-95">Salvar Configuração</button>
                             </div>
                             <div className="space-y-2">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase mb-2">Fontes Ativas:</p>
                                 {importSources.map(s => (
                                     <div key={s.id} className="flex justify-between items-center p-3 bg-gray-900 rounded-xl border border-gray-700">
-                                        <div><p className="text-sm font-bold">{s.name}</p><p className="text-[10px] text-gray-500">{s.type}</p></div>
+                                        <div>
+                                            <p className="text-sm font-bold text-white">{s.name} {s.autoImport && <span className="text-[8px] bg-green-900 text-green-400 px-1 rounded ml-1">AUTO</span>}</p>
+                                            <p className="text-[9px] text-gray-500 truncate max-w-[150px]">{s.url}</p>
+                                        </div>
                                         <div className="flex gap-2">
-                                            <button onClick={() => executeImport(s)} disabled={isLoading} className="text-xs bg-blue-900 text-blue-200 px-3 py-1 rounded-lg">Sync</button>
-                                            <button onClick={async () => { if(confirm("Remover?")) { const f = importSources.filter(x => x.id !== s.id); setImportSources(f); await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: f }, { merge: true }); } }} className="text-xs bg-red-900 text-red-200 px-2 py-1 rounded-lg">X</button>
+                                            <button onClick={() => executeImport(s)} disabled={isLoading} className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-bold">Sync</button>
+                                            <button onClick={async () => { if(confirm("Remover?")) { const f = importSources.filter(x => x.id !== s.id); setImportSources(f); await setDoc(doc(db, 'events', selectedEvent!.id, 'settings', 'import_v2'), { sources: f }, { merge: true }); } }} className="p-2 bg-red-900/30 text-red-500 hover:bg-red-600 hover:text-white rounded-lg transition-all"><TrashIcon className="w-4 h-4"/></button>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </div>
-                        <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700">
-                            <h3 className="font-bold mb-4 flex items-center"><TableCellsIcon className="w-5 h-5 mr-2" /> Setores Ativos</h3>
+                        <div className="bg-gray-800 p-5 rounded-2xl border border-gray-700 shadow-xl">
+                            <h3 className="font-bold mb-4 flex items-center text-gray-300"><TableCellsIcon className="w-5 h-5 mr-2" /> Setores e Visibilidade</h3>
                             <div className="space-y-2">
                                 {editableSectorNames.map((name, i) => (
-                                    <div key={i} className="flex items-center space-x-2">
-                                        <span className="flex-grow text-sm">{name}</span>
-                                        <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); const h = editableSectorNames.filter((_, idx) => !v[idx]); onUpdateSectorNames(editableSectorNames, h); }} className="p-2 bg-gray-900 rounded-lg">
+                                    <div key={i} className="flex items-center space-x-2 bg-gray-900/50 p-2 rounded-xl border border-gray-700">
+                                        <span className="flex-grow text-sm font-medium">{name}</span>
+                                        <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); const h = editableSectorNames.filter((_, idx) => !v[idx]); onUpdateSectorNames(editableSectorNames, h); }} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-all">
                                             {sectorVisibility[i] ? <EyeIcon className="w-4 h-4 text-blue-400"/> : <EyeSlashIcon className="w-4 h-4 text-gray-500"/>}
                                         </button>
                                     </div>
@@ -244,7 +266,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                         </div>
                     </div>
                 );
-            case 'operators': return <OperatorMonitor event={selectedEvent!} scanHistory={scanHistory} isEmbedded />;
+            case 'operators': return <OperatorMonitor event={selectedEvent!} allTickets={allTickets} scanHistory={scanHistory} isEmbedded />;
             case 'locators': 
                 return (
                     <div className="space-y-6 animate-fade-in pb-20">
@@ -278,13 +300,13 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     return (
         <div className="w-full max-w-6xl mx-auto pb-10 px-4">
             <div className="bg-gray-800 rounded-2xl p-2 mb-6 flex overflow-x-auto space-x-1 border border-gray-700 no-scrollbar">
-                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'stats' ? 'bg-orange-600 shadow-lg' : 'text-gray-400'}`}>Dashboard</button>
-                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'settings' ? 'bg-orange-600 shadow-lg' : 'text-gray-400'}`}>Configurações</button>
-                <button onClick={() => setActiveTab('locators')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'locators' ? 'bg-orange-600 shadow-lg' : 'text-gray-400'}`}>Localizadores</button>
-                <button onClick={() => setActiveTab('operators')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'operators' ? 'bg-orange-600 shadow-lg' : 'text-gray-400'}`}>Operadores</button>
-                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'history' ? 'bg-orange-600 shadow-lg' : 'text-gray-400'}`}>Histórico</button>
-                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'events' ? 'bg-orange-600 shadow-lg' : 'text-gray-400'}`}>Eventos</button>
-                {isSuperAdmin && <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase ${activeTab === 'users' ? 'bg-purple-600 shadow-lg' : 'text-purple-400'}`}>Usuários</button>}
+                <button onClick={() => setActiveTab('stats')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'stats' ? 'bg-orange-600 shadow-lg text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Dashboard</button>
+                <button onClick={() => setActiveTab('settings')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'settings' ? 'bg-orange-600 shadow-lg text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Configurações</button>
+                <button onClick={() => setActiveTab('locators')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'locators' ? 'bg-orange-600 shadow-lg text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Localizadores</button>
+                <button onClick={() => setActiveTab('operators')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'operators' ? 'bg-orange-600 shadow-lg text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Operadores</button>
+                <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'history' ? 'bg-orange-600 shadow-lg text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Histórico</button>
+                <button onClick={() => setActiveTab('events')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'events' ? 'bg-orange-600 shadow-lg text-white' : 'text-gray-400 hover:bg-gray-700'}`}>Eventos</button>
+                {isSuperAdmin && <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all ${activeTab === 'users' ? 'bg-purple-600 shadow-lg text-white' : 'text-purple-400 hover:bg-purple-900'}`}>Usuários</button>}
             </div>
             {renderContent()}
         </div>
