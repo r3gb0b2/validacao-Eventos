@@ -41,7 +41,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
     }, [db, selectedEvent]);
 
     const runImportLogic = useCallback(async () => {
-        if (isSyncing || !selectedEvent || !db) return;
+        if (isSyncing || !selectedEvent || !db || !navigator.onLine) return;
         setIsSyncing(true);
 
         const sourcesToSync = importSources.filter(s => s.autoImport);
@@ -51,7 +51,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         }
 
         // Criamos um Set dinâmico para rastrear o que já existe E o que estamos adicionando agora
-        const processedIdsInThisCycle = new Set<string>(allTickets.map(t => String(t.id).trim()));
+        const processedIdsInThisCycle = new Set<string>((allTickets || []).map(t => String(t.id).trim()));
         const discoveredSectors = new Set<string>(sectorNames);
 
         for (const source of sourcesToSync) {
@@ -63,13 +63,19 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             let ticketsToSave: any[] = [];
 
             try {
-                let fetchUrl = source.url.trim();
-                const headers: HeadersInit = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
-                if (source.token) headers['Authorization'] = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
+                let fetchUrl = (source.url || '').trim();
+                if (!fetchUrl) throw new Error("URL da fonte está vazia.");
+
+                const headers: HeadersInit = { 'Accept': 'application/json' };
+                if (source.token) {
+                    headers['Authorization'] = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
+                }
 
                 if (source.type === 'google_sheets') {
                     if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                     const res = await fetch(fetchUrl);
+                    if (!res.ok) throw new Error(`Planilha inacessível (${res.status})`);
+                    
                     const csvText = await res.text();
                     const rows = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data as any[];
                     
@@ -84,10 +90,15 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
                             ticketsToSave.push({
                                 id: code, sector, status: 'AVAILABLE', source: 'api_import',
-                                details: { ownerName: String(row['name'] || row['nome'] || 'Importado') }
+                                details: { 
+                                    ownerName: String(row['name'] || row['nome'] || 'Importado'),
+                                    email: row['email'] || '',
+                                    phone: row['phone'] || row['telefone'] || '',
+                                    document: row['document'] || row['cpf'] || ''
+                                }
                             });
                             newItems++;
-                            processedIdsInThisCycle.add(code); // Evita duplicar se o mesmo ID aparecer de novo nesta ou em outra fonte
+                            processedIdsInThisCycle.add(code); 
                         } else {
                             existingCount++;
                         }
@@ -96,22 +107,29 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                     const endpoint = source.type === 'checkins' ? 'checkins' : 
                                     source.type === 'participants' ? 'participants' :
                                     source.type === 'buyers' ? 'buyers' : 'tickets';
+                    
                     const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                     
                     let currentPage = 1;
                     let hasMore = true;
 
                     while (hasMore) {
-                        const urlObj = new URL(`${baseUrl}/${endpoint}`, window.location.origin);
-                        urlObj.searchParams.set('page', String(currentPage));
-                        urlObj.searchParams.set('per_page', '100');
-                        if (source.externalEventId) urlObj.searchParams.set('event_id', source.externalEventId);
+                        // Construção segura da URL
+                        const url = new URL(`${baseUrl}/${endpoint}`);
+                        url.searchParams.set('page', String(currentPage));
+                        url.searchParams.set('per_page', '100');
+                        if (source.externalEventId) url.searchParams.set('event_id', source.externalEventId);
 
-                        const res = await fetch(urlObj.toString(), { headers, mode: 'cors' });
-                        if (!res.ok) { hasMore = false; break; }
+                        const res = await fetch(url.toString(), { headers });
+                        
+                        if (!res.ok) {
+                            if (res.status === 404 && currentPage > 1) { hasMore = false; break; }
+                            throw new Error(`Erro na API (${res.status}): ${res.statusText}`);
+                        }
 
                         const json = await res.json();
                         const items = json.data || json.participants || json.tickets || json.checkins || json.buyers || (Array.isArray(json) ? json : []);
+                        
                         if (!items || items.length === 0) { hasMore = false; break; }
 
                         items.forEach((item: any) => {
@@ -132,13 +150,17 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                     id: code, sector, status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
                                     usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
                                     source: 'api_import',
-                                    details: { ownerName: String(item.name || item.customer_name || 'Importado') }
+                                    details: { 
+                                        ownerName: String(item.name || item.customer_name || 'Importado'),
+                                        email: item.email || '',
+                                        phone: item.phone || item.mobile || '',
+                                        document: item.document || item.cpf || ''
+                                    }
                                 });
                                 newItems++;
                                 processedIdsInThisCycle.add(code);
                             } else {
                                 existingCount++;
-                                // Se já existe, verificamos se o status mudou para USED (Sincronização de check-ins)
                                 const existingTicket = allTickets.find(t => String(t.id).trim() === code);
                                 if (shouldMarkUsed && existingTicket && existingTicket.status !== 'USED') {
                                     updatedCount++;
@@ -150,18 +172,20 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
 
                         const lastPage = json.last_page || json.meta?.last_page || 0;
                         if (lastPage > 0 && currentPage >= lastPage) hasMore = false; else currentPage++;
-                        if (currentPage > 50) hasMore = false;
+                        if (currentPage > 50) hasMore = false; 
                     }
                 }
 
-                // Só salva se houver mudanças reais
                 if (ticketsToSave.length > 0) {
-                    const batch = writeBatch(db);
-                    ticketsToSave.forEach(t => batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true }));
-                    await batch.commit();
+                    const batchSize = 450;
+                    for (let i = 0; i < ticketsToSave.length; i += batchSize) {
+                        const chunk = ticketsToSave.slice(i, i + batchSize);
+                        const batch = writeBatch(db);
+                        chunk.forEach(t => batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true }));
+                        await batch.commit();
+                    }
                 }
 
-                // SÓ REGISTRA LOG SE HOUVER NOVIDADES
                 if (newItems > 0 || updatedCount > 0) {
                     await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
                         timestamp: Date.now(),
@@ -175,6 +199,8 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                 }
 
             } catch (err: any) {
+                console.error("AutoImport Error:", err);
+                const isCors = err.message === 'Failed to fetch' || err.name === 'TypeError';
                 await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
                     timestamp: Date.now(),
                     sourceName: source.name,
@@ -183,12 +209,11 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                     updatedCount: 0,
                     sectorsAffected: {},
                     status: 'error',
-                    errorMessage: err.message
+                    errorMessage: isCors ? "Erro de Rede/CORS: Verifique se a URL é HTTPS e se o domínio é permitido." : err.message
                 });
             }
         }
 
-        // Atualizar Setores se necessário
         const newSectorList = Array.from(discoveredSectors).sort();
         if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
             await onUpdateSectorNames(newSectorList, hiddenSectors);
@@ -198,11 +223,10 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         setCountdown(intervalMinutes * 60);
     }, [db, selectedEvent, importSources, allTickets, intervalMinutes, sectorNames, hiddenSectors, onUpdateSectorNames, isSyncing]);
 
-    // Lógica do Timer
     useEffect(() => {
         if (isActive) {
             setCountdown(intervalMinutes * 60);
-            runImportLogic(); // Executa imediatamente ao ativar
+            runImportLogic(); 
 
             timerRef.current = setInterval(() => {
                 runImportLogic();
