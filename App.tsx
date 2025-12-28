@@ -42,7 +42,7 @@ const App: React.FC = () => {
     const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
     const [allTickets, setAllTickets] = useState<Ticket[]>([]);
     const [scanHistory, setScanHistory] = useState<DisplayableScanLog[]>([]);
-    const [sectorNames, setSectorNames] = useState<string[]>([]); // Defaulting to empty as per request
+    const [sectorNames, setSectorNames] = useState<string[]>([]); 
     const [hiddenSectors, setHiddenSectors] = useState<string[]>([]); 
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
     
@@ -217,27 +217,40 @@ const App: React.FC = () => {
             setAllTickets([]);
             setScanHistory([]);
             setImportSources([]);
-            setSectorNames([]); // Reset sectors when no event selected
+            setSectorNames([]); 
             setTicketsLoaded(false);
             setScansLoaded(false);
             return;
         };
 
         const eventId = selectedEvent.id;
+        
+        // CRITICAL FIX: Reset configurations immediately when switching event
+        setSectorNames([]);
+        setHiddenSectors([]);
+        setImportSources([]);
         setTicketsLoaded(false);
         setScansLoaded(false);
 
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
+            // Se o snapshot estiver vazio ou documentos específicos não existirem, resetamos os nomes
+            let mainFound = false;
+            let importFound = false;
+
             snapshot.docs.forEach(docSnap => {
                 const data = docSnap.data();
                 if (docSnap.id === 'main') {
-                    // Changed fallback to empty array so new events don't get default sectors
                     setSectorNames(Array.isArray(data.sectorNames) ? data.sectorNames : []);
                     setHiddenSectors(Array.isArray(data.hiddenSectors) ? data.hiddenSectors : []);
+                    mainFound = true;
                 } else if (docSnap.id === 'import_v2') {
                     setImportSources(Array.isArray(data.sources) ? data.sources : []);
+                    importFound = true;
                 }
             });
+
+            if (!mainFound) { setSectorNames([]); setHiddenSectors([]); }
+            if (!importFound) setImportSources([]);
         });
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {

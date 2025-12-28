@@ -2,7 +2,6 @@
 import React, { useState } from 'react';
 import { ImportSource, ImportType, Event, Ticket } from '../../types';
 import { Firestore, doc, setDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
-// FIX: Added missing PlusCircleIcon to imports
 import { CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, ClockIcon, AlertTriangleIcon, CheckCircleIcon, PlusCircleIcon } from '../Icons';
 import Papa from 'papaparse';
 
@@ -29,16 +28,34 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         externalEventId: '' 
     });
 
-    const handleAddSource = async () => {
+    const isEditing = !!editSource.id;
+
+    const handleSaveSource = async () => {
         if (!editSource.name || !editSource.url) return alert("Preencha ao menos Nome e URL.");
-        const newSource = { 
-            ...editSource, 
-            id: Math.random().toString(36).substr(2, 9),
-            lastImportTime: 0 
-        } as ImportSource;
-        const updated = [...importSources, newSource];
+        
+        let updated: ImportSource[];
+        if (isEditing) {
+            updated = importSources.map(s => s.id === editSource.id ? (editSource as ImportSource) : s);
+        } else {
+            const newSource = { 
+                ...editSource, 
+                id: Math.random().toString(36).substr(2, 9),
+                lastImportTime: 0 
+            } as ImportSource;
+            updated = [...importSources, newSource];
+        }
+
         await onUpdateImportSources(updated);
+        resetForm();
+    };
+
+    const resetForm = () => {
         setEditSource({ name: '', url: 'https://public-api.stingressos.com.br', token: '', type: 'tickets', autoImport: false, externalEventId: '' });
+    };
+
+    const startEditing = (source: ImportSource) => {
+        setEditSource(source);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const runImport = async (source: ImportSource) => {
@@ -46,7 +63,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         try {
             const existingTickets = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
             const ticketsToSave: any[] = [];
-            const scansToSave: any[] = [];
 
             let fetchUrl = source.url.trim();
             
@@ -74,25 +90,38 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 source.type === 'participants' ? 'participants' :
                                 source.type === 'buyers' ? 'buyers' : 'tickets';
                 
-                const fullUrl = `${fetchUrl}/${endpoint}${source.externalEventId ? `/${source.externalEventId}` : ''}`;
+                // Construção robusta da URL
+                const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
+                const fullUrl = `${baseUrl}/${endpoint}${source.externalEventId ? `/${source.externalEventId}` : ''}`;
                 
-                const headers: HeadersInit = { 'Accept': 'application/json' };
-                if (source.token) headers['Authorization'] = `Bearer ${source.token}`;
+                const headers: HeadersInit = { 
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                };
                 
-                const res = await fetch(fullUrl, { headers });
-                if (!res.ok) throw new Error(`Erro API: ${res.status}`);
+                if (source.token) {
+                    const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
+                    headers['Authorization'] = cleanToken;
+                }
+                
+                console.log(`Iniciando importação de: ${fullUrl}`);
+                
+                const res = await fetch(fullUrl, { headers, mode: 'cors' });
+                if (!res.ok) {
+                    const errText = await res.text();
+                    throw new Error(`Erro API (${res.status}): ${errText || 'Resposta não amigável'}`);
+                }
+                
                 const json = await res.json();
-                
                 const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
                 
                 items.forEach((item: any) => {
                     const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode).trim();
                     if (!code) return;
 
-                    // FIX: Explicitly cast 'existing' to Ticket or undefined to avoid unknown/spread errors
                     const existing = existingTickets.get(code) as Ticket | undefined;
                     const isNew = !existing;
-                    const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used';
+                    const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || !!item.validated_at;
 
                     if (isNew) {
                         ticketsToSave.push({
@@ -107,8 +136,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             }
                         });
                     } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
-                        // FIX: Added 'existing &&' to check before accessing status and spreading object
-                        // Atualizar ingresso existente para usado
                         ticketsToSave.push({
                             ...existing,
                             status: 'USED',
@@ -132,9 +159,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             const updated = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
             await onUpdateImportSources(updated);
 
-        } catch (e) {
-            console.error(e);
-            alert("Falha na Sincronização. Verifique Token, ID do Evento e Conexão.");
+        } catch (e: any) {
+            console.error("Erro completo na sincronização:", e);
+            alert(`Falha na Sincronização:\n${e.message}\n\nVerifique:\n1. Se o Token é válido\n2. Se o ID do Evento está correto\n3. Se o navegador permite CORS para esta API.`);
         } finally {
             setIsLoading(false);
         }
@@ -147,9 +174,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-2xl space-y-5">
                     <div className="flex items-center justify-between">
                         <h3 className="font-bold text-xl flex items-center text-blue-400">
-                            <CloudUploadIcon className="w-6 h-6 mr-3" /> Integração ST Ingressos
+                            <CloudUploadIcon className="w-6 h-6 mr-3" /> {isEditing ? 'Editar Integração' : 'Nova Integração ST Ingressos'}
                         </h3>
-                        <span className="bg-blue-900/30 text-blue-400 text-[10px] px-2 py-1 rounded-full font-bold">API V1</span>
+                        {isEditing && (
+                            <button onClick={resetForm} className="text-[10px] text-gray-400 hover:text-white underline uppercase">Cancelar Edição</button>
+                        )}
                     </div>
                     
                     <div className="space-y-4 bg-gray-900/50 p-5 rounded-2xl border border-gray-700">
@@ -223,10 +252,10 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         </div>
 
                         <button 
-                            onClick={handleAddSource} 
-                            className="w-full bg-blue-600 hover:bg-blue-700 p-4 rounded-xl font-bold transition-all shadow-lg active:scale-95 flex items-center justify-center"
+                            onClick={handleSaveSource} 
+                            className={`w-full ${isEditing ? 'bg-orange-600 hover:bg-orange-700' : 'bg-blue-600 hover:bg-blue-700'} p-4 rounded-xl font-bold transition-all shadow-lg active:scale-95 flex items-center justify-center`}
                         >
-                            <CheckCircleIcon className="w-5 h-5 mr-2" /> Salvar Integração
+                            <CheckCircleIcon className="w-5 h-5 mr-2" /> {isEditing ? 'Salvar Alterações' : 'Adicionar Integração'}
                         </button>
                     </div>
 
@@ -239,26 +268,33 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                         <span className="text-[8px] bg-gray-800 px-1.5 py-0.5 rounded border border-gray-700 text-gray-400 uppercase">{s.type}</span>
                                         {s.autoImport && <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]"></span>}
                                     </div>
-                                    <p className="text-[10px] text-gray-500 truncate max-w-[180px]">{s.url}</p>
+                                    <p className="text-[10px] text-gray-500 truncate max-w-[150px]">{s.url}</p>
                                     {s.lastImportTime > 0 && (
                                         <p className="text-[9px] text-blue-400 font-bold flex items-center">
                                             <ClockIcon className="w-3 h-3 mr-1" />
-                                            Sincronizado: {new Date(s.lastImportTime).toLocaleString()}
+                                            Última Sinc: {new Date(s.lastImportTime).toLocaleTimeString()}
                                         </p>
                                     )}
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex gap-1">
                                     <button 
                                         onClick={() => runImport(s)}
                                         disabled={isLoading}
-                                        className="bg-blue-600/10 hover:bg-blue-600 p-2.5 rounded-xl text-blue-400 hover:text-white text-xs font-bold transition-all disabled:opacity-50"
+                                        className="bg-blue-600/10 hover:bg-blue-600 p-2 rounded-xl text-blue-400 hover:text-white transition-all disabled:opacity-50"
                                         title="Importar Agora"
                                     >
                                         <CloudUploadIcon className="w-5 h-5"/>
                                     </button>
                                     <button 
+                                        onClick={() => startEditing(s)}
+                                        className="bg-gray-800 hover:bg-orange-600 p-2 rounded-xl text-orange-400 hover:text-white transition-all"
+                                        title="Editar"
+                                    >
+                                        <PlusCircleIcon className="w-5 h-5 rotate-45"/>
+                                    </button>
+                                    <button 
                                         onClick={() => onUpdateImportSources(importSources.filter(x => x.id !== s.id))}
-                                        className="bg-red-900/10 hover:bg-red-600 p-2.5 rounded-xl text-red-500 hover:text-white transition-all"
+                                        className="bg-red-900/10 hover:bg-red-600 p-2 rounded-xl text-red-500 hover:text-white transition-all"
                                         title="Excluir"
                                     >
                                         <TrashIcon className="w-5 h-5"/>
@@ -316,10 +352,10 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             <div className="bg-orange-600/10 border border-orange-500/20 p-6 rounded-3xl flex items-start space-x-5">
                 <AlertTriangleIcon className="w-8 h-8 text-orange-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
-                    <p className="font-bold text-orange-400 uppercase tracking-widest">Documentação Técnica:</p>
-                    <p>• O sistema utiliza o campo <code className="bg-gray-900 px-1 py-0.5 rounded">access_code</code> ou <code className="bg-gray-900 px-1 py-0.5 rounded">barcode</code> da API ST Ingressos como chave primária.</p>
-                    <p>• <b>Importação Retroativa:</b> Se você importar <code className="bg-gray-900 px-1 py-0.5 rounded">checkins</code>, o sistema atualizará o status dos ingressos locais correspondentes para <span className="text-green-500 font-bold">USED</span>, garantindo que o Dashboard reflita a portaria externa.</p>
-                    <p>• <b>Segurança:</b> Os tokens são salvos de forma segura no Firestore por evento.</p>
+                    <p className="font-bold text-orange-400 uppercase tracking-widest">Ajuda com Erros de API:</p>
+                    <p>• <b>Token:</b> Deve ser o Token de Acesso da ST Ingressos. O sistema adiciona automaticamente "Bearer" se você não colocar.</p>
+                    <p>• <b>CORS:</b> APIs públicas as vezes bloqueiam acessos via navegador. Se a falha persistir mesmo com dados corretos, a API pode estar restringindo o acesso.</p>
+                    <p>• <b>Sincronização de Setores:</b> Os setores são únicos por evento. Ao criar um evento novo, ele começa vazio para garantir organização total.</p>
                 </div>
             </div>
         </div>
