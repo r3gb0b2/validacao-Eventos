@@ -29,7 +29,6 @@ interface AdminViewProps {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
-    // TAB PERSISTENCE
     const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'users'>(() => {
         try {
             return (localStorage.getItem('admin_active_tab') as any) || 'stats';
@@ -42,26 +41,34 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.username === 'Administrador';
 
-    // Persist active tab
     useEffect(() => {
         localStorage.setItem('admin_active_tab', activeTab);
     }, [activeTab]);
 
-    // Carregar configurações do evento selecionado
     useEffect(() => {
-        if (!selectedEvent) return;
-        const unsub = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), (snap) => {
+        if (!selectedEvent || !db) return;
+        
+        // Listener para Grupos (Módulo de Agrupamento)
+        const unsubStats = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
                 setGroups(Array.isArray(data.groups) ? data.groups : []);
             } else {
                 setGroups([]);
             }
-        }, (err) => {
-            console.error("Erro ao carregar grupos:", err);
-            setGroups([]);
         });
-        return () => unsub();
+
+        // Listener para Importações (Módulo de Configurações)
+        const unsubImport = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
+            if (snap.exists()) {
+                const data = snap.data();
+                setImportSources(Array.isArray(data.sources) ? data.sources : []);
+            } else {
+                setImportSources([]);
+            }
+        });
+
+        return () => { unsubStats(); unsubImport(); };
     }, [db, selectedEvent]);
 
     const handleUpdateGroups = async (newGroups: SectorGroup[]) => {
@@ -77,7 +84,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const renderModule = () => {
-        // Aba de Eventos e Usuários não dependem de um evento selecionado
         if (activeTab === 'events') return (
             <div className="space-y-6">
                 <div className="flex justify-between items-center bg-gray-800 p-4 rounded-2xl border border-gray-700">
@@ -98,50 +104,41 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             </div>
         );
 
-        if (activeTab === 'users' && isSuperAdmin) return (
-            <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} />
-        );
+        if (activeTab === 'users' && isSuperAdmin) return <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} />;
 
         if (!selectedEvent) return (
             <div className="p-16 text-center text-gray-400 bg-gray-800 rounded-3xl border-2 border-dashed border-gray-700">
-                <p className="text-xl font-bold mb-2">Nenhum evento selecionado</p>
-                <p className="mb-6">Você precisa selecionar um evento na aba 'Eventos' para acessar estas configurações.</p>
-                <button onClick={() => setActiveTab('events')} className="bg-orange-600 text-white px-8 py-3 rounded-2xl font-bold shadow-lg">Ir para Eventos</button>
+                <p className="text-xl font-bold mb-2">Selecione um evento para gerenciar</p>
+                <button onClick={() => setActiveTab('events')} className="bg-orange-600 text-white px-8 py-3 rounded-2xl font-bold shadow-lg mt-4">Ir para Eventos</button>
             </div>
         );
 
-        // Módulos que dependem de evento selecionado
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
-            case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} />;
+            case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
             case 'operators': return <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isEmbedded />;
             case 'locator': return <LocalizadorasModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} />;
             case 'manual': return <ManualAddModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} />;
-            default: return <div className="p-10 text-center">Módulo não encontrado.</div>;
+            default: return null;
         }
     };
-
-    const tabs = [
-        { id: 'stats', label: 'Dashboard' },
-        { id: 'groups', label: 'Agrupamentos' },
-        { id: 'settings', label: 'Configurações' },
-        { id: 'locator', label: 'Localizadoras' },
-        { id: 'manual', label: 'Add Manual' },
-        { id: 'operators', label: 'Operadores' },
-        { id: 'history', label: 'Histórico' },
-        { id: 'events', label: 'Eventos' }
-    ];
-
-    if (isSuperAdmin) {
-        tabs.push({ id: 'users', label: 'Usuários' });
-    }
 
     return (
         <div className="w-full max-w-6xl mx-auto pb-24 px-4">
             <div className="bg-gray-800 rounded-2xl p-2 mb-6 flex overflow-x-auto space-x-1 border border-gray-700 no-scrollbar sticky top-4 z-40 shadow-2xl">
-                {tabs.map(tab => (
+                {[
+                    { id: 'stats', label: 'Dashboard' },
+                    { id: 'groups', label: 'Agrupamentos' },
+                    { id: 'settings', label: 'Configurações' },
+                    { id: 'locator', label: 'Localizadoras' },
+                    { id: 'manual', label: 'Add Manual' },
+                    { id: 'operators', label: 'Operadores' },
+                    { id: 'history', label: 'Histórico' },
+                    { id: 'events', label: 'Eventos' },
+                    ...(isSuperAdmin ? [{ id: 'users', label: 'Usuários' }] : [])
+                ].map(tab => (
                     <button 
                         key={tab.id} 
                         onClick={() => setActiveTab(tab.id as any)} 
@@ -151,9 +148,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     </button>
                 ))}
             </div>
-            <div className="animate-fade-in">
-                {renderModule()}
-            </div>
+            <div className="animate-fade-in">{renderModule()}</div>
         </div>
     );
 };
