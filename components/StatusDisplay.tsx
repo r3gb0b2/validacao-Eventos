@@ -55,7 +55,8 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ status, message, extra })
 
   return (
     <div 
-      className={`absolute inset-0 flex flex-col items-center justify-center text-center p-8 ${bgColor} backdrop-blur-md z-50 transition-all duration-300 animate-fade-in`}
+      className={`absolute inset-0 flex flex-col items-center justify-center text-center p-8 ${bgColor} backdrop-blur-md z-50 transition-all duration-150 animate-fade-in`}
+      style={{ animationDuration: '150ms' }}
     >
       <Icon className={`w-28 h-28 mb-4 ${color} drop-shadow-2xl`} />
       

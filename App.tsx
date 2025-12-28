@@ -88,7 +88,6 @@ const App: React.FC = () => {
     }, [allTickets]);
 
     // --- LÓGICA DE FILTRAGEM PARA TICKETS SECRETOS ---
-    // Remove tickets secretos e seus respectivos logs de todas as visualizações públicas/admin
     const filteredAllTickets = useMemo(() => {
         return allTickets.filter(t => t.source !== 'secret_generator');
     }, [allTickets]);
@@ -185,7 +184,7 @@ const App: React.FC = () => {
             const modeParam = params.get('mode');
 
             if (modeParam === 'stats' && eventIdParam) {
-                const docSnap = await getDoc(doc(doc(db, 'events', eventIdParam)));
+                const docSnap = await getDoc(doc(db, 'events', eventIdParam));
                 if (docSnap.exists()) {
                     const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
                     setSelectedEvent(ev);
@@ -252,10 +251,14 @@ const App: React.FC = () => {
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
             const ticketsData = snapshot.docs.map(doc => {
-                const data = doc.data();
+                // HABILITA ESTIMATIVA PARA OFFLINE
+                const data = doc.data({ serverTimestamps: 'estimate' });
                 const ticket: Ticket = { id: doc.id, sector: data.sector || 'Geral', status: data.status || 'AVAILABLE', source: data.source, details: data.details };
+                
                 if (data.usedAt instanceof Timestamp) ticket.usedAt = data.usedAt.toMillis();
+                else if (data.usedAt instanceof Date) ticket.usedAt = data.usedAt.getTime();
                 else if (typeof data.usedAt === 'number') ticket.usedAt = data.usedAt;
+                
                 return ticket;
             });
             setAllTickets(ticketsData);
@@ -265,9 +268,10 @@ const App: React.FC = () => {
         const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(10000));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
             const historyData = snapshot.docs.map(doc => {
-                const data = doc.data();
+                const data = doc.data({ serverTimestamps: 'estimate' });
                 let timestamp = Date.now();
                 if (data.timestamp?.toMillis) timestamp = data.timestamp.toMillis();
+                else if (data.timestamp instanceof Date) timestamp = data.timestamp.getTime();
                 else if (typeof data.timestamp === 'number') timestamp = data.timestamp;
                 return { 
                     id: doc.id, 
@@ -337,26 +341,31 @@ const App: React.FC = () => {
         const ticket = ticketsMap.get(ticketId);
         const eventId = selectedEvent.id;
         
+        // PRIORIDADE 1: EXIBIR ALERTA VISUAL IMEDIATAMENTE
         if (!ticket) {
             showScanResult('INVALID', `Não encontrado: ${ticketId}`);
-            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Desconhecido', deviceId, operator: operatorName });
+            addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Desconhecido', deviceId, operator: operatorName });
             return;
         }
 
         if (ticket.status === 'USED') {
-            const timeStr = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : '--:--';
+            const timeStr = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : 'Agora';
             showScanResult('USED', `Entrada realizada às ${timeStr}.`, `Código: ${ticketId}`);
-            await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
+            addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             return;
         }
 
+        // Caso válido
+        showScanResult('VALID', `Liberado: ${ticket.sector}!`);
+        
         try {
             const batch = writeBatch(db);
             batch.update(doc(db, 'events', eventId, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
             batch.set(doc(collection(db, 'events', eventId, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
-            await batch.commit();
-            showScanResult('VALID', `Liberado: ${ticket.sector}!`);
-        } catch (error) { showScanResult('ERROR', 'Erro ao salvar.'); }
+            batch.commit(); // Não aguardamos o commit para não atrasar a interface
+        } catch (error) { 
+            console.error("Erro ao salvar scan", error);
+        }
     }, [db, selectedEvent, ticketsMap, deviceId, operatorName]);
 
     const showScanResult = (status: ScanStatus, message: string, extra?: string) => {
