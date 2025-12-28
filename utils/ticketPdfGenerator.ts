@@ -31,7 +31,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
 
   // --- PÁGINA 1 ---
   
-  // Fundo Laranja do Topo (Corrigido para #fe551d)
+  // Fundo Laranja do Topo (#fe551d)
   doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
@@ -80,8 +80,9 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   // Linha pontilhada meio
   doc.line(15, 92, 195, 92);
 
-  // --- INFORMAÇÕES DO EVENTO ---
-  doc.setFontSize(10.5);
+  // --- INFORMAÇÕES DO EVENTO (AUMENTADAS EM 30%) ---
+  const headerFontSize = 13.5; // Aumentado ~30% de 10.5
+  doc.setFontSize(headerFontSize);
   
   const l1Label1 = 'Abertura: ';
   const l1Val1 = details.openingTime || '--/--/---- --:--';
@@ -96,13 +97,14 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l1Label2, curX, 105); curX += doc.getTextWidth(l1Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l1Val2, curX, 105);
 
-  // Linha 2: Endereço
-  doc.setFontSize(9.5);
+  // Linha 2: Endereço (Com quebra automática para fonte maior)
+  const addrFontSize = 12.5; // Aumentado de 9.5
+  doc.setFontSize(addrFontSize);
   const addrLabel = 'Endereço: ';
   const addrValue = details.address || 'Não informado';
-  const splitAddr = doc.splitTextToSize(addrValue, 160);
+  const splitAddr = doc.splitTextToSize(addrValue, 165); // Largura um pouco maior
   
-  let addrY = 112;
+  let addrY = 113;
   const addrLabelW = doc.getTextWidth(addrLabel);
   const firstLineW = addrLabelW + doc.getTextWidth(splitAddr[0]);
   const addrStartX = 105 - (firstLineW / 2);
@@ -113,8 +115,8 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.text(splitAddr, addrStartX + addrLabelW, addrY);
   
   // Linha 3: Produzido e Contato
-  doc.setFontSize(10.5);
-  const prodY = addrY + (splitAddr.length * 5) + 2;
+  doc.setFontSize(headerFontSize);
+  const prodY = addrY + (splitAddr.length * 6) + 1; // Espaçamento maior para fonte maior
   const l3Label1 = 'Produzido: ';
   const l3Val1 = details.producer || 'Organização';
   const l3Label2 = '   Contato: ';
@@ -128,46 +130,50 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l3Label2, curX3, prodY); curX3 += doc.getTextWidth(l3Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
 
-  // --- ÁREA BRANCA (DADOS COMPACTOS E GORDINHOS) ---
-  const startDataY = 155;
+  // --- ÁREA BRANCA (DADOS COMPACTOS E AUMENTADOS EM 25%) ---
+  // Subi de 155 para 150 para ficar bem perto da parte laranja (que termina em 140)
+  const startDataY = 150; 
   doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
-  doc.setFontSize(10);
+  
+  const labelFontSize = 12.5; // Aumentado ~25% de 10
+  const valueFontSize = 19;   // Aumentado ~25% de 15
+  
+  doc.setFontSize(labelFontSize);
   doc.setFont('helvetica', 'bold'); 
   doc.text('Ingresso', 15, startDataY);
   doc.text('Participante', 195, startDataY, { align: 'right' });
   
-  doc.setFontSize(15);
-  // Texto do valor logo abaixo do rótulo
-  doc.text(details.sector || 'Geral', 15, startDataY + 5.5);
-  doc.text(details.ownerName || 'Convidado', 195, startDataY + 5.5, { align: 'right' });
+  doc.setFontSize(valueFontSize);
+  doc.text(details.sector || 'Geral', 15, startDataY + 6.5);
+  doc.text(details.ownerName || 'Convidado', 195, startDataY + 6.5, { align: 'right' });
 
-  // Bloco de Códigos (Ajustado para ficar 40% mais perto da linha acima)
-  // Antes era ~180. Reduzido para 168 para aproximar as linhas de texto.
-  const secondDataY = 169.5; 
-  doc.setFontSize(10);
+  // Bloco de Códigos (Mais aproximado da linha acima)
+  const secondDataY = 165; 
+  doc.setFontSize(labelFontSize);
   doc.setFont('helvetica', 'bold');
   doc.text('Código da Compra', 15, secondDataY);
   doc.text('Código do ingresso', 195, secondDataY, { align: 'right' });
 
-  doc.setFontSize(16);
-  // Valor logo abaixo do rótulo
-  doc.text(purchaseCode, 15, secondDataY + 5.5);
-  doc.text(ticketCode, 195, secondDataY + 5.5, { align: 'right' });
+  const codeValueFontSize = 20; // Aumentado de 16
+  doc.setFontSize(codeValueFontSize);
+  doc.text(purchaseCode, 15, secondDataY + 7);
+  doc.text(ticketCode, 195, secondDataY + 7, { align: 'right' });
 
-  // Linha separadora antes do QR (Corrigida para #506c7b)
+  // Linha separadora (Subiu para acompanhar o texto)
   doc.setDrawColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setLineWidth(0.1);
   doc.setLineDashPattern([1.5, 1], 0);
-  doc.line(15, 202, 195, 202);
+  doc.line(15, 185, 195, 185);
 
-  // QR CODE
+  // QR CODE (Subiu de 212 para 195 para ficar mais perto das informações)
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${ticketCode}`;
   const img = new Image();
   img.crossOrigin = "Anonymous";
   img.src = qrUrl;
   await new Promise((resolve) => {
     img.onload = () => {
-      doc.addImage(img, 'PNG', 65, 212, 80, 80);
+      // Ajustado posição Y para 195
+      doc.addImage(img, 'PNG', 65, 195, 80, 80);
       resolve(true);
     };
     img.onerror = () => resolve(false);
