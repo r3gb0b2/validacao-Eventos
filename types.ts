@@ -46,6 +46,18 @@ export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
     operator?: string;
 }
 
+export interface ImportLog {
+    id: string;
+    timestamp: number;
+    sourceName: string;
+    newCount: number;
+    existingCount: number;
+    updatedCount: number;
+    sectorsAffected: Record<string, number>;
+    status: 'success' | 'error';
+    errorMessage?: string;
+}
+
 export interface TimeBucket {
     time: string;
     counts: { [sector: string]: number };

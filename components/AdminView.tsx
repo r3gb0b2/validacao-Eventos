@@ -11,6 +11,7 @@ import GroupingModule from './admin/GroupingModule';
 import LocalizadorasModule from './admin/LocalizadorasModule';
 import ManualAddModule from './admin/ManualAddModule';
 import ParticipantsModule from './admin/ParticipantsModule';
+import AutoImportModule from './admin/AutoImportModule';
 import OperatorMonitor from './OperatorMonitor';
 import TicketList from './TicketList';
 import SuperAdminView from './SuperAdminView';
@@ -30,7 +31,7 @@ interface AdminViewProps {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'users' | 'participants'>(() => {
+    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'users' | 'participants' | 'auto_import'>(() => {
         try {
             return (localStorage.getItem('admin_active_tab') as any) || 'stats';
         } catch(e) { return 'stats'; }
@@ -129,6 +130,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
+            case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} allTickets={allTickets} onUpdateSectorNames={onUpdateSectorNames} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
             case 'participants': return <ParticipantsModule allTickets={allTickets} sectorNames={sectorNames} />;
             case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
@@ -145,6 +147,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             <div className="bg-gray-800 rounded-[1.5rem] p-2 mb-8 flex overflow-x-auto space-x-1 border border-gray-700 no-scrollbar sticky top-4 z-40 shadow-2xl backdrop-blur-md">
                 {[
                     { id: 'stats', label: 'Dashboard' },
+                    { id: 'auto_import', label: 'Auto Import' },
                     { id: 'participants', label: 'Participantes' },
                     { id: 'groups', label: 'Agrupamentos' },
                     { id: 'settings', label: 'Configurações' },
