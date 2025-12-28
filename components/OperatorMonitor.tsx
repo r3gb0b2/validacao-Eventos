@@ -29,8 +29,11 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       timeline: Record<string, number>;
     }> = {};
 
-    scanHistory.forEach(log => {
+    // Processamento de alto desempenho para até 20.000 logs
+    for (let i = 0; i < scanHistory.length; i++) {
+      const log = scanHistory[i];
       const op = log.operator || 'Sem Nome';
+      
       if (!operatorMap[op]) {
         operatorMap[op] = {
           name: op,
@@ -58,10 +61,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
 
       const sector = log.ticketSector || 'Desconhecido';
       s.sectors[sector] = (s.sectors[sector] || 0) + 1;
-
-      const hour = new Date(log.timestamp).getHours().toString().padStart(2, '0') + ':00';
-      s.timeline[hour] = (s.timeline[hour] || 0) + 1;
-    });
+    }
 
     return Object.values(operatorMap).sort((a, b) => (Number(b.valid) || 0) - (Number(a.valid) || 0));
   }, [scanHistory]);
@@ -73,7 +73,9 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       return allTickets.filter(t => t.status === 'USED').length;
   }, [allTickets]);
 
-  const activeNowCount = stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
+  const activeNowCount = useMemo(() => {
+      return stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
+  }, [stats]);
 
   return (
     <div className={`${isEmbedded ? 'p-6' : 'min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20'}`}>
@@ -203,7 +205,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
             <div className="col-span-full py-20 text-center bg-gray-800/50 rounded-3xl border-2 border-dashed border-gray-700">
               <TableCellsIcon className="w-16 h-16 mx-auto text-gray-700 mb-4" />
               <p className="text-xl font-bold text-gray-500">Nenhum operador detectado...</p>
-              <p className="text-gray-600">Aguardando scans no histórico (Limite: 2000).</p>
+              <p className="text-gray-600">Aguardando scans no histórico (Limite: 20.000).</p>
             </div>
           )}
         </div>
@@ -214,7 +216,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                 <div className="bg-gray-700/50 p-6 border-b border-gray-700 flex items-center justify-between">
                     <div className="flex items-center space-x-3">
                         <TableCellsIcon className="w-6 h-6 text-orange-500" />
-                        <h2 className="text-xl font-bold">Produtividade (Baseado nos últimos 2000 scans)</h2>
+                        <h2 className="text-xl font-bold">Produtividade (Baseado nos últimos 20.000 scans)</h2>
                     </div>
                 </div>
                 <div className="overflow-x-auto">

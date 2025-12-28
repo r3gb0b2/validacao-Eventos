@@ -235,8 +235,8 @@ const App: React.FC = () => {
             setTicketsLoaded(true);
         }, () => setTicketsLoaded(true));
 
-        // AUMENTADO O LIMITE PARA 2000 PARA GARANTIR ESTATÍSTICAS DE OPERADORES CORRETAS
-        const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(2000));
+        // AUMENTADO O LIMITE PARA 20.000 PARA GARANTIR ESTATÍSTICAS DE OPERADORES PRECISAS EM EVENTOS MASSIVOS
+        const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(20000));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
             const historyData = snapshot.docs.map(doc => {
                 const data = doc.data();
