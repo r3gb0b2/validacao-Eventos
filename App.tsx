@@ -59,7 +59,7 @@ const App: React.FC = () => {
         } catch(e) { return 'scanner'; }
     });
 
-    const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
+    const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string; extra?: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); 
     const [scansLoaded, setScansLoaded] = useState(false); 
@@ -185,7 +185,7 @@ const App: React.FC = () => {
             const modeParam = params.get('mode');
 
             if (modeParam === 'stats' && eventIdParam) {
-                const docSnap = await getDoc(doc(db, 'events', eventIdParam));
+                const docSnap = await getDoc(doc(doc(db, 'events', eventIdParam)));
                 if (docSnap.exists()) {
                     const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
                     setSelectedEvent(ev);
@@ -344,7 +344,8 @@ const App: React.FC = () => {
         }
 
         if (ticket.status === 'USED') {
-            showScanResult('USED', `Já utilizado.`);
+            const timeStr = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : '--:--';
+            showScanResult('USED', `Entrada realizada às ${timeStr}.`, `Código: ${ticketId}`);
             await addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             return;
         }
@@ -358,10 +359,10 @@ const App: React.FC = () => {
         } catch (error) { showScanResult('ERROR', 'Erro ao salvar.'); }
     }, [db, selectedEvent, ticketsMap, deviceId, operatorName]);
 
-    const showScanResult = (status: ScanStatus, message: string) => {
+    const showScanResult = (status: ScanStatus, message: string, extra?: string) => {
         if (status === 'VALID') playBeep('success');
         else playBeep('error');
-        setScanResult({ status, message });
+        setScanResult({ status, message, extra });
         setTimeout(() => setScanResult(null), 3000);
     };
 
@@ -393,7 +394,7 @@ const App: React.FC = () => {
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
                                 <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-lg overflow-hidden border-4 border-gray-700 shadow-xl">
-                                    {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} />}
+                                    {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} extra={scanResult.extra} />}
                                     <Scanner onScanSuccess={handleScanSuccess} onScanError={(e) => alert(e)} />
                                 </div>
                                 <div className="bg-gray-800 p-4 rounded-lg flex space-x-2">
