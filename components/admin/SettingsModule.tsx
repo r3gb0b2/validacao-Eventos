@@ -61,8 +61,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
         try {
-            const existingTickets = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
-            const ticketsToSave: any[] = [];
+            const existingTicketsMap = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
+            let allTicketsToSave: any[] = [];
 
             let fetchUrl = source.url.trim();
             
@@ -74,8 +74,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 rows.forEach(row => {
                     const code = String(row['code'] || row['codigo'] || row['id']).trim();
-                    if (code && !existingTickets.has(code)) {
-                        ticketsToSave.push({
+                    if (code && !existingTicketsMap.has(code)) {
+                        allTicketsToSave.push({
                             id: code,
                             sector: String(row['sector'] || row['setor'] || 'Geral'),
                             status: 'AVAILABLE',
@@ -85,23 +85,20 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     }
                 });
             } else {
-                // ST Ingressos API
+                // ST Ingressos API com Paginação
                 const endpoint = source.type === 'checkins' ? 'checkins' : 
                                 source.type === 'participants' ? 'participants' :
                                 source.type === 'buyers' ? 'buyers' : 'tickets';
                 
-                // Construção robusta da URL (Ajuste para evitar 404 de ID direto no path se for coleção)
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                 
-                // Algumas APIs da ST usam o ID no path, outras como query. Tentando formato padrão de coleção filtrada:
-                let fullUrl = `${baseUrl}/${endpoint}`;
+                // URL Inicial
+                let nextUrl: string | null = `${baseUrl}/${endpoint}`;
                 if (source.externalEventId) {
-                    if (source.type === 'checkins') {
-                        fullUrl += `/${source.externalEventId}`;
+                    if (source.type === 'checkins' || source.type === 'tickets') {
+                        nextUrl += `/${source.externalEventId}`;
                     } else {
-                        // Se não for checkin individual, tenta como query param ou subrecurso padrão
-                        fullUrl += `?event_id=${source.externalEventId}`;
-                        // Alternativa: fullUrl += `/${source.externalEventId}`;
+                        nextUrl += `?event_id=${source.externalEventId}`;
                     }
                 }
                 
@@ -114,40 +111,33 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
                     headers['Authorization'] = cleanToken;
                 }
-                
-                console.log(`Iniciando importação de: ${fullUrl}`);
-                
-                const res = await fetch(fullUrl, { headers, mode: 'cors' });
-                if (!res.ok) {
-                    const errText = await res.text();
-                    // Se der 404 com query param, tenta formato de path direto como fallback
-                    if (res.status === 404 && source.externalEventId) {
-                         const fallbackUrl = `${baseUrl}/${endpoint}/${source.externalEventId}`;
-                         console.log("Tentando fallback URL:", fallbackUrl);
-                         const res2 = await fetch(fallbackUrl, { headers, mode: 'cors' });
-                         if (res2.ok) {
-                             processJson(await res2.json());
-                             return;
-                         }
-                    }
-                    throw new Error(`Erro API (${res.status}): ${errText || 'Resposta não amigável'}`);
-                }
-                
-                processJson(await res.json());
 
-                function processJson(json: any) {
+                let pageCount = 0;
+                
+                // Loop de Paginação
+                while (nextUrl) {
+                    pageCount++;
+                    console.log(`Importando página ${pageCount}: ${nextUrl}`);
+                    
+                    const res = await fetch(nextUrl, { headers, mode: 'cors' });
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        throw new Error(`Erro API na pág ${pageCount} (${res.status}): ${errText}`);
+                    }
+                    
+                    const json = await res.json();
                     const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
                     
                     items.forEach((item: any) => {
                         const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode).trim();
                         if (!code) return;
 
-                        const existing = existingTickets.get(code) as Ticket | undefined;
+                        const existing = existingTicketsMap.get(code);
                         const isNew = !existing;
-                        const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || !!item.validated_at;
+                        const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at;
 
                         if (isNew) {
-                            ticketsToSave.push({
+                            allTicketsToSave.push({
                                 id: code,
                                 sector: String(item.sector_name || item.category || item.sector || 'Geral'),
                                 status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
@@ -159,23 +149,44 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 }
                             });
                         } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
-                            ticketsToSave.push({
+                            allTicketsToSave.push({
                                 ...existing,
                                 status: 'USED',
                                 usedAt: item.validated_at || Date.now()
                             });
                         }
                     });
+
+                    // Lógica para encontrar o link da próxima página
+                    // Tenta links explícitos da API
+                    let foundNext = json.links?.next || json.next_page_url || null;
+                    
+                    // Se não houver link explícito, mas houver metadados de página
+                    if (!foundNext && json.meta?.current_page && json.meta?.last_page && json.meta.current_page < json.meta.last_page) {
+                        const urlObj = new URL(nextUrl);
+                        urlObj.searchParams.set('page', (json.meta.current_page + 1).toString());
+                        foundNext = urlObj.toString();
+                    }
+
+                    nextUrl = foundNext;
+                    
+                    // Proteção contra loops infinitos
+                    if (pageCount > 500) break; 
                 }
             }
 
-            if (ticketsToSave.length > 0) {
-                const batch = writeBatch(db);
-                ticketsToSave.forEach(t => {
-                    batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true });
-                });
-                await batch.commit();
-                alert(`Sucesso! ${ticketsToSave.length} registros processados.`);
+            // Salvar no Firestore em lotes de 500
+            if (allTicketsToSave.length > 0) {
+                const BATCH_SIZE = 450;
+                for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
+                    const chunk = allTicketsToSave.slice(i, i + BATCH_SIZE);
+                    const batch = writeBatch(db);
+                    chunk.forEach(t => {
+                        batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true });
+                    });
+                    await batch.commit();
+                }
+                alert(`Sucesso! ${allTicketsToSave.length} registros sincronizados.`);
             } else {
                 alert("Nenhuma alteração necessária. Tudo sincronizado!");
             }
@@ -184,8 +195,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             await onUpdateImportSources(updated);
 
         } catch (e: any) {
-            console.error("Erro completo na sincronização:", e);
-            alert(`Falha na Sincronização:\n${e.message}\n\nVerifique:\n1. Se o Token é válido\n2. Se o ID do Evento está correto\n3. Se o navegador permite CORS para esta API.`);
+            console.error("Erro na sincronização:", e);
+            alert(`Falha na Sincronização:\n${e.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -376,10 +387,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             <div className="bg-orange-600/10 border border-orange-500/20 p-6 rounded-3xl flex items-start space-x-5">
                 <AlertTriangleIcon className="w-8 h-8 text-orange-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
-                    <p className="font-bold text-orange-400 uppercase tracking-widest">Ajuda com Erros de API:</p>
-                    <p>• <b>Token:</b> Deve ser o Token de Acesso da ST Ingressos. O sistema adiciona automaticamente "Bearer" se você não colocar.</p>
-                    <p>• <b>CORS:</b> APIs públicas as vezes bloqueiam acessos via navegador. Se a falha persistir mesmo com dados corretos, a API pode estar restringindo o acesso.</p>
-                    <p>• <b>Sincronização de Setores:</b> Os setores são únicos por evento. Ao trocar de evento, o painel é resetado para evitar confusão de dados.</p>
+                    <p className="font-bold text-orange-400 uppercase tracking-widest">Ajuda com Paginação:</p>
+                    <p>• <b>Volume de Dados:</b> O sistema agora detecta automaticamente se a API possui múltiplas páginas e as importa sequencialmente.</p>
+                    <p>• <b>Limite:</b> Se você tiver milhares de ingressos, a sincronização pode levar alguns segundos. Não feche a aba até receber o alerta de sucesso.</p>
                 </div>
             </div>
         </div>
