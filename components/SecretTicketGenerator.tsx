@@ -20,7 +20,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [isGenerating, setIsGenerating] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
     const [isDeletingBatch, setIsDeletingBatch] = useState(false);
-    const [isSavingLogo, setIsSavingLogo] = useState(false);
+    const [isSavingSettings, setIsSavingSettings] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [quantity, setQuantity] = useState(1);
     const [lastZipUrl, setLastZipUrl] = useState<string | null>(null);
@@ -57,7 +57,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         loadEvents();
     }, [db]);
 
-    // 2. Carregar configurações salvas (incluindo a LOGO) quando mudar o evento
+    // 2. Carregar TODAS as configurações salvas quando mudar o evento
     useEffect(() => {
         if (!selectedEventId || !db) return;
 
@@ -67,12 +67,21 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
                     const data = snap.data();
-                    if (data.logoUrl) {
-                        setFormData(prev => ({ ...prev, logoUrl: data.logoUrl }));
-                    }
+                    // Carrega todos os campos salvos para o formulário
+                    setFormData(prev => ({
+                        ...prev,
+                        eventName: data.eventName || prev.eventName,
+                        openingTime: data.openingTime || prev.openingTime,
+                        venue: data.venue || prev.venue,
+                        address: data.address || prev.address,
+                        producer: data.producer || prev.producer,
+                        contact: data.contact || prev.contact,
+                        sector: data.sector || prev.sector,
+                        logoUrl: data.logoUrl || prev.logoUrl
+                    }));
                 }
             } catch (e) {
-                console.error("Erro ao carregar logo salva", e);
+                console.error("Erro ao carregar configurações salvas", e);
             }
         };
         loadSavedSettings();
@@ -162,19 +171,29 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         reader.readAsDataURL(file);
     };
 
-    // FUNÇÃO PARA SALVAR A LOGO PERMANENTEMENTE NO BANCO
-    const saveLogoToFirestore = async () => {
-        if (!selectedEventId || !formData.logoUrl) return;
-        setIsSavingLogo(true);
+    // SALVAR TODAS AS CONFIGURAÇÕES NO BANCO
+    const saveSettingsToFirestore = async () => {
+        if (!selectedEventId) return;
+        setIsSavingSettings(true);
         try {
             const docRef = doc(db, 'events', selectedEventId, 'settings', 'main');
-            await setDoc(docRef, { logoUrl: formData.logoUrl }, { merge: true });
-            alert("Logo salva permanentemente para este evento!");
+            // Salva o objeto formData completo para persistência
+            await setDoc(docRef, { 
+                eventName: formData.eventName,
+                openingTime: formData.openingTime,
+                venue: formData.venue,
+                address: formData.address,
+                producer: formData.producer,
+                contact: formData.contact,
+                sector: formData.sector,
+                logoUrl: formData.logoUrl 
+            }, { merge: true });
+            alert("Todas as configurações foram salvas com sucesso!");
         } catch (e) {
             console.error(e);
-            alert("Erro ao salvar no banco.");
+            alert("Erro ao salvar configurações no banco.");
         } finally {
-            setIsSavingLogo(false);
+            setIsSavingSettings(false);
         }
     };
 
@@ -291,9 +310,19 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
                     {/* COLUNA 2: DADOS PDF E LOGO */}
                     <div className="space-y-4">
-                        <h2 className="text-sm font-bold text-orange-400 uppercase mb-2 flex items-center">
-                            <CloudDownloadIcon className="w-4 h-4 mr-2" /> 3. Layout do PDF
-                        </h2>
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-sm font-bold text-orange-400 uppercase flex items-center">
+                                <CloudDownloadIcon className="w-4 h-4 mr-2" /> 3. Layout do PDF
+                            </h2>
+                            <button 
+                                onClick={saveSettingsToFirestore}
+                                disabled={isSavingSettings}
+                                className="text-[10px] bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg font-bold uppercase transition-all flex items-center shadow-lg"
+                            >
+                                {isSavingSettings ? "Salvando..." : "Salvar Configurações"}
+                            </button>
+                        </div>
+
                         <input name="eventName" value={formData.eventName} onChange={handleInputChange} placeholder="Nome do Evento" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
                         <div className="grid grid-cols-2 gap-4">
                             <input name="openingTime" value={formData.openingTime} onChange={handleInputChange} placeholder="Abertura" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
@@ -307,15 +336,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <span className="text-[10px] text-gray-400 font-bold uppercase flex items-center">
                                     <LinkIcon className="w-3 h-3 mr-1" /> Imagem da Logo
                                 </span>
-                                {formData.logoUrl && formData.logoUrl.startsWith('data:') && (
-                                    <button 
-                                        onClick={saveLogoToFirestore}
-                                        disabled={isSavingLogo}
-                                        className="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-bold uppercase transition-all flex items-center"
-                                    >
-                                        {isSavingLogo ? "Salvando..." : "Salvar Logo no Banco"}
-                                    </button>
-                                )}
                             </div>
                             <div className="flex items-center gap-4">
                                 <div className="w-16 h-16 bg-gray-900 rounded-lg border border-gray-600 flex items-center justify-center overflow-hidden shrink-0">

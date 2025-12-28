@@ -15,37 +15,37 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ status, message, extra })
       case 'VALID':
         return {
           Icon: CheckCircleIcon,
-          color: 'text-green-300',
-          bgColor: 'bg-green-500/90',
+          color: 'text-white',
+          bgColor: 'bg-green-600',
           title: 'Acesso Liberado',
         };
       case 'USED':
         return {
           Icon: AlertTriangleIcon,
-          color: 'text-yellow-400',
-          bgColor: 'bg-yellow-600/90',
+          color: 'text-white',
+          bgColor: 'bg-yellow-500',
           title: 'Já Utilizado',
         };
       case 'INVALID':
       case 'ERROR':
         return {
           Icon: XCircleIcon,
-          color: 'text-red-300',
-          bgColor: 'bg-red-600/90',
+          color: 'text-white', // Título em Branco para contraste sobre o fundo vermelho vibrante
+          bgColor: 'bg-red-600', // Vermelho vibrante para o estado de erro
           title: 'Acesso Negado',
         };
       case 'WRONG_SECTOR':
          return {
           Icon: XCircleIcon,
-          color: 'text-orange-300',
-          bgColor: 'bg-orange-600/90',
+          color: 'text-white',
+          bgColor: 'bg-orange-600',
           title: 'Setor Incorreto',
         };
       default:
         return {
           Icon: XCircleIcon,
           color: 'text-gray-300',
-          bgColor: 'bg-gray-800/90',
+          bgColor: 'bg-gray-800',
           title: 'Status Desconhecido',
         };
     }
