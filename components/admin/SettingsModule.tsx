@@ -73,14 +73,14 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 const rows = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data as any[];
                 
                 rows.forEach(row => {
-                    const code = String(row['code'] || row['codigo'] || row['id']).trim();
+                    const code = String(row['code'] || row['codigo'] || row['id'] || '').trim();
                     if (code && !existingTicketsMap.has(code)) {
                         allTicketsToSave.push({
                             id: code,
                             sector: String(row['sector'] || row['setor'] || 'Geral'),
                             status: 'AVAILABLE',
                             source: 'api_import',
-                            details: { ownerName: row['name'] || row['nome'] || 'Importado' }
+                            details: { ownerName: String(row['name'] || row['nome'] || 'Importado') }
                         });
                     }
                 });
@@ -92,7 +92,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                 
-                // URL Inicial usando Query Params (Evita erro 404 em alguns endpoints da ST)
                 let currentUrl: string = `${baseUrl}/${endpoint}`;
                 const urlObj = new URL(currentUrl, window.location.origin);
                 
@@ -100,7 +99,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     urlObj.searchParams.set('event_id', source.externalEventId);
                 }
                 
-                // Tenta buscar o máximo possível por página se suportado
                 urlObj.searchParams.set('per_page', '100');
                 
                 let nextUrl: string | null = urlObj.toString();
@@ -116,9 +114,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
 
                 let pageCount = 0;
-                let totalItemsFound = 0;
                 
-                // Loop de Paginação
                 while (nextUrl) {
                     pageCount++;
                     console.log(`Importando página ${pageCount}: ${nextUrl}`);
@@ -126,7 +122,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     const res = await fetch(nextUrl, { headers, mode: 'cors' });
                     if (!res.ok) {
                         const errText = await res.text();
-                        // Fallback: Se query param event_id deu 404, tenta no path (alguns endpoints usam path)
                         if (res.status === 404 && pageCount === 1 && source.externalEventId) {
                             const fallbackUrl = `${baseUrl}/${endpoint}/${source.externalEventId}`;
                             console.log("Tentando fallback path URL:", fallbackUrl);
@@ -134,21 +129,17 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             if (resFallback.ok) {
                                 const json = await resFallback.json();
                                 processItems(json);
-                                break; // Path based usually doesn't paginate the same way or is a single object
+                                break;
                             }
                         }
                         throw new Error(`Erro API na pág ${pageCount} (${res.status}): ${errText}`);
                     }
                     
                     const json = await res.json();
-                    const itemsOnPage = processItems(json);
-                    totalItemsFound += itemsOnPage;
+                    processItems(json);
 
-                    // Lógica para encontrar o link da próxima página
-                    // 1. Verifica links explícitos
                     let foundNext = json.links?.next || json.next_page_url || json.pagination?.next_page_url || null;
                     
-                    // 2. Se não houver link explícito, calcula via metadados (Padrão Laravel/ST)
                     if (!foundNext) {
                         const meta = json.meta || json.pagination || json;
                         const currentPage = meta.current_page || meta.page;
@@ -162,17 +153,14 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     }
 
                     nextUrl = foundNext;
-                    
-                    // Segurança contra loops infinitos (máximo 1000 páginas)
                     if (pageCount > 1000) break; 
                 }
 
                 function processItems(json: any) {
                     const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
-                    const count = items.length;
                     
                     items.forEach((item: any) => {
-                        const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode).trim();
+                        const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode || '').trim();
                         if (!code) return;
 
                         const existing = existingTicketsMap.get(code);
@@ -187,8 +175,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
                                 source: 'api_import',
                                 details: { 
-                                    ownerName: item.name || item.customer_name || item.buyer_name || 'Importado',
-                                    originalId: item.id
+                                    ownerName: String(item.name || item.customer_name || item.buyer_name || 'Importado'),
+                                    originalId: item.id ?? null // FIX: Garantir que originalId nunca seja undefined
                                 }
                             });
                         } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
@@ -199,11 +187,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             });
                         }
                     });
-                    return count;
                 }
             }
 
-            // Salvar no Firestore em lotes de 450
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
@@ -214,7 +200,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     });
                     await batch.commit();
                 }
-                alert(`Sucesso! ${allTicketsToSave.length} registros sincronizados (total processado: ${allTicketsToSave.length}).`);
+                alert(`Sucesso! ${allTicketsToSave.length} registros sincronizados.`);
             } else {
                 alert("Nenhuma alteração necessária. Tudo sincronizado!");
             }
@@ -224,7 +210,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
-            alert(`Falha na Sincronização:\n${e.message}\n\nDica: Verifique se o ID do evento está correto no campo "ID Evento Externo".`);
+            alert(`Falha na Sincronização:\n${e.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -415,10 +401,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             <div className="bg-orange-600/10 border border-orange-500/20 p-6 rounded-3xl flex items-start space-x-5">
                 <AlertTriangleIcon className="w-8 h-8 text-orange-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
-                    <p className="font-bold text-orange-400 uppercase tracking-widest">Ajuda com Importação:</p>
-                    <p>• <b>Paginação:</b> O sistema agora percorre automaticamente todas as páginas da API ST Ingressos para capturar a carga total.</p>
-                    <p>• <b>IDs e URLs:</b> Algumas versões da API ST Ingressos preferem o ID do evento via Query Param (?event_id=), outras no Path (/tickets/id). O sistema agora tenta ambos para garantir o sucesso.</p>
-                    <p>• <b>404 Error:</b> Se receber um erro 404, verifique se o "ID Evento Externo" está correto e se o Token tem permissão para aquele evento.</p>
+                    <p className="font-bold text-orange-400 uppercase tracking-widest">Dicas de Sincronização:</p>
+                    <p>• <b>Suporte a Lote:</b> O sistema salva centenas de registros por segundo de forma segura no Firebase.</p>
+                    <p>• <b>Campos Obrigatórios:</b> Certifique-se de que sua API fornece um código de barras ou ID único para cada ingresso.</p>
                 </div>
             </div>
         </div>
