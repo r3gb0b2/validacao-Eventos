@@ -82,7 +82,7 @@ export interface ImportSource {
     name: string;
     url: string;
     token: string;
-    eventId: string;
+    externalEventId?: string; // ID do evento na ST Ingressos
     type: ImportType;
     autoImport: boolean;
     lastImportTime?: number;

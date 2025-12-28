@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
 import { ImportSource, ImportType, Event, Ticket } from '../../types';
-import { Firestore, doc, setDoc, writeBatch } from 'firebase/firestore';
-import { CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, ClockIcon, AlertTriangleIcon } from '../Icons';
+import { Firestore, doc, setDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+// FIX: Added missing PlusCircleIcon to imports
+import { CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, ClockIcon, AlertTriangleIcon, CheckCircleIcon, PlusCircleIcon } from '../Icons';
 import Papa from 'papaparse';
 
 interface SettingsModuleProps {
@@ -21,11 +22,11 @@ interface SettingsModuleProps {
 const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sectorNames, hiddenSectors, importSources, onUpdateSectorNames, onUpdateImportSources, isLoading, setIsLoading, allTickets }) => {
     const [editSource, setEditSource] = useState<Partial<ImportSource>>({ 
         name: '', 
-        url: '', 
+        url: 'https://public-api.stingressos.com.br', 
         token: '', 
         type: 'tickets', 
         autoImport: false,
-        eventId: '' 
+        externalEventId: '' 
     });
 
     const handleAddSource = async () => {
@@ -37,17 +38,19 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         } as ImportSource;
         const updated = [...importSources, newSource];
         await onUpdateImportSources(updated);
-        setEditSource({ name: '', url: '', token: '', type: 'tickets', autoImport: false, eventId: '' });
+        setEditSource({ name: '', url: 'https://public-api.stingressos.com.br', token: '', type: 'tickets', autoImport: false, externalEventId: '' });
     };
 
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
         try {
-            const existingIds = new Set(allTickets.map(t => String(t.id).trim()));
+            const existingTickets = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
             const ticketsToSave: any[] = [];
+            const scansToSave: any[] = [];
 
+            let fetchUrl = source.url.trim();
+            
             if (source.type === 'google_sheets') {
-                let fetchUrl = source.url.trim();
                 if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                 const res = await fetch(fetchUrl);
                 const csvText = await res.text();
@@ -55,7 +58,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 rows.forEach(row => {
                     const code = String(row['code'] || row['codigo'] || row['id']).trim();
-                    if (code && !existingIds.has(code)) {
+                    if (code && !existingTickets.has(code)) {
                         ticketsToSave.push({
                             id: code,
                             sector: String(row['sector'] || row['setor'] || 'Geral'),
@@ -66,25 +69,50 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     }
                 });
             } else {
-                // ST Ingressos ou API Genérica
+                // ST Ingressos API
+                const endpoint = source.type === 'checkins' ? 'checkins' : 
+                                source.type === 'participants' ? 'participants' :
+                                source.type === 'buyers' ? 'buyers' : 'tickets';
+                
+                const fullUrl = `${fetchUrl}/${endpoint}${source.externalEventId ? `/${source.externalEventId}` : ''}`;
+                
                 const headers: HeadersInit = { 'Accept': 'application/json' };
                 if (source.token) headers['Authorization'] = `Bearer ${source.token}`;
                 
-                const res = await fetch(source.url, { headers });
-                if (!res.ok) throw new Error("Erro na resposta da API");
+                const res = await fetch(fullUrl, { headers });
+                if (!res.ok) throw new Error(`Erro API: ${res.status}`);
                 const json = await res.json();
                 
-                const items = json.data || json.participants || json.tickets || (Array.isArray(json) ? json : []);
+                const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
                 
                 items.forEach((item: any) => {
-                    const code = String(item.access_code || item.code || item.qr_code || item.id).trim();
-                    if (code && !existingIds.has(code)) {
+                    const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode).trim();
+                    if (!code) return;
+
+                    // FIX: Explicitly cast 'existing' to Ticket or undefined to avoid unknown/spread errors
+                    const existing = existingTickets.get(code) as Ticket | undefined;
+                    const isNew = !existing;
+                    const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used';
+
+                    if (isNew) {
                         ticketsToSave.push({
                             id: code,
                             sector: String(item.sector_name || item.category || item.sector || 'Geral'),
-                            status: item.used ? 'USED' : 'AVAILABLE',
+                            status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
+                            usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
                             source: 'api_import',
-                            details: { ownerName: item.name || item.customer_name || 'Importado' }
+                            details: { 
+                                ownerName: item.name || item.customer_name || item.buyer_name || 'Importado',
+                                originalId: item.id
+                            }
+                        });
+                    } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
+                        // FIX: Added 'existing &&' to check before accessing status and spreading object
+                        // Atualizar ingresso existente para usado
+                        ticketsToSave.push({
+                            ...existing,
+                            status: 'USED',
+                            usedAt: item.validated_at || Date.now()
                         });
                     }
                 });
@@ -96,106 +124,144 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true });
                 });
                 await batch.commit();
-                alert(`Sucesso! ${ticketsToSave.length} novos ingressos importados.`);
+                alert(`Sucesso! ${ticketsToSave.length} registros processados.`);
             } else {
-                alert("Nenhum ingresso novo encontrado para importar.");
+                alert("Nenhuma alteração necessária. Tudo sincronizado!");
             }
 
-            // Atualizar timestamp da última importação
             const updated = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
             await onUpdateImportSources(updated);
 
         } catch (e) {
             console.error(e);
-            alert("Erro na importação. Verifique a URL e o Token.");
+            alert("Falha na Sincronização. Verifique Token, ID do Evento e Conexão.");
         } finally {
             setIsLoading(false);
         }
     };
 
     return (
-        <div className="space-y-8 pb-32">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="space-y-8 pb-32 animate-fade-in">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 {/* CONFIGURAÇÃO DE FONTES DE DADOS */}
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl space-y-4">
-                    <h3 className="font-bold text-lg flex items-center text-blue-400">
-                        <CloudUploadIcon className="w-5 h-5 mr-2" /> Integrações e APIs
-                    </h3>
+                <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-2xl space-y-5">
+                    <div className="flex items-center justify-between">
+                        <h3 className="font-bold text-xl flex items-center text-blue-400">
+                            <CloudUploadIcon className="w-6 h-6 mr-3" /> Integração ST Ingressos
+                        </h3>
+                        <span className="bg-blue-900/30 text-blue-400 text-[10px] px-2 py-1 rounded-full font-bold">API V1</span>
+                    </div>
                     
-                    <div className="space-y-3 bg-gray-900/50 p-4 rounded-xl border border-gray-700">
-                        <input 
-                            value={editSource.name} 
-                            onChange={e => setEditSource({...editSource, name: e.target.value})} 
-                            placeholder="Nome da Integração (ex: ST Ingressos)" 
-                            className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm" 
-                        />
-                        <input 
-                            value={editSource.url} 
-                            onChange={e => setEditSource({...editSource, url: e.target.value})} 
-                            placeholder="URL da API ou Link CSV Google Sheets" 
-                            className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm" 
-                        />
-                        <input 
-                            value={editSource.token} 
-                            onChange={e => setEditSource({...editSource, token: e.target.value})} 
-                            placeholder="Token de Acesso (Bearer / API Key)" 
-                            className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm" 
-                        />
-                        
-                        <div className="flex gap-2">
-                            <select 
-                                value={editSource.type} 
-                                onChange={e => setEditSource({...editSource, type: e.target.value as any})}
-                                className="flex-1 bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm"
-                            >
-                                <option value="tickets">Tipo: Ingressos (Carga)</option>
-                                <option value="participants">Tipo: Participantes</option>
-                                <option value="google_sheets">Tipo: Google Sheets (CSV)</option>
-                            </select>
-                            <label className="flex items-center gap-2 bg-gray-800 px-4 rounded-xl border border-gray-700 cursor-pointer">
+                    <div className="space-y-4 bg-gray-900/50 p-5 rounded-2xl border border-gray-700">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">Nome da Fonte</label>
                                 <input 
-                                    type="checkbox" 
-                                    checked={editSource.autoImport} 
-                                    onChange={e => setEditSource({...editSource, autoImport: e.target.checked})}
+                                    value={editSource.name} 
+                                    onChange={e => setEditSource({...editSource, name: e.target.value})} 
+                                    placeholder="Ex: API Principal" 
+                                    className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none" 
                                 />
-                                <span className="text-[10px] font-bold uppercase">Auto</span>
-                            </label>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">ID Evento Externo</label>
+                                <input 
+                                    value={editSource.externalEventId} 
+                                    onChange={e => setEditSource({...editSource, externalEventId: e.target.value})} 
+                                    placeholder="Ex: 12345" 
+                                    className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none" 
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">URL Base API</label>
+                            <input 
+                                value={editSource.url} 
+                                onChange={e => setEditSource({...editSource, url: e.target.value})} 
+                                placeholder="https://public-api.stingressos.com.br" 
+                                className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none" 
+                            />
+                        </div>
+
+                        <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">Token de Autorização</label>
+                            <input 
+                                value={editSource.token} 
+                                onChange={e => setEditSource({...editSource, token: e.target.value})} 
+                                placeholder="Insira o Bearer Token..." 
+                                className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none font-mono" 
+                            />
+                        </div>
+                        
+                        <div className="flex gap-3">
+                            <div className="flex-1 space-y-1">
+                                <label className="text-[10px] text-gray-500 uppercase font-bold ml-1">Tipo de Recurso</label>
+                                <select 
+                                    value={editSource.type} 
+                                    onChange={e => setEditSource({...editSource, type: e.target.value as any})}
+                                    className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none"
+                                >
+                                    <option value="tickets">/tickets (Carga Total)</option>
+                                    <option value="checkins">/checkins (Sincronizar Usados)</option>
+                                    <option value="participants">/participants (Participantes)</option>
+                                    <option value="buyers">/buyers (Compradores)</option>
+                                    <option value="google_sheets">Google Sheets (CSV)</option>
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] text-gray-500 uppercase font-bold ml-1 text-center block">Auto</label>
+                                <label className="flex items-center justify-center bg-gray-800 h-[46px] w-[60px] rounded-xl border border-gray-700 cursor-pointer hover:border-blue-500 transition-all">
+                                    <input 
+                                        type="checkbox" 
+                                        className="w-5 h-5 accent-blue-600"
+                                        checked={editSource.autoImport} 
+                                        onChange={e => setEditSource({...editSource, autoImport: e.target.checked})}
+                                    />
+                                </label>
+                            </div>
                         </div>
 
                         <button 
                             onClick={handleAddSource} 
-                            className="w-full bg-blue-600 hover:bg-blue-700 p-3 rounded-xl font-bold transition-all"
+                            className="w-full bg-blue-600 hover:bg-blue-700 p-4 rounded-xl font-bold transition-all shadow-lg active:scale-95 flex items-center justify-center"
                         >
-                            Adicionar Nova Fonte
+                            <CheckCircleIcon className="w-5 h-5 mr-2" /> Salvar Integração
                         </button>
                     </div>
 
-                    <div className="space-y-3">
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                         {importSources.map(s => (
-                            <div key={s.id} className="bg-gray-900 border border-gray-700 p-4 rounded-xl flex justify-between items-center group">
+                            <div key={s.id} className="bg-gray-900/80 border border-gray-700 p-4 rounded-2xl flex justify-between items-center group hover:border-blue-500/50 transition-all">
                                 <div className="space-y-1">
-                                    <p className="text-sm font-bold text-white flex items-center">
-                                        {s.name}
-                                        {s.autoImport && <span className="ml-2 w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>}
-                                    </p>
-                                    <p className="text-[10px] text-gray-500 truncate max-w-[200px]">{s.url}</p>
+                                    <div className="flex items-center gap-2">
+                                        <p className="text-sm font-bold text-white">{s.name}</p>
+                                        <span className="text-[8px] bg-gray-800 px-1.5 py-0.5 rounded border border-gray-700 text-gray-400 uppercase">{s.type}</span>
+                                        {s.autoImport && <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]"></span>}
+                                    </div>
+                                    <p className="text-[10px] text-gray-500 truncate max-w-[180px]">{s.url}</p>
                                     {s.lastImportTime > 0 && (
-                                        <p className="text-[9px] text-blue-400 font-bold">Última sinc: {new Date(s.lastImportTime).toLocaleTimeString()}</p>
+                                        <p className="text-[9px] text-blue-400 font-bold flex items-center">
+                                            <ClockIcon className="w-3 h-3 mr-1" />
+                                            Sincronizado: {new Date(s.lastImportTime).toLocaleString()}
+                                        </p>
                                     )}
                                 </div>
                                 <div className="flex gap-2">
                                     <button 
                                         onClick={() => runImport(s)}
                                         disabled={isLoading}
-                                        className="bg-gray-800 hover:bg-blue-600 p-2 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                                        className="bg-blue-600/10 hover:bg-blue-600 p-2.5 rounded-xl text-blue-400 hover:text-white text-xs font-bold transition-all disabled:opacity-50"
+                                        title="Importar Agora"
                                     >
-                                        Importar Agora
+                                        <CloudUploadIcon className="w-5 h-5"/>
                                     </button>
                                     <button 
                                         onClick={() => onUpdateImportSources(importSources.filter(x => x.id !== s.id))}
-                                        className="bg-red-900/20 hover:bg-red-600 p-2 rounded-lg text-red-500 hover:text-white transition-all"
+                                        className="bg-red-900/10 hover:bg-red-600 p-2.5 rounded-xl text-red-500 hover:text-white transition-all"
+                                        title="Excluir"
                                     >
-                                        <TrashIcon className="w-4 h-4"/>
+                                        <TrashIcon className="w-5 h-5"/>
                                     </button>
                                 </div>
                             </div>
@@ -204,14 +270,14 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 </div>
 
                 {/* GERENCIAR SETORES */}
-                <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl space-y-4">
-                    <h3 className="font-bold text-lg flex items-center text-gray-300">
-                        <TableCellsIcon className="w-5 h-5 mr-2" /> Gestão de Setores
+                <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl space-y-5">
+                    <h3 className="font-bold text-xl flex items-center text-gray-300">
+                        <TableCellsIcon className="w-6 h-6 mr-3" /> Gestão de Setores
                     </h3>
-                    <div className="space-y-2 max-h-[400px] overflow-y-auto no-scrollbar">
+                    <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
                         {sectorNames.map((name, i) => (
-                            <div key={i} className="flex items-center justify-between bg-gray-900/50 p-3 rounded-xl border border-gray-700">
-                                <span className="text-sm font-medium">{name}</span>
+                            <div key={i} className="flex items-center justify-between bg-gray-900/50 p-4 rounded-2xl border border-gray-700 hover:border-gray-600 transition-all">
+                                <span className="text-sm font-bold text-gray-200">{name}</span>
                                 <div className="flex gap-2">
                                     <button 
                                         onClick={() => {
@@ -219,20 +285,20 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                             const newHidden = isHidden ? hiddenSectors.filter(h => h !== name) : [...hiddenSectors, name];
                                             onUpdateSectorNames(sectorNames, newHidden);
                                         }} 
-                                        className={`p-2 rounded-lg transition-all ${hiddenSectors.includes(name) ? 'bg-gray-700 text-gray-500' : 'bg-blue-600/10 text-blue-400'}`}
+                                        className={`p-2.5 rounded-xl transition-all ${hiddenSectors.includes(name) ? 'bg-gray-700 text-gray-500' : 'bg-blue-600/10 text-blue-400'}`}
                                         title={hiddenSectors.includes(name) ? "Setor Oculto" : "Setor Visível"}
                                     >
-                                        {hiddenSectors.includes(name) ? <EyeSlashIcon className="w-4 h-4"/> : <EyeIcon className="w-4 h-4"/>}
+                                        {hiddenSectors.includes(name) ? <EyeSlashIcon className="w-5 h-5"/> : <EyeIcon className="w-5 h-5"/>}
                                     </button>
                                     <button 
                                         onClick={() => {
-                                            if(confirm(`Excluir setor "${name}"? Isso não apaga os ingressos já salvos.`)) {
+                                            if(confirm(`Excluir setor "${name}"? Os ingressos cadastrados continuarão no banco, mas não aparecerão no dashboard filtrado.`)) {
                                                 onUpdateSectorNames(sectorNames.filter((_, idx) => idx !== i), hiddenSectors);
                                             }
                                         }} 
-                                        className="p-2 bg-red-900/10 text-red-500 rounded-lg hover:bg-red-600 hover:text-white transition-all"
+                                        className="p-2.5 bg-red-900/10 text-red-500 rounded-xl hover:bg-red-600 hover:text-white transition-all"
                                     >
-                                        <TrashIcon className="w-4 h-4"/>
+                                        <TrashIcon className="w-5 h-5"/>
                                     </button>
                                 </div>
                             </div>
@@ -240,20 +306,20 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     </div>
                     <button 
                         onClick={() => { const n = prompt("Nome do novo setor:"); if(n) onUpdateSectorNames([...sectorNames, n], hiddenSectors); }} 
-                        className="w-full mt-4 p-4 border-2 border-dashed border-gray-700 rounded-2xl text-gray-500 hover:text-white hover:border-orange-500/50 hover:bg-orange-500/5 transition-all font-bold"
+                        className="w-full mt-4 p-5 border-2 border-dashed border-gray-700 rounded-3xl text-gray-500 hover:text-white hover:border-orange-500/50 hover:bg-orange-500/5 transition-all font-bold flex items-center justify-center gap-2"
                     >
-                        + Adicionar Novo Setor
+                        <PlusCircleIcon className="w-5 h-5" /> Adicionar Novo Setor
                     </button>
                 </div>
             </div>
 
-            <div className="bg-orange-600/10 border border-orange-500/20 p-6 rounded-2xl flex items-start space-x-4">
-                <AlertTriangleIcon className="w-6 h-6 text-orange-500 flex-shrink-0" />
+            <div className="bg-orange-600/10 border border-orange-500/20 p-6 rounded-3xl flex items-start space-x-5">
+                <AlertTriangleIcon className="w-8 h-8 text-orange-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
-                    <p className="font-bold text-orange-400 uppercase">Instruções de Importação:</p>
-                    <p>• O sistema ignora automaticamente códigos de ingressos que já existam no banco de dados.</p>
-                    <p>• <b>Google Sheets:</b> Use o link de compartilhamento "Qualquer pessoa com o link" e certifique-se que o cabeçalho contém 'code' ou 'codigo'.</p>
-                    <p>• <b>Sincronização Automática:</b> Se marcada, o sistema tentará atualizar os dados a cada 5 minutos enquanto houver algum operador logado.</p>
+                    <p className="font-bold text-orange-400 uppercase tracking-widest">Documentação Técnica:</p>
+                    <p>• O sistema utiliza o campo <code className="bg-gray-900 px-1 py-0.5 rounded">access_code</code> ou <code className="bg-gray-900 px-1 py-0.5 rounded">barcode</code> da API ST Ingressos como chave primária.</p>
+                    <p>• <b>Importação Retroativa:</b> Se você importar <code className="bg-gray-900 px-1 py-0.5 rounded">checkins</code>, o sistema atualizará o status dos ingressos locais correspondentes para <span className="text-green-500 font-bold">USED</span>, garantindo que o Dashboard reflita a portaria externa.</p>
+                    <p>• <b>Segurança:</b> Os tokens são salvos de forma segura no Firestore por evento.</p>
                 </div>
             </div>
         </div>
