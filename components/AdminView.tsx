@@ -6,7 +6,8 @@ import TicketList from './TicketList';
 import SuperAdminView from './SuperAdminView'; 
 import OperatorMonitor from './OperatorMonitor';
 import { generateEventReport } from '../utils/pdfGenerator';
-import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc, getDocs } from 'firebase/firestore';
+// FIX: Import serverTimestamp from firebase/firestore.
+import { Firestore, collection, writeBatch, doc, addDoc, updateDoc, setDoc, deleteDoc, Timestamp, getDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { CloudDownloadIcon, CloudUploadIcon, EyeIcon, EyeSlashIcon, TrashIcon, CogIcon, LinkIcon, SearchIcon, CheckCircleIcon, XCircleIcon, AlertTriangleIcon, ClockIcon, QrCodeIcon, UsersIcon, LockClosedIcon, TicketIcon, PlusCircleIcon, FunnelIcon, VideoCameraIcon, TableCellsIcon } from './Icons';
 import Papa from 'papaparse';
 
@@ -74,6 +75,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         loadConfigs();
     }, [db, selectedEvent]);
 
+    const handleCreateEvent = async () => {
+        const name = prompt("Nome do novo evento:");
+        if (!name) return;
+        try {
+            await addDoc(collection(db, 'events'), { name, isHidden: false, createdAt: serverTimestamp() });
+            alert("Evento criado com sucesso!");
+        } catch (e) { alert("Erro ao criar evento."); }
+    };
+
+    const handleDeleteSector = async (index: number) => {
+        const sectorName = editableSectorNames[index];
+        if (!confirm(`Deseja APAGAR permanentemente o setor "${sectorName}" das configurações? Os ingressos existentes manterão o setor, mas ele não aparecerá nas opções.`)) return;
+        
+        const newNames = editableSectorNames.filter((_, i) => i !== index);
+        const newHidden = hiddenSectors.filter(s => s !== sectorName);
+        
+        setEditableSectorNames(newNames);
+        await onUpdateSectorNames(newNames, newHidden);
+    };
+
     const executeImport = async (source: ImportSource) => {
         if (!selectedEvent || !isOnline) return;
         setIsLoading(true);
@@ -90,6 +111,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 const rows = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data as any[];
                 rows.forEach(row => {
                     const code = String(row['code'] || row['codigo'] || row['id']).trim();
+                    // Se ignorar existentes estiver ativo, pula códigos que já estão no banco
                     if (code && !existingIds.has(code)) {
                         const sec = String(row['sector'] || row['setor'] || 'Geral');
                         ticketsToSave.push({ id: code, sector: sec, status: 'AVAILABLE', details: { ownerName: row['name'] || row['nome'] } });
@@ -230,8 +252,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                         </select>
                                     </div>
                                 </div>
+                                <div className="bg-gray-900 p-3 rounded-xl border border-gray-700">
+                                    <label className="flex items-center cursor-pointer text-xs font-bold text-gray-400">
+                                        <input type="checkbox" checked={ignoreExisting} onChange={e => setIgnoreExisting(e.target.checked)} className="mr-2 h-4 w-4 rounded bg-gray-800 border-gray-600 text-blue-600" />
+                                        Ignorar atualizações de ingressos já existentes (Não alterar dados)
+                                    </label>
+                                </div>
                                 <div className="flex items-center justify-between p-2">
-                                    <label className="text-xs flex items-center font-bold text-gray-400 cursor-pointer"><input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="mr-2" /> Auto-Sincronização (10 min)</label>
+                                    <label className="text-xs flex items-center font-bold text-gray-400 cursor-pointer"><input type="checkbox" checked={editSource.autoImport} onChange={e => setEditSource({...editSource, autoImport: e.target.checked})} className="mr-2" /> Auto-Sincronização (5 min)</label>
                                 </div>
                                 <button onClick={handleSaveEditSource} className="w-full bg-blue-600 hover:bg-blue-700 p-3 rounded-xl font-bold shadow-lg transition-all active:scale-95">Salvar Configuração</button>
                             </div>
@@ -257,8 +285,11 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                                 {editableSectorNames.map((name, i) => (
                                     <div key={i} className="flex items-center space-x-2 bg-gray-900/50 p-2 rounded-xl border border-gray-700">
                                         <span className="flex-grow text-sm font-medium">{name}</span>
-                                        <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); const h = editableSectorNames.filter((_, idx) => !v[idx]); onUpdateSectorNames(editableSectorNames, h); }} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-all">
+                                        <button onClick={() => { const v = [...sectorVisibility]; v[i] = !v[i]; setSectorVisibility(v); const h = editableSectorNames.filter((_, idx) => !v[idx]); onUpdateSectorNames(editableSectorNames, h); }} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-lg transition-all" title="Alternar Visibilidade">
                                             {sectorVisibility[i] ? <EyeIcon className="w-4 h-4 text-blue-400"/> : <EyeSlashIcon className="w-4 h-4 text-gray-500"/>}
+                                        </button>
+                                        <button onClick={() => handleDeleteSector(i)} className="p-2 bg-red-900/20 text-red-500 hover:bg-red-600 hover:text-white rounded-lg transition-all" title="Apagar Setor">
+                                            <TrashIcon className="w-4 h-4" />
                                         </button>
                                     </div>
                                 ))}
@@ -286,10 +317,26 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 );
             case 'events':
                 return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {events.map(ev => (
-                            <div key={ev.id} className="bg-gray-800 p-5 rounded-2xl border border-gray-700 flex justify-between items-center"><span className="font-bold">{ev.name}</span><button onClick={() => onSelectEvent(ev)} className="bg-orange-600 px-4 py-2 rounded-xl text-xs font-bold">Selecionar</button></div>
-                        ))}
+                    <div className="space-y-6">
+                        <div className="flex justify-between items-center bg-gray-800 p-4 rounded-2xl border border-gray-700">
+                            <div>
+                                <h3 className="font-bold text-white">Gerenciar Eventos</h3>
+                                <p className="text-xs text-gray-500">Crie ou selecione eventos ativos.</p>
+                            </div>
+                            <button onClick={handleCreateEvent} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center shadow-lg transition-all active:scale-95">
+                                <PlusCircleIcon className="w-4 h-4 mr-2" /> Novo Evento
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {events.map(ev => (
+                                <div key={ev.id} className={`bg-gray-800 p-5 rounded-2xl border transition-all flex justify-between items-center ${selectedEvent?.id === ev.id ? 'border-orange-500 bg-orange-500/5' : 'border-gray-700'}`}>
+                                    <span className="font-bold">{ev.name}</span>
+                                    <button onClick={() => onSelectEvent(ev)} className={`${selectedEvent?.id === ev.id ? 'bg-orange-600' : 'bg-gray-700'} px-4 py-2 rounded-xl text-xs font-bold`}>
+                                        {selectedEvent?.id === ev.id ? 'Selecionado' : 'Selecionar'}
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 );
             case 'history': return <TicketList tickets={scanHistory.filter(s => !allTickets.find(t => t.id === s.ticketId && t.source === 'secret_generator'))} sectorNames={sectorNames} />;

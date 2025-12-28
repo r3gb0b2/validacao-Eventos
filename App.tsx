@@ -128,13 +128,14 @@ const App: React.FC = () => {
         } catch (e) { console.error(`Auto-Sync Error:`, e); }
     };
 
+    // REDUÇÃO DO TEMPO DE AUTO-SINCRONIZAÇÃO PARA 5 MINUTOS (300.000ms)
     useEffect(() => {
         if (autoSyncIntervalRef.current) clearInterval(autoSyncIntervalRef.current);
         const sourcesToSync = importSources.filter(s => s.autoImport);
         if (sourcesToSync.length > 0 && selectedEvent && isOnline) {
             autoSyncIntervalRef.current = setInterval(() => {
                 sourcesToSync.forEach(s => runExternalSync(s, selectedEvent.id));
-            }, 600000); 
+            }, 300000); 
         }
         return () => { if (autoSyncIntervalRef.current) clearInterval(autoSyncIntervalRef.current); };
     }, [importSources, selectedEvent, isOnline]);
@@ -162,13 +163,17 @@ const App: React.FC = () => {
             if (params.get('mode') === 'stats' && eventIdParam) {
                 const docSnap = await getDoc(doc(db, 'events', eventIdParam));
                 if (docSnap.exists()) {
-                    setSelectedEvent({ id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden });
+                    const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
+                    setSelectedEvent(ev);
+                    localStorage.setItem('selected_event_id', ev.id);
                     setView('public_stats');
                 }
             } else if (params.get('mode') === 'operators' && eventIdParam) {
                  const docSnap = await getDoc(doc(db, 'events', eventIdParam));
                  if (docSnap.exists()) {
-                    setSelectedEvent({ id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden });
+                    const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
+                    setSelectedEvent(ev);
+                    localStorage.setItem('selected_event_id', ev.id);
                     setView('operators');
                  }
             }
@@ -182,9 +187,16 @@ const App: React.FC = () => {
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
             const eventsData = snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name || 'Sem Nome', isHidden: doc.data().isHidden ?? false }));
             setEvents(eventsData);
+
+            // PERSISTÊNCIA: Carregar evento do localStorage se não houver um selecionado
+            const savedEventId = localStorage.getItem('selected_event_id');
+            if (savedEventId && !selectedEvent) {
+                const found = eventsData.find(e => e.id === savedEventId);
+                if (found) setSelectedEvent(found);
+            }
         });
         return () => eventsUnsubscribe();
-    }, [db, view]);
+    }, [db, view, selectedEvent]);
 
     useEffect(() => {
         if (!db || !selectedEvent) {
@@ -224,10 +236,8 @@ const App: React.FC = () => {
             setTicketsLoaded(true);
         }, () => setTicketsLoaded(true));
 
-        // AJUSTADO O LIMITE PARA 10.000 (O MÁXIMO PERMITIDO PELO FIRESTORE)
         const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(10000));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
-            console.log(`Firestore: Recebidos ${snapshot.size} logs de scan.`);
             const historyData = snapshot.docs.map(doc => {
                 const data = doc.data();
                 let timestamp = Date.now();
@@ -339,11 +349,11 @@ const App: React.FC = () => {
                 <header className="flex justify-between items-center w-full">
                     <div>
                         <h1 className="text-3xl font-bold text-orange-500">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
-                        {selectedEvent && <button onClick={() => setSelectedEvent(null)} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
+                        {selectedEvent && <button onClick={() => { setSelectedEvent(null); localStorage.removeItem('selected_event_id'); }} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
                     </div>
                     <div className="flex items-center space-x-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><CogIcon className="w-6 h-6" /></button>
-                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2"><LogoutIcon className="w-6 h-6" /></button>}
+                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2"><LogoutIcon className="w-6 h-6" /></button>}
                     </div>
                 </header>
 
@@ -351,7 +361,7 @@ const App: React.FC = () => {
                     {showLoginModal && <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />}
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!scansLoaded} />}
-                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); setView('admin'); }} currentUser={currentUser} />}
+                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
@@ -367,7 +377,7 @@ const App: React.FC = () => {
                             <TicketList tickets={scanHistory.filter(s => s.deviceId === deviceId)} sectorNames={visibleSectors} />
                         </div>
                     )}
-                    {view === 'scanner' && !selectedEvent && !showLoginModal && <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={(e) => setSelectedEvent(e)} onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} />}
+                    {view === 'scanner' && !selectedEvent && !showLoginModal && <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); }} onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} />}
                 </main>
             </div>
         </div>
