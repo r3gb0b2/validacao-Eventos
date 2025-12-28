@@ -10,7 +10,7 @@ export interface TicketPdfDetails {
   contact: string;
   sector: string;
   ownerName: string;
-  logoUrl?: string; // Nova propriedade para logo dinâmica
+  logoUrl?: string; 
 }
 
 const loadImage = (url: string): Promise<HTMLImageElement> => {
@@ -23,7 +23,7 @@ const loadImage = (url: string): Promise<HTMLImageElement> => {
   });
 };
 
-export const generateSingleTicketBlob = async (details: TicketPdfDetails, forcedCode?: string) => {
+export const generateSingleTicketBlob = async (details: TicketPdfDetails, forcedTicketCode?: string, forcedPurchaseCode?: string) => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -33,67 +33,54 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   // Gera códigos de exatamente 12 caracteres
   const generateCode = () => Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
   
-  const ticketCode = forcedCode || generateCode();
-  const purchaseCode = generateCode();
+  const ticketCode = forcedTicketCode || generateCode();
+  const purchaseCode = forcedPurchaseCode || generateCode();
   
-  // Cores Solicitadas
   const orangeHeader = [254, 85, 29]; // #fe551d
   const textPrimary = [80, 108, 123]; // #506c7b
+  const redAlert = [220, 38, 38];    // #dc2626 (Vermelho solicitado)
 
   // --- PÁGINA 1 ---
   
-  // Fundo Laranja do Topo (#fe551d)
   doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
-  // Define a cor do texto como BRANCO para toda a parte de cima (área laranja)
   doc.setTextColor(255, 255, 255);
 
-  // --- LOGO (DINÂMICA) ---
   const finalLogoUrl = details.logoUrl || 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png';
   
   try {
     const logoImg = await loadImage(finalLogoUrl);
-    
-    // Aumento de 25% na logo: 18mm * 1.25 = 22.5mm
-    const targetHeight = 22.5;
+    const targetHeight = 22.5; // Aumento de 25% mantido
     const ratio = logoImg.width / logoImg.height;
     const targetWidth = targetHeight * ratio;
-    
-    // Centraliza horizontalmente
     const xPos = 105 - (targetWidth / 2);
-    const yPos = 20; // Ajustado levemente para cima devido ao aumento de tamanho
+    const yPos = 20; 
 
     doc.addImage(logoImg, 'PNG', xPos, yPos, targetWidth, targetHeight);
   } catch (e) {
-    console.warn("Não foi possível carregar a imagem da logo. Usando fallback de texto.");
     doc.setFontSize(20);
     doc.setFont('helvetica', 'bold');
     doc.text(details.producer || 'ST INGRESSOS', 105, 32, { align: 'center' });
   }
 
-  // Linha pontilhada topo
   doc.setDrawColor(255, 255, 255);
   doc.setLineWidth(0.15);
   doc.setLineDashPattern([1.5, 1.5], 0);
   doc.line(15, 48, 195, 48);
 
-  // "C A R T Ã O  D E  A C E S S O"
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
   const accessText = 'C   A   R   T   Ã   O      D   E      A   C   E   S   S   O';
   doc.text(accessText, 105, 58, { align: 'center' });
 
-  // Nome do Evento
   doc.setFontSize(28);
   doc.setFont('helvetica', 'bold');
   const eventNameUpper = (details.eventName || 'EVENTO').toUpperCase();
   doc.text(eventNameUpper, 105, 76, { align: 'center', maxWidth: 180 });
 
-  // Linha pontilhada meio
   doc.line(15, 92, 195, 92);
 
-  // --- INFORMAÇÕES DO EVENTO ---
   const headerFontSize = 13.5;
   doc.setFontSize(headerFontSize);
   
@@ -110,7 +97,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l1Label2, curX, 105); curX += doc.getTextWidth(l1Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l1Val2, curX, 105);
 
-  // Linha 2: Endereço
   const addrFontSize = 12.5;
   doc.setFontSize(addrFontSize);
   const addrLabel = 'Endereço: ';
@@ -127,7 +113,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'bold');
   doc.text(splitAddr, addrStartX + addrLabelW, addrY);
   
-  // Linha 3: Produzido e Contato
   doc.setFontSize(headerFontSize);
   const prodY = addrY + (splitAddr.length * 6) + 1;
   const l3Label1 = 'Produzido: ';
@@ -143,7 +128,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l3Label2, curX3, prodY); curX3 += doc.getTextWidth(l3Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
 
-  // --- ÁREA BRANCA (DADOS COMPACTOS) ---
   const startDataY = 148; 
   doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   
@@ -177,7 +161,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setLineDashPattern([1.5, 1], 0);
   doc.line(15, 182, 195, 182);
 
-  // QR CODE
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${ticketCode}`;
   try {
     const qrImg = await loadImage(qrUrl);
@@ -193,18 +176,19 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setLineDashPattern([], 0);
   doc.roundedRect(10, 10, 190, 277, 4, 4);
 
-  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
+  // MUDANÇA SOLICITADA: Título em Vermelho
+  doc.setTextColor(redAlert[0], redAlert[1], redAlert[2]);
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
   doc.text('INFORMAÇÃO IMPORTANTE!', 105, 30, { align: 'center' });
 
+  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFontSize(13);
   doc.setLineHeightFactor(1.4);
-  const infoText = `Você está recebendo apenas um ingresso da compra ${ticketCode}. Este ingresso estará sujeito a cancelamentos, ou mudanças por parte do comprador. No dia do evento, documentos de identificação pessoal e da compra poderão ser exigidos na entrada do evento. Lembre-se que a forma mais segura de você comprar ingressos é diretamente na nossa plataforma.\nCaso essa compra fira nossos termos de uso ou a legislação vigente, você poderá ser responsabilizado. Qualquer dúvida leia nossos termos de uso ou entre em contato conosco.`;
+  const infoText = `Você está recebendo apenas um ingresso da compra ${purchaseCode}. Este ingresso estará sujeito a cancelamentos, ou mudanças por parte do comprador. No dia do evento, documentos de identificação pessoal e da compra poderão ser exigidos na entrada do evento. Lembre-se que a forma mais segura de você comprar ingressos é diretamente na nossa plataforma.\nCaso essa compra fira nossos termos de uso ou a legislação vigente, você poderá ser responsabilizado. Qualquer dúvida leia nossos termos de uso ou entre em contato conosco.`;
   
   doc.text(infoText, 15, 48, { maxWidth: 180, align: 'justify' });
 
-  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFontSize(9.5);
   doc.setFont('helvetica', 'normal');
   doc.setLineHeightFactor(1.2);

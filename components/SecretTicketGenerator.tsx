@@ -77,6 +77,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         producer: data.producer || prev.producer,
                         contact: data.contact || prev.contact,
                         sector: data.sector || prev.sector,
+                        ownerName: data.ownerName || prev.ownerName, // AGORA SALVANDO PARTICIPANTE
                         logoUrl: data.logoUrl || prev.logoUrl
                     }));
                 }
@@ -186,9 +187,10 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 producer: formData.producer,
                 contact: formData.contact,
                 sector: formData.sector,
+                ownerName: formData.ownerName, // AGORA PERSISTINDO O PARTICIPANTE
                 logoUrl: formData.logoUrl 
             }, { merge: true });
-            alert("Todas as configurações foram salvas com sucesso!");
+            alert("Todas as configurações (incluindo participante) foram salvas!");
         } catch (e) {
             console.error(e);
             alert("Erro ao salvar configurações no banco.");
@@ -210,10 +212,16 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         let batchCounter = 0;
         const eventFolder = zip.folder(formData.eventName.replace(/\s+/g, '_'));
 
+        // GERA UM ÚNICO CÓDIGO DE COMPRA PARA TODO O LOTE
+        const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
+
         try {
             for (let i = 0; i < quantity; i++) {
-                const { blob, ticketCode } = await generateSingleTicketBlob(formData);
+                // Passa o batchPurchaseCode fixo para todos os PDFs deste lote
+                const { blob, ticketCode } = await generateSingleTicketBlob(formData, undefined, batchPurchaseCode);
+                
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
+                
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
                 currentBatch.set(ticketRef, {
                     sector: formData.sector.split('[')[0].trim(),
@@ -222,6 +230,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     details: {
                         ownerName: formData.ownerName,
                         eventName: formData.eventName,
+                        purchaseCode: batchPurchaseCode,
                         pdfConfig: { ...formData }
                     }
                 });
