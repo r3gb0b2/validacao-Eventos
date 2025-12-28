@@ -12,6 +12,20 @@ export interface TicketPdfDetails {
   ownerName: string;
 }
 
+// COLE A URL DA SUA LOGO AQUI (Pode ser um link HTTPS ou Base64)
+// Recomendado: Imagem com fundo transparente (PNG)
+const LOGO_IMAGE_URL = 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'; 
+
+const loadImage = (url: string): Promise<HTMLImageElement> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.src = url;
+    img.onload = () => resolve(img);
+    img.onerror = (e) => reject(e);
+  });
+};
+
 export const generateSingleTicketBlob = async (details: TicketPdfDetails, forcedCode?: string) => {
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -35,29 +49,29 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
-  // --- LOGO ---
-  const logoX = 68;
-  const logoY = 25;
-  
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(logoX, logoY, 13, 13, 2.5, 2.5, 'F');
-  
-  doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
-  doc.roundedRect(logoX + 3.5, logoY + 3.5, 6, 6, 1, 1, 'F');
-  
-  doc.setFillColor(255, 255, 255);
-  doc.circle(logoX + 4.8, logoY + 5.5, 0.4, 'F');
-  doc.circle(logoX + 6.5, logoY + 5.5, 0.4, 'F');
-  doc.circle(logoX + 8.2, logoY + 5.5, 0.4, 'F');
+  // --- LOGO (SUBSTITUÍDO POR IMAGEM) ---
+  try {
+    const logoImg = await loadImage(LOGO_IMAGE_URL);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Calcula proporções para a logo (altura fixa de 18mm)
+    const targetHeight = 18;
+    const ratio = logoImg.width / logoImg.height;
+    const targetWidth = targetHeight * ratio;
+    
+    // Centraliza horizontalmente
+    const xPos = 105 - (targetWidth / 2);
+    const yPos = 22;
 
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(24);
-  doc.setFont('helvetica', 'bold');
-  doc.text('ST', logoX + 16, logoY + 11);
-  
-  doc.setFont('helvetica', 'normal');
-  const stWidth = doc.getTextWidth('ST');
-  doc.text('ingressos', logoX + 16 + stWidth, logoY + 11);
+    doc.addImage(logoImg, 'PNG', xPos, yPos, targetWidth, targetHeight);
+  } catch (e) {
+    console.warn("Não foi possível carregar a imagem da logo. Usando fallback de texto.");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(details.producer || 'ST INGRESSOS', 105, 32, { align: 'center' });
+  }
 
   // Linha pontilhada topo
   doc.setDrawColor(255, 255, 255);
@@ -131,57 +145,47 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
 
   // --- ÁREA BRANCA (DADOS COMPACTOS) ---
-  // startDataY aproximado em 20% (de 150 para 148, ficando 8mm da área laranja que acaba em 140)
   const startDataY = 148; 
   doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   
-  // Tamanhos reduzidos em 10%
   const labelFontSize = 11.25; 
   const valueFontSize = 17.1;  
   
-  // Rótulos: Ingresso e Participante (Fonte Normal agora)
   doc.setFontSize(labelFontSize);
   doc.setFont('helvetica', 'normal'); 
   doc.text('Ingresso', 15, startDataY);
   doc.text('Participante', 195, startDataY, { align: 'right' });
   
-  // Valores: Setor e Nome (Negrito / "Gordinha")
   doc.setFontSize(valueFontSize);
   doc.setFont('helvetica', 'bold'); 
   doc.text(details.sector || 'Geral', 15, startDataY + 6.2);
   doc.text(details.ownerName || 'Convidado', 195, startDataY + 6.2, { align: 'right' });
 
-  // Bloco de Códigos (Também aproximado e reduzido)
   const secondDataY = 162; 
   doc.setFontSize(labelFontSize);
-  doc.setFont('helvetica', 'normal'); // Rótulos sem negrito
+  doc.setFont('helvetica', 'normal'); 
   doc.text('Código da Compra', 15, secondDataY);
   doc.text('Código do ingresso', 195, secondDataY, { align: 'right' });
 
   const codeValueFontSize = 18; 
   doc.setFontSize(codeValueFontSize);
-  doc.setFont('helvetica', 'bold'); // Códigos negrito / gordinhos
+  doc.setFont('helvetica', 'bold'); 
   doc.text(purchaseCode, 15, secondDataY + 6.5);
   doc.text(ticketCode, 195, secondDataY + 6.5, { align: 'right' });
 
-  // Linha separadora (Subiu para acompanhar o texto)
   doc.setDrawColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setLineWidth(0.1);
   doc.setLineDashPattern([1.5, 1], 0);
   doc.line(15, 182, 195, 182);
 
-  // QR CODE (Subiu para ficar mais perto das informações)
+  // QR CODE
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${ticketCode}`;
-  const img = new Image();
-  img.crossOrigin = "Anonymous";
-  img.src = qrUrl;
-  await new Promise((resolve) => {
-    img.onload = () => {
-      doc.addImage(img, 'PNG', 65, 188, 80, 80);
-      resolve(true);
-    };
-    img.onerror = () => resolve(false);
-  });
+  try {
+    const qrImg = await loadImage(qrUrl);
+    doc.addImage(qrImg, 'PNG', 65, 188, 80, 80);
+  } catch (e) {
+    console.error("Erro ao carregar QR Code");
+  }
 
   // --- PÁGINA 2 (TERMOS) ---
   doc.addPage();
