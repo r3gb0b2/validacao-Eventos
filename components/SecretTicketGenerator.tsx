@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
-import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon } from './Icons';
+import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon, PlusCircleIcon } from './Icons';
 import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
@@ -27,6 +27,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const logoInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState<TicketPdfDetails>({
         eventName: 'DE SOL AO SAMBA',
@@ -155,6 +156,24 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         }
     };
 
+    // FUNÇÃO PARA UPLOAD DIRETO DA LOGO (CONVERSÃO PARA BASE64)
+    const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!file.type.startsWith('image/')) {
+            alert("Por favor, selecione um arquivo de imagem (PNG ou JPG).");
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const base64String = event.target?.result as string;
+            setFormData(prev => ({ ...prev, logoUrl: base64String }));
+        };
+        reader.readAsDataURL(file);
+    };
+
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
@@ -165,7 +184,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         setDownloadingId(ticket.id);
         
         try {
-            // Reconstituir o PDF a partir dos dados salvos no 'details'
             const pdfConfig: TicketPdfDetails = (ticket.details as any)?.pdfConfig || {
                 ...formData,
                 ownerName: ticket.details?.ownerName || formData.ownerName,
@@ -249,7 +267,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     details: {
                         ownerName: formData.ownerName,
                         eventName: formData.eventName,
-                        // SALVAMOS A CONFIG COMPLETA PARA RE-DOWNLOAD INDIVIDUAL POSTERIOR
                         pdfConfig: { ...formData }
                     }
                 });
@@ -362,22 +379,77 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             <CloudDownloadIcon className="w-4 h-4 mr-2" />
                             3. Informações do Evento (PDF)
                         </h2>
-                        <input name="eventName" value={formData.eventName} onChange={handleInputChange} placeholder="Nome do Evento" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                        <div className="grid grid-cols-2 gap-4">
-                            <input name="openingTime" value={formData.openingTime} onChange={handleInputChange} placeholder="Abertura" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                            <input name="venue" value={formData.venue} onChange={handleInputChange} placeholder="Local" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                        </div>
-                        <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-20" />
-                        <div className="grid grid-cols-2 gap-4">
-                            <input name="producer" value={formData.producer} onChange={handleInputChange} placeholder="Produzido" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                            <input name="contact" value={formData.contact} onChange={handleInputChange} placeholder="Contato" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                        </div>
-                        {/* NOVO CAMPO PARA URL DA LOGO */}
-                        <div className="relative">
-                            <label className="block text-xs text-gray-400 mb-1 flex items-center">
-                                <LinkIcon className="w-3 h-3 mr-1" /> URL da Logo (PNG/JPG)
-                            </label>
-                            <input name="logoUrl" value={formData.logoUrl} onChange={handleInputChange} placeholder="Link da imagem (ImgBB, Imgur, etc)" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm font-mono text-orange-300" />
+                        
+                        <div className="space-y-4">
+                             <div>
+                                <label className="block text-xs text-gray-400 mb-1">Nome do Evento</label>
+                                <input name="eventName" value={formData.eventName} onChange={handleInputChange} placeholder="Nome do Evento" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Abertura</label>
+                                    <input name="openingTime" value={formData.openingTime} onChange={handleInputChange} placeholder="Abertura" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Local</label>
+                                    <input name="venue" value={formData.venue} onChange={handleInputChange} placeholder="Local" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">Endereço</label>
+                                <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-20" />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Produzido</label>
+                                    <input name="producer" value={formData.producer} onChange={handleInputChange} placeholder="Produzido" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-400 mb-1">Contato</label>
+                                    <input name="contact" value={formData.contact} onChange={handleInputChange} placeholder="Contato" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                                </div>
+                            </div>
+
+                            {/* UPLOAD DIRETO DE LOGO */}
+                            <div className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 space-y-3">
+                                <label className="block text-xs text-gray-400 mb-1 flex items-center justify-between">
+                                    <span className="flex items-center"><LinkIcon className="w-3 h-3 mr-1" /> Imagem da Logo</span>
+                                    {formData.logoUrl && <span className="text-[10px] text-green-400 font-bold uppercase">Logo Ativa</span>}
+                                </label>
+                                
+                                <div className="flex items-center gap-4">
+                                    <div className="w-16 h-16 bg-gray-900 rounded-lg border border-gray-600 flex items-center justify-center overflow-hidden shrink-0">
+                                        {formData.logoUrl ? (
+                                            <img src={formData.logoUrl} alt="Logo" className="w-full h-full object-contain" />
+                                        ) : (
+                                            <TableCellsIcon className="w-6 h-6 text-gray-700" />
+                                        )}
+                                    </div>
+                                    <div className="flex-1 space-y-2">
+                                        <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
+                                        <button 
+                                            onClick={() => logoInputRef.current?.click()}
+                                            className="w-full bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold py-2 rounded-lg border border-gray-500 transition-all flex items-center justify-center"
+                                        >
+                                            <CloudUploadIcon className="w-4 h-4 mr-2" /> Subir Logo (PNG/JPG)
+                                        </button>
+                                        <p className="text-[9px] text-gray-500 italic">Recomendado: PNG Transparente (Branco)</p>
+                                    </div>
+                                </div>
+
+                                <div className="relative mt-2">
+                                    <input 
+                                        name="logoUrl" 
+                                        value={formData.logoUrl} 
+                                        onChange={handleInputChange} 
+                                        placeholder="Ou cole o link direto aqui..." 
+                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-2 text-[10px] font-mono text-orange-300" 
+                                    />
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
