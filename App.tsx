@@ -225,21 +225,33 @@ const App: React.FC = () => {
         }, () => setTicketsLoaded(true));
 
         // QUERY OTIMIZADA COM LIMITE DE 20.000 LOGS
+        // IMPORTANTE: Se o Firestore retornar 0 registros mas o console do navegador mostrar erro, é necessário criar o índice.
         const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(20000));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
+            console.log(`Firestore: Recebidos ${snapshot.size} logs de scan.`);
             const historyData = snapshot.docs.map(doc => {
                 const data = doc.data();
                 let timestamp = Date.now();
                 if (data.timestamp?.toMillis) timestamp = data.timestamp.toMillis();
                 else if (typeof data.timestamp === 'number') timestamp = data.timestamp;
-                return { id: doc.id, ticketId: data.ticketId || '---', status: data.status || 'ERROR', timestamp: timestamp, ticketSector: data.sector ?? 'Desconhecido', isPending: doc.metadata.hasPendingWrites, deviceId: data.deviceId, operator: data.operator };
+                return { 
+                    id: doc.id, 
+                    ticketId: data.ticketId || '---', 
+                    status: data.status || 'ERROR', 
+                    timestamp: timestamp, 
+                    ticketSector: data.sector ?? 'Desconhecido', 
+                    isPending: doc.metadata.hasPendingWrites, 
+                    deviceId: data.deviceId, 
+                    operator: data.operator 
+                };
             });
             setScanHistory(historyData);
             setScansLoaded(true);
         }, (err) => {
-            console.error("Firestore Scans Error:", err);
+            console.error("ERRO CRÍTICO FIRESTORE SCANS:", err);
             if (err.message.includes('index')) {
-                alert("Atenção: O sistema de monitoramento requer um índice. Verifique o console do navegador e clique no link de criação do Firebase.");
+                const link = err.message.match(/https:\/\/console.firebase.google.com[^\s]+/);
+                alert(`ERRO DE ÍNDICE: O monitor de operadoras não carregará até que você crie o índice no Firebase. Verifique o console do navegador ou use o link: ${link ? link[0] : 'No Console do Firebase'}`);
             }
             setScansLoaded(true);
         });

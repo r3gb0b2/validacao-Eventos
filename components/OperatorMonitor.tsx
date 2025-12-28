@@ -14,6 +14,7 @@ interface OperatorMonitorProps {
 const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, scanHistory, isLoading = false, isEmbedded = false }) => {
   
   const stats = useMemo(() => {
+    // Se não houver histórico, não há o que processar
     if (!scanHistory || scanHistory.length === 0) return [];
 
     const operatorMap: Record<string, {
@@ -28,10 +29,11 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       sectors: Record<string, number>;
     }> = {};
 
-    // Processamento linear de alta performance
+    // Processamento linear de alta performance para até 20.000 logs
     for (let i = 0; i < scanHistory.length; i++) {
       const log = scanHistory[i];
-      const op = log.operator || 'Sem Nome';
+      // Fallback para logs sem operador definido
+      const op = (log.operator || '').trim() || 'Sem Identificação';
       
       if (!operatorMap[op]) {
         operatorMap[op] = {
@@ -75,17 +77,18 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       return stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
   }, [stats]);
 
-  if (isLoading) {
+  if (isLoading && scanHistory.length === 0) {
     return (
         <div className="flex flex-col items-center justify-center py-20 space-y-4">
             <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-xl font-bold text-gray-400 animate-pulse">Sincronizando {scanHistory.length} de 20.000 logs...</p>
+            <p className="text-xl font-bold text-gray-400 animate-pulse">Sincronizando logs do banco...</p>
+            <p className="text-xs text-gray-500">Isso pode levar alguns segundos dependendo da sua conexão.</p>
         </div>
     );
   }
 
   return (
-    <div className={`${isEmbedded ? 'p-6' : 'min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20'}`}>
+    <div className={`${isEmbedded ? 'p-0' : 'min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20'}`}>
       <div className={`w-full ${isEmbedded ? '' : 'max-w-7xl mx-auto space-y-8'}`}>
         
         {!isEmbedded && (
@@ -98,7 +101,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                   <h1 className="text-3xl font-bold text-white tracking-tight">{event.name}</h1>
                   <p className="text-gray-400 text-sm font-medium flex items-center">
                     <UsersIcon className="w-4 h-4 mr-1.5 text-orange-500" />
-                    Monitoramento em Tempo Real (Limite: 20k)
+                    Monitoramento de Produtividade (Limite: 20k)
                   </p>
                 </div>
               </div>
@@ -108,7 +111,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
                 </span>
-                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Conectado</span>
+                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Tempo Real</span>
               </div>
             </header>
         )}
@@ -116,29 +119,39 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
         {/* Dash de Resumo */}
         <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ${isEmbedded ? 'mb-8' : ''}`}>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-green-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total Banco (Sincronizado)</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total Validado (Banco)</p>
             <p className="text-4xl font-black text-green-400">{totalValidGlobal}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-blue-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Operadores Online</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Operadores Ativos</p>
             <p className="text-4xl font-black text-white">{activeNowCount}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-orange-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Logs Carregados</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Logs no Histórico</p>
             <p className="text-4xl font-black text-orange-400">{totalScans}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-red-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Erros/Recusas (Scan)</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Recusados (Scan)</p>
             <p className="text-4xl font-black text-red-500">{totalScans - stats.reduce((acc, curr) => acc + curr.valid, 0)}</p>
           </div>
         </div>
+
+        {/* Diagnóstico de Erro */}
+        {totalValidGlobal > 0 && totalScans === 0 && (
+            <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl flex items-center space-x-4 animate-pulse">
+                <AlertTriangleIcon className="w-10 h-10 text-red-500" />
+                <div>
+                    <h3 className="text-lg font-bold text-red-400 uppercase">Atenção: Falha na Sincronização de Logs</h3>
+                    <p className="text-sm text-gray-300">O sistema detectou que existem ingressos validados, mas nenhum log foi carregado. Isso acontece quando o <strong>Índice do Firestore</strong> não foi criado. Verifique o console do navegador e clique no link de criação do Firebase.</p>
+                </div>
+            </div>
+        )}
 
         {/* Grid de Operadores */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {stats.map(op => {
             const isActive = (Date.now() - (Number(op.lastSeen) || 0)) < 300000;
             const successRate = (Number(op.total) || 0) > 0 ? ((Number(op.valid) / Number(op.total)) * 100).toFixed(1) : '0';
-            const topSector = Object.entries(op.sectors).sort((a,b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))[0]?.[0] || '---';
 
             return (
               <div key={op.name} className="bg-gray-800 rounded-2xl border border-gray-700 overflow-hidden shadow-xl hover:border-orange-500/40 transition-all duration-300 group">
@@ -183,21 +196,6 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                       <div className="bg-yellow-500 h-full" style={{ width: `${(Number(op.total) || 0) > 0 ? (Number(op.used) / Number(op.total)) * 100 : 0}%` }}></div>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="bg-gray-900/50 p-2 rounded-lg border border-gray-700/50 text-center">
-                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Inválidos</p>
-                      <p className="text-sm font-black text-red-500">{op.invalid}</p>
-                    </div>
-                    <div className="bg-gray-900/50 p-2 rounded-lg border border-gray-700/50 text-center">
-                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Repetidos</p>
-                      <p className="text-sm font-black text-yellow-500">{op.used}</p>
-                    </div>
-                    <div className="bg-gray-900/50 p-2 rounded-lg border border-gray-700/50 text-center">
-                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Outro Setor</p>
-                      <p className="text-sm font-black text-orange-500">{op.wrongSector}</p>
-                    </div>
-                  </div>
                 </div>
               </div>
             );
@@ -206,8 +204,9 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
           {stats.length === 0 && !isLoading && (
             <div className="col-span-full py-20 text-center bg-gray-800/50 rounded-3xl border-2 border-dashed border-gray-700">
               <TableCellsIcon className="w-16 h-16 mx-auto text-gray-700 mb-4" />
-              <p className="text-xl font-bold text-gray-500">Nenhum operador detectado nos últimos {totalScans} logs.</p>
-              <p className="text-gray-600">Certifique-se de que os validadores estão usando o campo "Operador" nas configurações.</p>
+              <p className="text-xl font-bold text-gray-500">Aguardando novos logs...</p>
+              <p className="text-gray-600 text-sm mt-2">Nenhum operador detectado nos {totalScans} registros carregados.</p>
+              <p className="text-orange-500 text-xs mt-4 font-bold">Dica: Os validadores devem preencher o nome do "Operador" na tela de login/scanner.</p>
             </div>
           )}
         </div>
