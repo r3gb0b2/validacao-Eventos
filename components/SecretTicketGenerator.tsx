@@ -77,7 +77,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         producer: data.producer || prev.producer,
                         contact: data.contact || prev.contact,
                         sector: data.sector || prev.sector,
-                        ownerName: data.ownerName || prev.ownerName, // AGORA SALVANDO PARTICIPANTE
+                        ownerName: data.ownerName || prev.ownerName, // AGORA CARREGANDO PARTICIPANTE
                         logoUrl: data.logoUrl || prev.logoUrl
                     }));
                 }
@@ -187,10 +187,10 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 producer: formData.producer,
                 contact: formData.contact,
                 sector: formData.sector,
-                ownerName: formData.ownerName, // AGORA PERSISTINDO O PARTICIPANTE
+                ownerName: formData.ownerName, // AGORA PERSISTINDO PARTICIPANTE
                 logoUrl: formData.logoUrl 
             }, { merge: true });
-            alert("Todas as configurações (incluindo participante) foram salvas!");
+            alert("Configurações e participante salvos com sucesso!");
         } catch (e) {
             console.error(e);
             alert("Erro ao salvar configurações no banco.");
@@ -212,7 +212,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         let batchCounter = 0;
         const eventFolder = zip.folder(formData.eventName.replace(/\s+/g, '_'));
 
-        // GERA UM ÚNICO CÓDIGO DE COMPRA PARA TODO O LOTE
+        // GERA UM ÚNICO CÓDIGO DE COMPRA PARA TODO ESTE LOTE ESPECÍFICO
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
 
         try {
@@ -261,7 +261,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         <div className="min-h-screen bg-gray-900 text-white p-4 md:p-8 flex flex-col items-center space-y-8 pb-20">
             {/* CARD GERADOR */}
             <div className="w-full max-w-5xl bg-gray-800 rounded-2xl shadow-2xl border border-orange-500/20 overflow-hidden">
-                <div className="bg-orange-600 p-6 flex flex-col md:flex-row justify-between items-center gap-4">
+                <div className="bg-[#fe551d] p-6 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center space-x-4">
                         <TicketIcon className="w-10 h-10 text-white" />
                         <div>
@@ -375,7 +375,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     <button 
                         onClick={handleGenerateBatch}
                         disabled={isGenerating || !selectedEventId}
-                        className="w-full max-w-lg bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-2xl shadow-xl transition-all transform active:scale-95 disabled:opacity-50 text-lg flex items-center justify-center"
+                        className="w-full max-w-lg bg-[#fe551d] hover:bg-[#e04a1a] text-white font-bold py-4 rounded-2xl shadow-xl transition-all transform active:scale-95 disabled:opacity-50 text-lg flex items-center justify-center"
                     >
                         {isGenerating ? "Gerando Ingressos..." : "Gerar Lote ZIP"}
                     </button>

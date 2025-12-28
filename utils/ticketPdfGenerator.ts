@@ -36,9 +36,10 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   const ticketCode = forcedTicketCode || generateCode();
   const purchaseCode = forcedPurchaseCode || generateCode();
   
-  const orangeHeader = [254, 85, 29]; // #fe551d
+  // COR SOLICITADA: #fe551d
+  const orangeHeader = [254, 85, 29]; 
   const textPrimary = [80, 108, 123]; // #506c7b
-  const redAlert = [220, 38, 38];    // #dc2626 (Vermelho solicitado)
+  const redAlert = [220, 38, 38];    // #dc2626 (Vermelho vibrante)
 
   // --- PÁGINA 1 ---
   
@@ -51,7 +52,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   
   try {
     const logoImg = await loadImage(finalLogoUrl);
-    const targetHeight = 22.5; // Aumento de 25% mantido
+    const targetHeight = 22.5; 
     const ratio = logoImg.width / logoImg.height;
     const targetWidth = targetHeight * ratio;
     const xPos = 105 - (targetWidth / 2);
@@ -176,13 +177,13 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setLineDashPattern([], 0);
   doc.roundedRect(10, 10, 190, 277, 4, 4);
 
-  // MUDANÇA SOLICITADA: Título em Vermelho
+  // MUDANÇA SOLICITADA: Texto TODO em VERMELHO e NEGRITO
   doc.setTextColor(redAlert[0], redAlert[1], redAlert[2]);
+  doc.setFont('helvetica', 'bold'); // Negrito para toda a página
+  
   doc.setFontSize(20);
-  doc.setFont('helvetica', 'bold');
   doc.text('INFORMAÇÃO IMPORTANTE!', 105, 30, { align: 'center' });
 
-  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFontSize(13);
   doc.setLineHeightFactor(1.4);
   const infoText = `Você está recebendo apenas um ingresso da compra ${purchaseCode}. Este ingresso estará sujeito a cancelamentos, ou mudanças por parte do comprador. No dia do evento, documentos de identificação pessoal e da compra poderão ser exigidos na entrada do evento. Lembre-se que a forma mais segura de você comprar ingressos é diretamente na nossa plataforma.\nCaso essa compra fira nossos termos de uso ou a legislação vigente, você poderá ser responsabilizado. Qualquer dúvida leia nossos termos de uso ou entre em contato conosco.`;
@@ -190,7 +191,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.text(infoText, 15, 48, { maxWidth: 180, align: 'justify' });
 
   doc.setFontSize(9.5);
-  doc.setFont('helvetica', 'normal');
   doc.setLineHeightFactor(1.2);
   const terms = `A SeuTickets emitiu este ingresso por força de contrato de prestação de serviço celebrado com o promotor do evento. O mesmo é o único responsável pela realização, cancelamento ou adiamento do evento e/ou espetáculo, bem como pela restituição do valor do ingresso. Seu ingresso e as informações nele contidas são de sua responsabilidade. Não compartilhe fotos nem informações sobre ele com outras pessoas. Qualquer uso por outra pessoa do seu ingresso não será de responsabilidade da SeuTickets. Este ingresso possui itens de segurança e estará sujeito à verificação na portaria do evento. O código de barras contido neste ingresso é único e não se repete, garantindo acesso apenas uma única vez ao evento. A organização do evento reserva-se o direito de solicitar um documento com foto e o cartão utilizado na compra na entrada do evento. Este evento poderá ser gerado, filmado ou fotografado. Ao participar do evento, o portador deste ingresso concorda e autoriza a utilização gratuita de sua imagem por prazo indeterminado. Meia entrada: é obrigatório a apresentação de documento que comprove o direito do benefício, juntamente com a carteira de identidade, na compra do ingresso e na entrada do evento. Caso exista suspeita de fraude no seu ingresso o mesmo poderá ser cancelado por livre iniciativa da SeuTickets. Por isso, sempre compre seu ingresso por meio de um canal oficial da SeuTickets ou do produtor do evento. Caso seu ingresso seja cancelado o valor será automaticamente estornado para o cartão que realizou a compra do ingresso. Caso a compra tenha sido feita via boleto, entre em contato com o nosso suporte para depósito em conta. A SeuTickets não se responsabiliza por ingressos adquiridos fora dos pontos de venda oficiais ou internet. É de suma importância que você conheça os termos de uso da plataforma disponíveis em https://www.stingressos.com.br/termos`;
   
