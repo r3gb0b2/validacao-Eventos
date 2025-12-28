@@ -110,7 +110,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                 
-                // Construção inicial da URL com parâmetros de busca e paginação
+                // Força per_page=100 para minimizar requisições e garantir carga maior
                 let initialRequestUrl = `${baseUrl}/${endpoint}`;
                 const urlObj = new URL(initialRequestUrl, window.location.origin);
                 
@@ -128,7 +128,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     
                     let res = await fetch(nextUrl, { headers, mode: 'cors' });
                     
-                    // Fallback para ID no Path se o primeiro falhar com 404
+                    // Fallback para ID no Path se o primeiro falhar com 404 (comum em algumas versões da API)
                     if (!res.ok && pageCount === 1 && source.externalEventId && res.status === 404) {
                         const fallbackPath = `${baseUrl}/${endpoint}/${source.externalEventId}?per_page=100`;
                         console.log("Tentando Fallback Path:", fallbackPath);
@@ -137,7 +137,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
                     if (!res.ok) {
                         const err = await res.text();
-                        throw new Error(`Erro API (Pág ${pageCount}): ${err || res.statusText}`);
+                        throw new Error(`Erro na API (Pág ${pageCount}): ${err || res.statusText}`);
                     }
 
                     const json = await res.json();
@@ -150,15 +150,15 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
                         if (!code) return;
 
-                        const sector = String(
-                            item.sector_name || 
-                            item.category?.name || 
-                            item.category || 
-                            item.sector || 
-                            item.ticket_type?.name || 
-                            'Geral'
-                        ).trim();
-
+                        // Mapeamento resiliente de setores (Trata se for objeto ou string)
+                        let rawSector = 'Geral';
+                        if (typeof item.sector_name === 'string') rawSector = item.sector_name;
+                        else if (item.category && typeof item.category.name === 'string') rawSector = item.category.name;
+                        else if (typeof item.category === 'string') rawSector = item.category;
+                        else if (typeof item.sector === 'string') rawSector = item.sector;
+                        else if (item.ticket_type && typeof item.ticket_type.name === 'string') rawSector = item.ticket_type.name;
+                        
+                        const sector = rawSector.trim() || 'Geral';
                         discoveredSectors.add(sector);
 
                         const existing = existingTicketsMap.get(code);
@@ -174,8 +174,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
                                 source: 'api_import',
                                 details: { 
-                                    ownerName: String(item.name || item.customer_name || item.buyer_name || item.customer?.name || 'Importado'),
-                                    originalId: item.id || null
+                                    ownerName: String(item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado'),
+                                    originalId: item.id ?? null // Garante que nunca seja undefined
                                 }
                             });
                         } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
@@ -188,35 +188,40 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         }
                     });
 
-                    // Tenta encontrar o link da próxima página nos padrões comuns
+                    // Lógica de Paginação Avançada
                     let foundNext = json.links?.next || json.next_page_url || json.pagination?.next_page_url || null;
                     
-                    // Se não houver link direto, mas houver meta-informação de página, constrói a URL
+                    // Se o link de próxima página for um objeto em vez de string (erro comum de mapeamento)
+                    if (foundNext && typeof foundNext !== 'string') {
+                        foundNext = foundNext.url || null;
+                    }
+
+                    // Se não houver link direto, mas houver metadados, constrói a URL manualmente
                     if (!foundNext) {
                         const meta = json.meta || json.pagination || {};
-                        const current = meta.current_page || meta.page;
-                        const last = meta.last_page || meta.total_pages;
+                        const current = Number(meta.current_page || meta.page || 0);
+                        const last = Number(meta.last_page || meta.total_pages || 0);
                         
-                        if (current && last && current < last) {
+                        if (current > 0 && last > 0 && current < last) {
                             const nextUrlObj = new URL(nextUrl, window.location.origin);
-                            nextUrlObj.searchParams.set('page', (Number(current) + 1).toString());
+                            nextUrlObj.searchParams.set('page', (current + 1).toString());
                             foundNext = nextUrlObj.toString();
                         }
                     }
 
                     nextUrl = foundNext;
-                    if (pageCount > 500) break; // Segurança contra loops
+                    if (pageCount > 500) break; // Limite de segurança contra loops infinitos
                 }
             }
 
-            // Atualizar Setores se houver novos
+            // Atualizar Setores no Firestore para garantir que apareçam no Dashboard
             const newSectorList = Array.from(discoveredSectors).sort();
             const sectorsChanged = JSON.stringify(newSectorList) !== JSON.stringify(sectorNames);
             if (sectorsChanged) {
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
             }
 
-            // Salvar no Firestore
+            // Salvar no Firestore em lotes de 450
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
@@ -229,13 +234,13 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            // Alerta de sucesso detalhado
+            // Feedback detalhado para o usuário
             alert(
                 `Sincronização Finalizada!\n\n` +
-                `• Total na API: ${totalItemsFoundInApi}\n` +
+                `• Localizados na API: ${totalItemsFoundInApi}\n` +
                 `• Novos Ingressos: ${newItemsAdded}\n` +
-                `• Atualizados (Uso): ${existingItemsUpdated}\n` +
-                `• Setores Mapeados: ${discoveredSectors.size}`
+                `• Atualizados para Usado: ${existingItemsUpdated}\n` +
+                `• Total de Setores: ${discoveredSectors.size}`
             );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
@@ -243,7 +248,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
-            alert(`Falha na Sincronização:\n${e.message}`);
+            alert(`Falha na Sincronização:\n${e.message}\n\nVerifique se o Token é válido para o ID do evento informado.`);
         } finally {
             setIsLoading(false);
         }
@@ -438,7 +443,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 <AlertTriangleIcon className="w-8 h-8 text-blue-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
                     <p className="font-bold text-blue-400 uppercase tracking-widest">Dica de Importação:</p>
-                    <p>• O sistema agora informa o <b>total exato</b> de ingressos encontrados na API vs. o que foi adicionado/atualizado no banco.</p>
+                    <p>• O sistema percorre todas as páginas da API automaticamente.</p>
+                    <p>• Ingressos sem setor explícito são agrupados em "Geral".</p>
                 </div>
             </div>
         </div>
