@@ -16,9 +16,7 @@
     "firebase": "^12.2.1",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.2",
-    "papaparse": "^5.4.1",
-    "jszip": "3.10.1",
-    "pdfjs-dist": "3.11.174"
+    "papaparse": "^5.4.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
