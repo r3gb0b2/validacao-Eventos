@@ -67,7 +67,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
                     const data = snap.data();
-                    // Carrega todos os campos salvos para o formulário
                     setFormData(prev => ({
                         ...prev,
                         eventName: data.eventName || prev.eventName,
@@ -77,7 +76,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         producer: data.producer || prev.producer,
                         contact: data.contact || prev.contact,
                         sector: data.sector || prev.sector,
-                        ownerName: data.ownerName || prev.ownerName, // AGORA CARREGANDO PARTICIPANTE
+                        ownerName: data.ownerName || prev.ownerName,
                         logoUrl: data.logoUrl || prev.logoUrl
                     }));
                 }
@@ -121,6 +120,29 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             t.details?.ownerName?.toLowerCase().includes(term)
         );
     }, [tickets, searchTerm]);
+
+    const handleDownloadSingle = async (ticket: Ticket) => {
+        if (!ticket.details) return;
+        setDownloadingId(ticket.id);
+        try {
+            // Usa as configurações salvas no próprio ingresso para re-gerar o PDF idêntico
+            const config = ticket.details.pdfConfig || formData;
+            const purchaseCode = ticket.details.purchaseCode || ticket.id;
+            
+            const { blob } = await generateSingleTicketBlob(config, ticket.id, purchaseCode);
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `ingresso_${ticket.details.ownerName}_${ticket.id}.pdf`;
+            link.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao baixar ingresso.");
+        } finally {
+            setDownloadingId(null);
+        }
+    };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -172,13 +194,11 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         reader.readAsDataURL(file);
     };
 
-    // SALVAR TODAS AS CONFIGURAÇÕES NO BANCO
     const saveSettingsToFirestore = async () => {
         if (!selectedEventId) return;
         setIsSavingSettings(true);
         try {
             const docRef = doc(db, 'events', selectedEventId, 'settings', 'main');
-            // Salva o objeto formData completo para persistência
             await setDoc(docRef, { 
                 eventName: formData.eventName,
                 openingTime: formData.openingTime,
@@ -187,7 +207,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 producer: formData.producer,
                 contact: formData.contact,
                 sector: formData.sector,
-                ownerName: formData.ownerName, // AGORA PERSISTINDO PARTICIPANTE
+                ownerName: formData.ownerName,
                 logoUrl: formData.logoUrl 
             }, { merge: true });
             alert("Configurações e participante salvos com sucesso!");
@@ -212,12 +232,10 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         let batchCounter = 0;
         const eventFolder = zip.folder(formData.eventName.replace(/\s+/g, '_'));
 
-        // GERA UM ÚNICO CÓDIGO DE COMPRA PARA TODO ESTE LOTE ESPECÍFICO
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
 
         try {
             for (let i = 0; i < quantity; i++) {
-                // Passa o batchPurchaseCode fixo para todos os PDFs deste lote
                 const { blob, ticketCode } = await generateSingleTicketBlob(formData, undefined, batchPurchaseCode);
                 
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
@@ -403,12 +421,27 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         </thead>
                         <tbody className="divide-y divide-gray-700/50">
                             {filteredTickets.map(t => (
-                                <tr key={t.id} className="hover:bg-gray-700/30">
+                                <tr key={t.id} className="hover:bg-gray-700/30 transition-colors">
                                     <td className="p-4 font-mono text-orange-400">{t.id}</td>
-                                    <td className="p-4">{t.details?.ownerName}</td>
-                                    <td className="p-4">{t.sector}</td>
-                                    <td className="p-4 text-right">
-                                        <button onClick={() => deleteDoc(doc(db, 'events', selectedEventId, 'tickets', t.id))} className="text-gray-500 hover:text-red-500 p-2"><TrashIcon className="w-4 h-4"/></button>
+                                    <td className="p-4 font-bold text-gray-200">{t.details?.ownerName}</td>
+                                    <td className="p-4 text-gray-400">{t.sector}</td>
+                                    <td className="p-4 text-right flex justify-end space-x-2">
+                                        {/* BOTÃO DE DOWNLOAD INDIVIDUAL RE-ADICIONADO */}
+                                        <button 
+                                            onClick={() => handleDownloadSingle(t)} 
+                                            disabled={downloadingId === t.id}
+                                            className={`p-2 rounded-lg transition-all ${downloadingId === t.id ? 'bg-gray-700 text-gray-500' : 'bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white'}`}
+                                            title="Download PDF"
+                                        >
+                                            <CloudDownloadIcon className="w-4 h-4" />
+                                        </button>
+                                        <button 
+                                            onClick={() => { if(confirm("Excluir este ingresso?")) deleteDoc(doc(db, 'events', selectedEventId, 'tickets', t.id)); }} 
+                                            className="p-2 bg-red-900/10 text-red-500 rounded-lg hover:bg-red-600 hover:text-white transition-all"
+                                            title="Excluir"
+                                        >
+                                            <TrashIcon className="w-4 h-4"/>
+                                        </button>
                                     </td>
                                 </tr>
                             ))}

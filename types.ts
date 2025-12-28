@@ -24,6 +24,10 @@ export interface Ticket {
     document?: string;
     eventName?: string;
     originalId?: string | number; // ID numérico/original da API externa
+    // FIX: Added pdfConfig to store PDF generation settings for re-printing
+    pdfConfig?: any;
+    // FIX: Added purchaseCode to track batches of generated tickets
+    purchaseCode?: string;
   };
 }
 
