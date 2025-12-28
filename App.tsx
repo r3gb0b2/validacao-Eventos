@@ -16,7 +16,7 @@ import PublicStatsView from './components/PublicStatsView';
 import LoginModal from './components/LoginModal';
 import SecretTicketGenerator from './components/SecretTicketGenerator'; 
 import OperatorMonitor from './components/OperatorMonitor'; 
-import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon } from './components/Icons';
+import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types';
@@ -128,7 +128,6 @@ const App: React.FC = () => {
         } catch (e) { console.error(`Auto-Sync Error:`, e); }
     };
 
-    // REDUÇÃO DO TEMPO DE AUTO-SINCRONIZAÇÃO PARA 5 MINUTOS (300.000ms)
     useEffect(() => {
         if (autoSyncIntervalRef.current) clearInterval(autoSyncIntervalRef.current);
         const sourcesToSync = importSources.filter(s => s.autoImport);
@@ -176,6 +175,8 @@ const App: React.FC = () => {
                     localStorage.setItem('selected_event_id', ev.id);
                     setView('operators');
                  }
+            } else if (params.get('mode') === 'generator') {
+                setView('generator');
             }
             setIsCheckingUrl(false);
         };
@@ -188,7 +189,6 @@ const App: React.FC = () => {
             const eventsData = snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name || 'Sem Nome', isHidden: doc.data().isHidden ?? false }));
             setEvents(eventsData);
 
-            // PERSISTÊNCIA: Carregar evento do localStorage se não houver um selecionado
             const savedEventId = localStorage.getItem('selected_event_id');
             if (savedEventId && !selectedEvent) {
                 const found = eventsData.find(e => e.id === savedEventId);
@@ -348,12 +348,13 @@ const App: React.FC = () => {
                 {!isOnline && <AlertBanner message="Você está offline." type="warning" />}
                 <header className="flex justify-between items-center w-full">
                     <div>
-                        <h1 className="text-3xl font-bold text-orange-500">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
+                        <h1 className="text-3xl font-bold text-orange-500 tracking-tighter">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
                         {selectedEvent && <button onClick={() => { setSelectedEvent(null); localStorage.removeItem('selected_event_id'); }} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
                     </div>
                     <div className="flex items-center space-x-2">
-                         <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`}><CogIcon className="w-6 h-6" /></button>
-                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2"><LogoutIcon className="w-6 h-6" /></button>}
+                         <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Configurações"><CogIcon className="w-6 h-6" /></button>
+                         {currentUser && <button onClick={() => setView('generator')} className={`p-2 rounded-full transition-colors ${view === 'generator' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Gerador de PDFs"><TicketIcon className="w-6 h-6" /></button>}
+                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>}
                     </div>
                 </header>
 
@@ -361,6 +362,7 @@ const App: React.FC = () => {
                     {showLoginModal && <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />}
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!scansLoaded} />}
+                    {view === 'generator' && db && <SecretTicketGenerator db={db} />}
                     {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -370,8 +372,8 @@ const App: React.FC = () => {
                                     <Scanner onScanSuccess={handleScanSuccess} onScanError={(e) => alert(e)} />
                                 </div>
                                 <div className="bg-gray-800 p-4 rounded-lg flex space-x-2">
-                                    <input type="text" value={manualCode} onChange={(e) => setManualCode(e.target.value)} placeholder="Código manual..." className="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-3 text-white" />
-                                    <button onClick={() => { handleScanSuccess(manualCode); setManualCode(''); }} className="bg-orange-600 text-white font-bold py-3 px-6 rounded">Validar</button>
+                                    <input type="text" value={manualCode} onChange={(e) => setManualCode(e.target.value)} placeholder="Código manual..." className="flex-1 bg-gray-900 border border-gray-600 rounded px-4 py-3 text-white outline-none focus:border-orange-500" />
+                                    <button onClick={() => { handleScanSuccess(manualCode); setManualCode(''); }} className="bg-orange-600 text-white font-bold py-3 px-6 rounded shadow-lg active:scale-95 transition-all">Validar</button>
                                 </div>
                             </div>
                             <TicketList tickets={scanHistory.filter(s => s.deviceId === deviceId)} sectorNames={visibleSectors} />
