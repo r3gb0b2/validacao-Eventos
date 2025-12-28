@@ -102,7 +102,12 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             sector: sector,
                             status: 'AVAILABLE',
                             source: 'api_import',
-                            details: { ownerName: String(row['name'] || row['nome'] || 'Importado') }
+                            details: { 
+                                ownerName: String(row['name'] || row['nome'] || 'Importado'),
+                                email: row['email'] || '',
+                                phone: row['phone'] || row['telefone'] || '',
+                                document: row['document'] || row['cpf'] || ''
+                            }
                         });
                         newItemsAdded++;
                     }
@@ -119,7 +124,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
                 while (hasMorePages) {
                     setImportProgress(`Processando página ${currentPage}...`);
-                    console.log(`Solicitando página ${currentPage}...`);
                     
                     const urlObj = new URL(`${baseUrl}/${endpoint}`, window.location.origin);
                     urlObj.searchParams.set('page', String(currentPage));
@@ -133,7 +137,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     
                     if (!res.ok) {
                         if (res.status === 404 && currentPage > 1) {
-                            console.log("Fim da lista alcançado (404 na página seguinte).");
                             hasMorePages = false;
                             break;
                         }
@@ -208,6 +211,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 source: 'api_import',
                                 details: { 
                                     ownerName: String(item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado'),
+                                    email: item.email || (item.customer && item.customer.email) || '',
+                                    phone: item.phone || item.mobile || (item.customer && item.customer.phone) || '',
+                                    document: item.document || item.cpf || (item.customer && item.customer.document) || '',
                                     originalId: item.id || null
                                 }
                             });
@@ -243,13 +249,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             }
 
             setImportProgress('');
-            alert(
-                `Sincronização Finalizada!\n\n` +
-                `• Ingressos lidos da API: ${totalItemsFoundInApi}\n` +
-                `• Novos adicionados: ${newItemsAdded}\n` +
-                `• Atualizados para 'Usado': ${updatedItems}\n` +
-                `• Total de Setores: ${discoveredSectors.size}`
-            );
+            alert(`Importação Finalizada com Sucesso!`);
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
             await onUpdateImportSources(updatedSources);
@@ -257,7 +257,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
             setImportProgress('');
-            alert(`Falha Crítica na Importação:\n${e.message}\n\nVerifique se o Token é válido para este evento.`);
+            alert(`Erro: ${e.message}`);
         } finally {
             setIsLoading(false);
             setImportProgress('');
@@ -273,7 +273,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4"></div>
                         <h3 className="text-xl font-bold text-white mb-2">Importação em Curso</h3>
                         <p className="text-orange-400 font-mono text-sm animate-pulse">{importProgress}</p>
-                        <p className="text-gray-400 text-xs mt-4">Por favor, não feche esta aba até a conclusão.</p>
+                        <p className="text-gray-400 text-xs mt-4">Capturando dados pessoais dos participantes...</p>
                     </div>
                 </div>
             )}
@@ -465,8 +465,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 <AlertTriangleIcon className="w-8 h-8 text-blue-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
                     <p className="font-bold text-blue-400 uppercase tracking-widest">Dica de Importação:</p>
-                    <p>• O sistema percorre todas as páginas da API automaticamente.</p>
-                    <p>• Caso a API retorne erro em uma página avançada, os dados anteriores são preservados.</p>
+                    <p>• O sistema agora captura e-mail, telefone e documento se disponíveis na API.</p>
+                    <p>• Use a nova aba "Participantes" para consultar estes dados após a importação.</p>
                 </div>
             </div>
         </div>

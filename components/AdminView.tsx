@@ -10,6 +10,7 @@ import SettingsModule from './admin/SettingsModule';
 import GroupingModule from './admin/GroupingModule';
 import LocalizadorasModule from './admin/LocalizadorasModule';
 import ManualAddModule from './admin/ManualAddModule';
+import ParticipantsModule from './admin/ParticipantsModule';
 import OperatorMonitor from './OperatorMonitor';
 import TicketList from './TicketList';
 import SuperAdminView from './SuperAdminView';
@@ -29,7 +30,7 @@ interface AdminViewProps {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'users'>(() => {
+    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'users' | 'participants'>(() => {
         try {
             return (localStorage.getItem('admin_active_tab') as any) || 'stats';
         } catch(e) { return 'stats'; }
@@ -48,7 +49,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     useEffect(() => {
         if (!selectedEvent || !db) return;
         
-        // Listener para Grupos (Módulo de Agrupamento)
+        // Listener para Grupos
         const unsubStats = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
@@ -61,7 +62,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setGroups([]);
         });
 
-        // Listener para Importações (Módulo de Configurações)
+        // Listener para Importações
         const unsubImport = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
@@ -129,6 +130,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
+            case 'participants': return <ParticipantsModule allTickets={allTickets} sectorNames={sectorNames} />;
             case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
             case 'operators': return <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isEmbedded />;
@@ -143,6 +145,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             <div className="bg-gray-800 rounded-[1.5rem] p-2 mb-8 flex overflow-x-auto space-x-1 border border-gray-700 no-scrollbar sticky top-4 z-40 shadow-2xl backdrop-blur-md">
                 {[
                     { id: 'stats', label: 'Dashboard' },
+                    { id: 'participants', label: 'Participantes' },
                     { id: 'groups', label: 'Agrupamentos' },
                     { id: 'settings', label: 'Configurações' },
                     { id: 'locator', label: 'Localizadoras' },

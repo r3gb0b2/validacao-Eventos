@@ -16,9 +16,12 @@ export interface Ticket {
   sector: Sector;
   status: TicketStatus;
   usedAt?: number; // Milliseconds since epoch for client-side use
-  source?: string; // Origem do ingresso (ex: 'secret_generator')
+  source?: string; // Origem do ingresso (ex: 'secret_generator', 'api_import')
   details?: {
     ownerName?: string;
+    email?: string;
+    phone?: string;
+    document?: string;
     eventName?: string;
     originalId?: string | number; // ID numérico/original da API externa
   };
