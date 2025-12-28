@@ -51,7 +51,14 @@ const App: React.FC = () => {
     const [isAuthLoading, setIsAuthLoading] = useState(false);
 
     const [selectedSector, setSelectedSector] = useState<SectorFilter>('All');
-    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>('scanner');
+    
+    // VIEW STATE PERSISTENCE
+    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
+        try {
+            return (localStorage.getItem('current_view') as any) || 'scanner';
+        } catch(e) { return 'scanner'; }
+    });
+
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); 
@@ -73,6 +80,11 @@ const App: React.FC = () => {
     const playBeep = useSound();
     
     const deviceId = useMemo(() => getDeviceId(), []);
+
+    // Persist View
+    useEffect(() => {
+        localStorage.setItem('current_view', view);
+    }, [view]);
 
     const ticketsMap = useMemo(() => {
         if (!Array.isArray(allTickets)) return new Map();
@@ -159,7 +171,9 @@ const App: React.FC = () => {
         const checkUrlParams = async () => {
             const params = new URLSearchParams(window.location.search);
             const eventIdParam = params.get('eventId');
-            if (params.get('mode') === 'stats' && eventIdParam) {
+            const modeParam = params.get('mode');
+
+            if (modeParam === 'stats' && eventIdParam) {
                 const docSnap = await getDoc(doc(db, 'events', eventIdParam));
                 if (docSnap.exists()) {
                     const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
@@ -167,7 +181,7 @@ const App: React.FC = () => {
                     localStorage.setItem('selected_event_id', ev.id);
                     setView('public_stats');
                 }
-            } else if (params.get('mode') === 'operators' && eventIdParam) {
+            } else if (modeParam === 'operators' && eventIdParam) {
                  const docSnap = await getDoc(doc(db, 'events', eventIdParam));
                  if (docSnap.exists()) {
                     const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
@@ -175,7 +189,7 @@ const App: React.FC = () => {
                     localStorage.setItem('selected_event_id', ev.id);
                     setView('operators');
                  }
-            } else if (params.get('mode') === 'generator') {
+            } else if (modeParam === 'generator') {
                 setView('generator');
             }
             setIsCheckingUrl(false);
@@ -349,11 +363,10 @@ const App: React.FC = () => {
                 <header className="flex justify-between items-center w-full">
                     <div>
                         <h1 className="text-3xl font-bold text-orange-500 tracking-tighter">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
-                        {selectedEvent && <button onClick={() => { setSelectedEvent(null); localStorage.removeItem('selected_event_id'); }} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
+                        {selectedEvent && <button onClick={() => { setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
                     </div>
                     <div className="flex items-center space-x-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Configurações"><CogIcon className="w-6 h-6" /></button>
-                         {currentUser && <button onClick={() => setView('generator')} className={`p-2 rounded-full transition-colors ${view === 'generator' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Gerador de PDFs"><TicketIcon className="w-6 h-6" /></button>}
                          {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>}
                     </div>
                 </header>

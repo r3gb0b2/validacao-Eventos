@@ -29,18 +29,37 @@ interface AdminViewProps {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator'>('stats');
+    // TAB PERSISTENCE
+    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'users'>(() => {
+        try {
+            return (localStorage.getItem('admin_active_tab') as any) || 'stats';
+        } catch(e) { return 'stats'; }
+    });
+    
     const [isLoading, setIsLoading] = useState(false);
     const [groups, setGroups] = useState<SectorGroup[]>([]);
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
 
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.username === 'Administrador';
 
+    // Persist active tab
+    useEffect(() => {
+        localStorage.setItem('admin_active_tab', activeTab);
+    }, [activeTab]);
+
     // Carregar configurações do evento selecionado
     useEffect(() => {
         if (!selectedEvent) return;
         const unsub = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), (snap) => {
-            if (snap.exists()) setGroups(snap.data().groups || []);
+            if (snap.exists()) {
+                const data = snap.data();
+                setGroups(Array.isArray(data.groups) ? data.groups : []);
+            } else {
+                setGroups([]);
+            }
+        }, (err) => {
+            console.error("Erro ao carregar grupos:", err);
+            setGroups([]);
         });
         return () => unsub();
     }, [db, selectedEvent]);
@@ -58,6 +77,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     };
 
     const renderModule = () => {
+        // Aba de Eventos e Usuários não dependem de um evento selecionado
         if (activeTab === 'events') return (
             <div className="space-y-6">
                 <div className="flex justify-between items-center bg-gray-800 p-4 rounded-2xl border border-gray-700">
@@ -78,8 +98,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             </div>
         );
 
-        if (!selectedEvent) return <div className="p-10 text-center text-gray-400 bg-gray-800 rounded-lg">Selecione um evento na aba 'Eventos'.</div>;
+        if (activeTab === 'users' && isSuperAdmin) return (
+            <SuperAdminView db={db} events={events} onClose={() => setActiveTab('stats')} />
+        );
 
+        if (!selectedEvent) return (
+            <div className="p-16 text-center text-gray-400 bg-gray-800 rounded-3xl border-2 border-dashed border-gray-700">
+                <p className="text-xl font-bold mb-2">Nenhum evento selecionado</p>
+                <p className="mb-6">Você precisa selecionar um evento na aba 'Eventos' para acessar estas configurações.</p>
+                <button onClick={() => setActiveTab('events')} className="bg-orange-600 text-white px-8 py-3 rounded-2xl font-bold shadow-lg">Ir para Eventos</button>
+            </div>
+        );
+
+        // Módulos que dependem de evento selecionado
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
@@ -88,33 +119,41 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'operators': return <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isEmbedded />;
             case 'locator': return <LocalizadorasModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} />;
             case 'manual': return <ManualAddModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} />;
-            default: return null;
+            default: return <div className="p-10 text-center">Módulo não encontrado.</div>;
         }
     };
 
+    const tabs = [
+        { id: 'stats', label: 'Dashboard' },
+        { id: 'groups', label: 'Agrupamentos' },
+        { id: 'settings', label: 'Configurações' },
+        { id: 'locator', label: 'Localizadoras' },
+        { id: 'manual', label: 'Add Manual' },
+        { id: 'operators', label: 'Operadores' },
+        { id: 'history', label: 'Histórico' },
+        { id: 'events', label: 'Eventos' }
+    ];
+
+    if (isSuperAdmin) {
+        tabs.push({ id: 'users', label: 'Usuários' });
+    }
+
     return (
-        <div className="w-full max-w-6xl mx-auto pb-10 px-4">
-            <div className="bg-gray-800 rounded-2xl p-2 mb-6 flex overflow-x-auto space-x-1 border border-gray-700 no-scrollbar">
-                {[
-                    { id: 'stats', label: 'Dashboard' },
-                    { id: 'groups', label: 'Agrupamentos' },
-                    { id: 'settings', label: 'Configurações' },
-                    { id: 'locator', label: 'Localizadoras' },
-                    { id: 'manual', label: 'Add Manual' },
-                    { id: 'operators', label: 'Operadores' },
-                    { id: 'history', label: 'Histórico' },
-                    { id: 'events', label: 'Eventos' }
-                ].map(tab => (
+        <div className="w-full max-w-6xl mx-auto pb-24 px-4">
+            <div className="bg-gray-800 rounded-2xl p-2 mb-6 flex overflow-x-auto space-x-1 border border-gray-700 no-scrollbar sticky top-4 z-40 shadow-2xl">
+                {tabs.map(tab => (
                     <button 
                         key={tab.id} 
                         onClick={() => setActiveTab(tab.id as any)} 
-                        className={`px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-orange-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-700'}`}
+                        className={`px-5 py-2.5 rounded-xl text-xs font-bold uppercase transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-orange-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-700'}`}
                     >
                         {tab.label}
                     </button>
                 ))}
             </div>
-            {renderModule()}
+            <div className="animate-fade-in">
+                {renderModule()}
+            </div>
         </div>
     );
 };
