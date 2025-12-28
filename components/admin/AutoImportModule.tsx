@@ -50,7 +50,8 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             return;
         }
 
-        const existingTicketsMap = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
+        // Criamos um Set dinâmico para rastrear o que já existe E o que estamos adicionando agora
+        const processedIdsInThisCycle = new Set<string>(allTickets.map(t => String(t.id).trim()));
         const discoveredSectors = new Set<string>(sectorNames);
 
         for (const source of sourcesToSync) {
@@ -78,7 +79,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                         totalFound++;
                         const sector = String(row['sector'] || row['setor'] || 'Geral').trim();
 
-                        if (!existingTicketsMap.has(code)) {
+                        if (!processedIdsInThisCycle.has(code)) {
                             discoveredSectors.add(sector);
                             sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
                             ticketsToSave.push({
@@ -86,6 +87,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                 details: { ownerName: String(row['name'] || row['nome'] || 'Importado') }
                             });
                             newItems++;
+                            processedIdsInThisCycle.add(code); // Evita duplicar se o mesmo ID aparecer de novo nesta ou em outra fonte
                         } else {
                             existingCount++;
                         }
@@ -120,10 +122,10 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             let rawSector = item.sector_name || item.category?.name || item.category || item.sector || item.ticket_type?.name || 'Geral';
                             const sector = String(rawSector).trim();
                             
-                            const existing = existingTicketsMap.get(code);
+                            const isNew = !processedIdsInThisCycle.has(code);
                             const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || !!item.validated_at;
 
-                            if (!existing) {
+                            if (isNew) {
                                 discoveredSectors.add(sector);
                                 sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
                                 ticketsToSave.push({
@@ -133,12 +135,15 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                     details: { ownerName: String(item.name || item.customer_name || 'Importado') }
                                 });
                                 newItems++;
+                                processedIdsInThisCycle.add(code);
                             } else {
                                 existingCount++;
-                                if (shouldMarkUsed && existing.status !== 'USED') {
+                                // Se já existe, verificamos se o status mudou para USED (Sincronização de check-ins)
+                                const existingTicket = allTickets.find(t => String(t.id).trim() === code);
+                                if (shouldMarkUsed && existingTicket && existingTicket.status !== 'USED') {
                                     updatedCount++;
                                     sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
-                                    ticketsToSave.push({ ...existing, status: 'USED', usedAt: item.validated_at || Date.now() });
+                                    ticketsToSave.push({ ...existingTicket, status: 'USED', usedAt: item.validated_at || Date.now() });
                                 }
                             }
                         });
@@ -149,23 +154,25 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                     }
                 }
 
-                // Salvar Lote
+                // Só salva se houver mudanças reais
                 if (ticketsToSave.length > 0) {
                     const batch = writeBatch(db);
                     ticketsToSave.forEach(t => batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true }));
                     await batch.commit();
                 }
 
-                // Log Sucesso
-                await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
-                    timestamp: Date.now(),
-                    sourceName: source.name,
-                    newCount: newItems,
-                    existingCount,
-                    updatedCount,
-                    sectorsAffected,
-                    status: 'success'
-                });
+                // SÓ REGISTRA LOG SE HOUVER NOVIDADES
+                if (newItems > 0 || updatedCount > 0) {
+                    await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
+                        timestamp: Date.now(),
+                        sourceName: source.name,
+                        newCount: newItems,
+                        existingCount,
+                        updatedCount,
+                        sectorsAffected,
+                        status: 'success'
+                    });
+                }
 
             } catch (err: any) {
                 await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
@@ -214,7 +221,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             if (timerRef.current) clearInterval(timerRef.current);
             if (countdownRef.current) clearInterval(countdownRef.current);
         };
-    }, [isActive, intervalMinutes]);
+    }, [isActive, intervalMinutes, runImportLogic]);
 
     const formatTime = (seconds: number) => {
         const m = Math.floor(seconds / 60);
@@ -283,9 +290,9 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             <div className="bg-gray-800 rounded-3xl border border-gray-700 shadow-xl overflow-hidden">
                 <div className="p-6 border-b border-gray-700 flex items-center justify-between bg-gray-900/20">
                     <h3 className="font-bold flex items-center text-gray-300">
-                        <TableCellsIcon className="w-5 h-5 mr-2" /> Histórico de Sincronizações
+                        <TableCellsIcon className="w-5 h-5 mr-2" /> Histórico de Sincronizações (Apenas Novidades)
                     </h3>
-                    <span className="text-[10px] bg-gray-700 px-2 py-1 rounded text-gray-400 uppercase font-bold">Últimos 50 registros</span>
+                    <span className="text-[10px] bg-gray-700 px-2 py-1 rounded text-gray-400 uppercase font-bold">Últimos registros</span>
                 </div>
 
                 <div className="overflow-x-auto max-h-[600px] custom-scrollbar">
@@ -312,7 +319,6 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                         <div className="flex gap-2">
                                             {log.newCount > 0 && <span className="text-[10px] bg-green-500/10 text-green-400 px-1.5 py-0.5 rounded font-bold">+{log.newCount} novos</span>}
                                             {log.updatedCount > 0 && <span className="text-[10px] bg-orange-500/10 text-orange-400 px-1.5 py-0.5 rounded font-bold">{log.updatedCount} check-ins</span>}
-                                            {log.newCount === 0 && log.updatedCount === 0 && log.status === 'success' && <span className="text-[10px] text-gray-600 italic">Sem novidades</span>}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
@@ -322,7 +328,6 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                                     {sector}: <b className="text-gray-200">{count}</b>
                                                 </span>
                                             ))}
-                                            {Object.keys(log.sectorsAffected || {}).length === 0 && <span className="text-[9px] text-gray-600">---</span>}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-center">
@@ -342,7 +347,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             {logs.length === 0 && (
                                 <tr>
                                     <td colSpan={5} className="px-6 py-20 text-center text-gray-600 italic">
-                                        Nenhuma atividade registrada. Inicie o loop para começar o monitoramento.
+                                        Aguardando novas entradas na API... Nenhum registro novo foi detectado ainda.
                                     </td>
                                 </tr>
                             )}
