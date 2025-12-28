@@ -39,7 +39,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   // CORES DEFINIDAS
   const orangeHeader = [254, 85, 29]; // #fe551d
   const textPrimary = [80, 108, 123]; // #506c7b (Cinza do código do ingresso)
-  const redAlert = [220, 38, 38];    // #dc2626 (Vermelho para o título)
+  const redAlert = [220, 38, 38];    // #dc2626 (Vermelho para o título e avisos)
 
   // --- PÁGINA 1 ---
   
@@ -98,29 +98,26 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l1Label2, curX, 105); curX += doc.getTextWidth(l1Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l1Val2, curX, 105);
 
-  // --- AJUSTE DE MARGEM DO ENDEREÇO (10% = 21mm de cada lado) ---
+  // --- AJUSTE DE MARGEM E CENTRALIZAÇÃO DO ENDEREÇO ---
   const addrFontSize = 12.5;
   doc.setFontSize(addrFontSize);
-  const addrLabel = 'Endereço: ';
   const addrValue = details.address || 'Não informado';
   
   // Margem de 10% nas laterais -> Largura útil: 210 - 42 = 168mm
   const maxWidthAddress = 168; 
-  const splitAddr = doc.splitTextToSize(addrValue, maxWidthAddress - 20); // -20 para dar folga ao label
-  
-  let addrY = 113;
-  const addrLabelW = doc.getTextWidth(addrLabel);
-  const firstLineW = addrLabelW + doc.getTextWidth(splitAddr[0]);
-  const addrStartX = 105 - (firstLineW / 2);
-  
+
+  // Rótulo centralizado
   doc.setFont('helvetica', 'normal');
-  doc.text(addrLabel, addrStartX, addrY);
+  doc.text('Endereço:', 105, 113, { align: 'center' });
+  
+  // Valor centralizado (com quebra de linha se necessário)
   doc.setFont('helvetica', 'bold');
-  doc.text(splitAddr, addrStartX + addrLabelW, addrY);
+  const splitAddr = doc.splitTextToSize(addrValue, maxWidthAddress);
+  doc.text(splitAddr, 105, 119, { align: 'center' });
   
   doc.setFontSize(headerFontSize);
   // O produtor desce conforme o número de linhas do endereço
-  const prodY = addrY + (splitAddr.length * 6) + 1;
+  const prodY = 119 + (splitAddr.length * 6) + 1;
   const l3Label1 = 'Produzido: ';
   const l3Val1 = details.producer || 'Organização';
   const l3Label2 = '   Contato: ';
@@ -182,14 +179,14 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setLineDashPattern([], 0);
   doc.roundedRect(10, 10, 190, 277, 4, 4);
 
-  // Título permanece em VERMELHO e NEGRITO
+  // Título em VERMELHO e NEGRITO
   doc.setTextColor(redAlert[0], redAlert[1], redAlert[2]);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(20);
   doc.text('INFORMAÇÃO IMPORTANTE!', 105, 30, { align: 'center' });
 
-  // MUDANÇA SOLICITADA: Texto agora é CINZA
-  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
+  // MUDANÇA SOLICITADA: Texto informativo também em VERMELHO e NEGRITO
+  doc.setTextColor(redAlert[0], redAlert[1], redAlert[2]);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setLineHeightFactor(1.4);
@@ -197,7 +194,8 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   
   doc.text(infoText, 15, 48, { maxWidth: 180, align: 'justify' });
 
-  // Termos de Uso em CINZA e NORMAL (peso normal para melhor leitura do bloco denso)
+  // Termos de Uso em CINZA e NORMAL
+  doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setLineHeightFactor(1.2);
