@@ -46,25 +46,27 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
+  // Define a cor do texto como BRANCO para toda a parte de cima (área laranja)
+  doc.setTextColor(255, 255, 255);
+
   // --- LOGO (DINÂMICA) ---
   const finalLogoUrl = details.logoUrl || 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png';
   
   try {
     const logoImg = await loadImage(finalLogoUrl);
     
-    // Calcula proporções para a logo (altura fixa de 18mm)
-    const targetHeight = 18;
+    // Aumento de 25% na logo: 18mm * 1.25 = 22.5mm
+    const targetHeight = 22.5;
     const ratio = logoImg.width / logoImg.height;
     const targetWidth = targetHeight * ratio;
     
     // Centraliza horizontalmente
     const xPos = 105 - (targetWidth / 2);
-    const yPos = 22;
+    const yPos = 20; // Ajustado levemente para cima devido ao aumento de tamanho
 
     doc.addImage(logoImg, 'PNG', xPos, yPos, targetWidth, targetHeight);
   } catch (e) {
     console.warn("Não foi possível carregar a imagem da logo. Usando fallback de texto.");
-    doc.setTextColor(255, 255, 255);
     doc.setFontSize(20);
     doc.setFont('helvetica', 'bold');
     doc.text(details.producer || 'ST INGRESSOS', 105, 32, { align: 'center' });
