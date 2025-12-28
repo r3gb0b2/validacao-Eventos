@@ -80,8 +80,8 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   // Linha pontilhada meio
   doc.line(15, 92, 195, 92);
 
-  // --- INFORMAÇÕES DO EVENTO (AUMENTADAS EM 30%) ---
-  const headerFontSize = 13.5; // Aumentado ~30% de 10.5
+  // --- INFORMAÇÕES DO EVENTO ---
+  const headerFontSize = 13.5;
   doc.setFontSize(headerFontSize);
   
   const l1Label1 = 'Abertura: ';
@@ -97,12 +97,12 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l1Label2, curX, 105); curX += doc.getTextWidth(l1Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l1Val2, curX, 105);
 
-  // Linha 2: Endereço (Com quebra automática para fonte maior)
-  const addrFontSize = 12.5; // Aumentado de 9.5
+  // Linha 2: Endereço
+  const addrFontSize = 12.5;
   doc.setFontSize(addrFontSize);
   const addrLabel = 'Endereço: ';
   const addrValue = details.address || 'Não informado';
-  const splitAddr = doc.splitTextToSize(addrValue, 165); // Largura um pouco maior
+  const splitAddr = doc.splitTextToSize(addrValue, 165);
   
   let addrY = 113;
   const addrLabelW = doc.getTextWidth(addrLabel);
@@ -116,7 +116,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   
   // Linha 3: Produzido e Contato
   doc.setFontSize(headerFontSize);
-  const prodY = addrY + (splitAddr.length * 6) + 1; // Espaçamento maior para fonte maior
+  const prodY = addrY + (splitAddr.length * 6) + 1;
   const l3Label1 = 'Produzido: ';
   const l3Val1 = details.producer || 'Organização';
   const l3Label2 = '   Contato: ';
@@ -130,50 +130,54 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l3Label2, curX3, prodY); curX3 += doc.getTextWidth(l3Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
 
-  // --- ÁREA BRANCA (DADOS COMPACTOS E AUMENTADOS EM 25%) ---
-  // Subi de 155 para 150 para ficar bem perto da parte laranja (que termina em 140)
-  const startDataY = 150; 
+  // --- ÁREA BRANCA (DADOS COMPACTOS) ---
+  // startDataY aproximado em 20% (de 150 para 148, ficando 8mm da área laranja que acaba em 140)
+  const startDataY = 148; 
   doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   
-  const labelFontSize = 12.5; // Aumentado ~25% de 10
-  const valueFontSize = 19;   // Aumentado ~25% de 15
+  // Tamanhos reduzidos em 10%
+  const labelFontSize = 11.25; 
+  const valueFontSize = 17.1;  
   
+  // Rótulos: Ingresso e Participante (Fonte Normal agora)
   doc.setFontSize(labelFontSize);
-  doc.setFont('helvetica', 'bold'); 
+  doc.setFont('helvetica', 'normal'); 
   doc.text('Ingresso', 15, startDataY);
   doc.text('Participante', 195, startDataY, { align: 'right' });
   
+  // Valores: Setor e Nome (Negrito / "Gordinha")
   doc.setFontSize(valueFontSize);
-  doc.text(details.sector || 'Geral', 15, startDataY + 6.5);
-  doc.text(details.ownerName || 'Convidado', 195, startDataY + 6.5, { align: 'right' });
+  doc.setFont('helvetica', 'bold'); 
+  doc.text(details.sector || 'Geral', 15, startDataY + 6.2);
+  doc.text(details.ownerName || 'Convidado', 195, startDataY + 6.2, { align: 'right' });
 
-  // Bloco de Códigos (Mais aproximado da linha acima)
-  const secondDataY = 165; 
+  // Bloco de Códigos (Também aproximado e reduzido)
+  const secondDataY = 162; 
   doc.setFontSize(labelFontSize);
-  doc.setFont('helvetica', 'bold');
+  doc.setFont('helvetica', 'normal'); // Rótulos sem negrito
   doc.text('Código da Compra', 15, secondDataY);
   doc.text('Código do ingresso', 195, secondDataY, { align: 'right' });
 
-  const codeValueFontSize = 20; // Aumentado de 16
+  const codeValueFontSize = 18; 
   doc.setFontSize(codeValueFontSize);
-  doc.text(purchaseCode, 15, secondDataY + 7);
-  doc.text(ticketCode, 195, secondDataY + 7, { align: 'right' });
+  doc.setFont('helvetica', 'bold'); // Códigos negrito / gordinhos
+  doc.text(purchaseCode, 15, secondDataY + 6.5);
+  doc.text(ticketCode, 195, secondDataY + 6.5, { align: 'right' });
 
   // Linha separadora (Subiu para acompanhar o texto)
   doc.setDrawColor(textPrimary[0], textPrimary[1], textPrimary[2]);
   doc.setLineWidth(0.1);
   doc.setLineDashPattern([1.5, 1], 0);
-  doc.line(15, 185, 195, 185);
+  doc.line(15, 182, 195, 182);
 
-  // QR CODE (Subiu de 212 para 195 para ficar mais perto das informações)
+  // QR CODE (Subiu para ficar mais perto das informações)
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${ticketCode}`;
   const img = new Image();
   img.crossOrigin = "Anonymous";
   img.src = qrUrl;
   await new Promise((resolve) => {
     img.onload = () => {
-      // Ajustado posição Y para 195
-      doc.addImage(img, 'PNG', 65, 195, 80, 80);
+      doc.addImage(img, 'PNG', 65, 188, 80, 80);
       resolve(true);
     };
     img.onerror = () => resolve(false);
