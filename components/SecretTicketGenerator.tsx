@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
 import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon, PlusCircleIcon } from './Icons';
-import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where } from 'firebase/firestore';
+import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where, getDoc } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -20,6 +20,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [isGenerating, setIsGenerating] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
     const [isDeletingBatch, setIsDeletingBatch] = useState(false);
+    const [isSavingLogo, setIsSavingLogo] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [quantity, setQuantity] = useState(1);
     const [lastZipUrl, setLastZipUrl] = useState<string | null>(null);
@@ -30,18 +31,18 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const logoInputRef = useRef<HTMLInputElement>(null);
 
     const [formData, setFormData] = useState<TicketPdfDetails>({
-        eventName: 'DE SOL AO SAMBA',
-        openingTime: '27/12/2025 16:00',
-        venue: 'Iate Club',
-        address: 'Avenida Vicente de Castro, 4813 - Cais do Porto, Fortaleza, CE - 60180-410',
-        producer: 'D&E MUSIC',
-        contact: '+5585987737330',
-        sector: 'Setor Único [Meia] 3º Lote',
-        ownerName: 'VENDA ONLINE',
+        eventName: 'NOME DO EVENTO',
+        openingTime: '01/01/2026 16:00',
+        venue: 'Local do Evento',
+        address: 'Endereço completo aqui',
+        producer: 'Produtora',
+        contact: '+5500000000000',
+        sector: 'Setor Único',
+        ownerName: 'PARTICIPANTE',
         logoUrl: 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'
     });
 
-    // Carregar Eventos
+    // 1. Carregar lista de Eventos
     useEffect(() => {
         const loadEvents = async () => {
             try {
@@ -56,7 +57,28 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         loadEvents();
     }, [db]);
 
-    // Escutar APENAS ingressos gerados por este gerador
+    // 2. Carregar configurações salvas (incluindo a LOGO) quando mudar o evento
+    useEffect(() => {
+        if (!selectedEventId || !db) return;
+
+        const loadSavedSettings = async () => {
+            try {
+                const docRef = doc(db, 'events', selectedEventId, 'settings', 'main');
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data();
+                    if (data.logoUrl) {
+                        setFormData(prev => ({ ...prev, logoUrl: data.logoUrl }));
+                    }
+                }
+            } catch (e) {
+                console.error("Erro ao carregar logo salva", e);
+            }
+        };
+        loadSavedSettings();
+    }, [db, selectedEventId]);
+
+    // 3. Escutar ingressos gerados para o evento
     useEffect(() => {
         if (!selectedEventId) {
             setTickets([]);
@@ -90,32 +112,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         );
     }, [tickets, searchTerm]);
 
-    // Limpar seleção quando os ingressos mudam ou filtro é aplicado
-    useEffect(() => {
-        setSelectedIds(prev => {
-            const next = new Set<string>();
-            filteredTickets.forEach(t => {
-                if (prev.has(t.id)) next.add(t.id);
-            });
-            return next;
-        });
-    }, [filteredTickets]);
-
-    const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.checked) {
-            setSelectedIds(new Set(filteredTickets.map(t => t.id)));
-        } else {
-            setSelectedIds(new Set());
-        }
-    };
-
-    const toggleSelect = (id: string) => {
-        const next = new Set(selectedIds);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        setSelectedIds(next);
-    };
-
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -146,7 +142,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             if (sectorMatch) extracted.sector = sectorMatch[1].trim();
 
             setFormData(prev => ({ ...prev, ...extracted }));
-            alert("Dados extraídos do PDF com sucesso!");
         } catch (error) {
             console.error(error);
             alert("Erro ao ler o PDF.");
@@ -156,16 +151,9 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         }
     };
 
-    // FUNÇÃO PARA UPLOAD DIRETO DA LOGO (CONVERSÃO PARA BASE64)
     const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-
-        if (!file.type.startsWith('image/')) {
-            alert("Por favor, selecione um arquivo de imagem (PNG ou JPG).");
-            return;
-        }
-
         const reader = new FileReader();
         reader.onload = (event) => {
             const base64String = event.target?.result as string;
@@ -174,80 +162,29 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         reader.readAsDataURL(file);
     };
 
+    // FUNÇÃO PARA SALVAR A LOGO PERMANENTEMENTE NO BANCO
+    const saveLogoToFirestore = async () => {
+        if (!selectedEventId || !formData.logoUrl) return;
+        setIsSavingLogo(true);
+        try {
+            const docRef = doc(db, 'events', selectedEventId, 'settings', 'main');
+            await setDoc(docRef, { logoUrl: formData.logoUrl }, { merge: true });
+            alert("Logo salva permanentemente para este evento!");
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao salvar no banco.");
+        } finally {
+            setIsSavingLogo(false);
+        }
+    };
+
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
-    const handleDownloadIndividual = async (ticket: Ticket) => {
-        if (downloadingId) return;
-        setDownloadingId(ticket.id);
-        
-        try {
-            const pdfConfig: TicketPdfDetails = (ticket.details as any)?.pdfConfig || {
-                ...formData,
-                ownerName: ticket.details?.ownerName || formData.ownerName,
-                sector: ticket.sector
-            };
-
-            const { blob } = await generateSingleTicketBlob(pdfConfig, ticket.id);
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `ingresso_${ticket.id}.pdf`;
-            link.click();
-            URL.revokeObjectURL(url);
-        } catch (e) {
-            console.error("Erro ao reconstruir PDF:", e);
-            alert("Erro ao gerar arquivo para download.");
-        } finally {
-            setDownloadingId(null);
-        }
-    };
-
-    const handleDeleteTicket = async (ticketId: string) => {
-        if (!selectedEventId) return;
-        if (!confirm(`Deseja remover o código ${ticketId} permanentemente?`)) return;
-        
-        try {
-            await deleteDoc(doc(db, 'events', selectedEventId, 'tickets', ticketId));
-        } catch (e) {
-            alert("Erro ao deletar.");
-        }
-    };
-
-    const handleDeleteSelected = async () => {
-        if (!selectedEventId || selectedIds.size === 0) return;
-        if (!confirm(`Deseja remover permanentemente ${selectedIds.size} ingressos selecionados?`)) return;
-
-        setIsDeletingBatch(true);
-        try {
-            const idsArray = Array.from(selectedIds);
-            const BATCH_SIZE = 450; 
-
-            for (let i = 0; i < idsArray.length; i += BATCH_SIZE) {
-                const chunk = idsArray.slice(i, i + BATCH_SIZE);
-                const batch = writeBatch(db);
-                chunk.forEach(id => {
-                    batch.delete(doc(db, 'events', selectedEventId, 'tickets', id));
-                });
-                await batch.commit();
-            }
-
-            setSelectedIds(new Set());
-            alert(`${idsArray.length} ingressos removidos com sucesso.`);
-        } catch (e) {
-            console.error("Erro ao deletar lote:", e);
-            alert("Erro ao processar exclusão em massa.");
-        } finally {
-            setIsDeletingBatch(false);
-        }
-    };
-
     const handleGenerateBatch = async () => {
-        if (!selectedEventId) return alert("Selecione um evento de destino.");
-        if (quantity < 1) return alert("Quantidade inválida.");
-
+        if (!selectedEventId) return alert("Selecione um evento.");
         setIsGenerating(true);
         const zip = new JSZip();
         let currentBatch = writeBatch(db);
@@ -258,7 +195,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             for (let i = 0; i < quantity; i++) {
                 const { blob, ticketCode } = await generateSingleTicketBlob(formData);
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
-
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
                 currentBatch.set(ticketRef, {
                     sector: formData.sector.split('[')[0].trim(),
@@ -270,34 +206,24 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         pdfConfig: { ...formData }
                     }
                 });
-
                 batchCounter++;
-
                 if (batchCounter >= 100) {
                     await currentBatch.commit();
                     currentBatch = writeBatch(db);
                     batchCounter = 0;
-                    await new Promise(r => setTimeout(r, 50));
                 }
             }
-
-            if (batchCounter > 0) {
-                await currentBatch.commit();
-            }
-
+            if (batchCounter > 0) await currentBatch.commit();
             const zipBlob = await zip.generateAsync({ type: "blob" });
             const url = URL.createObjectURL(zipBlob);
             setLastZipUrl(url);
-            
             const link = document.createElement('a');
             link.href = url;
-            link.download = `ingressos_${formData.eventName.replace(/\s+/g, '_')}.zip`;
+            link.download = `ingressos_${formData.eventName}.zip`;
             link.click();
-            
-            alert("Lote gerado com sucesso!");
         } catch (e) {
-            console.error("Erro na geração:", e);
-            alert("Erro ao gerar lote. Verifique o console.");
+            console.error(e);
+            alert("Erro ao gerar lote.");
         } finally {
             setIsGenerating(false);
         }
@@ -312,43 +238,39 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         <TicketIcon className="w-10 h-10 text-white" />
                         <div>
                             <h1 className="text-2xl font-bold">Gerador SecretTicket</h1>
-                            <p className="text-orange-100 text-sm">Lista restrita apenas aos ingressos gerados aqui.</p>
+                            <p className="text-orange-100 text-sm">Personalize e gere lotes de ingressos PDF.</p>
                         </div>
                     </div>
                     
-                    <div className="flex items-center space-x-3">
+                    <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg flex items-center text-sm font-bold border border-white/20"
+                    >
                         <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf" className="hidden" />
-                        <button 
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={isParsing}
-                            className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg flex items-center text-sm font-bold border border-white/20"
-                        >
-                            {isParsing ? "Lendo..." : <><CloudUploadIcon className="w-4 h-4 mr-2" /> Ler PDF ST</>}
-                        </button>
-                    </div>
+                        <CloudUploadIcon className="w-4 h-4 mr-2" /> {isParsing ? "Lendo..." : "Ler PDF Base"}
+                    </button>
                 </div>
 
                 <div className="p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* COLUNA 1: CONFIGS */}
                     <div className="space-y-6">
                         <div className="bg-gray-700/30 p-5 rounded-xl border border-gray-600">
                             <h2 className="text-sm font-bold text-orange-400 uppercase mb-4 flex items-center">
-                                <TableCellsIcon className="w-4 h-4 mr-2" />
-                                1. Configuração do Lote
+                                <TableCellsIcon className="w-4 h-4 mr-2" /> 1. Configuração do Lote
                             </h2>
                             <div className="space-y-4">
                                 <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Evento de Destino (Scanner)</label>
+                                    <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Evento de Destino (Scanner)</label>
                                     <select 
                                         value={selectedEventId}
                                         onChange={(e) => setSelectedEventId(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white outline-none"
+                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white outline-none focus:border-orange-500"
                                     >
-                                        <option value="">Selecione...</option>
                                         {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Quantidade de Cópias</label>
+                                    <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade</label>
                                     <input 
                                         type="number" min="1" max="500"
                                         value={quantity} onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
@@ -360,93 +282,59 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
                         <div className="space-y-4">
                             <h2 className="text-sm font-bold text-orange-400 uppercase mb-2 flex items-center">
-                                <TicketIcon className="w-4 h-4 mr-2" />
-                                2. Dados do Ingresso
+                                <TicketIcon className="w-4 h-4 mr-2" /> 2. Dados do Ingresso
                             </h2>
-                            <div>
-                                <label className="block text-xs text-gray-400 mb-1">Setor</label>
-                                <input name="sector" value={formData.sector} onChange={handleInputChange} className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-gray-400 mb-1">Participante</label>
-                                <input name="ownerName" value={formData.ownerName} onChange={handleInputChange} className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                            </div>
+                            <input name="sector" value={formData.sector} onChange={handleInputChange} placeholder="Setor" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            <input name="ownerName" value={formData.ownerName} onChange={handleInputChange} placeholder="Nome do Participante" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
                         </div>
                     </div>
 
+                    {/* COLUNA 2: DADOS PDF E LOGO */}
                     <div className="space-y-4">
                         <h2 className="text-sm font-bold text-orange-400 uppercase mb-2 flex items-center">
-                            <CloudDownloadIcon className="w-4 h-4 mr-2" />
-                            3. Informações do Evento (PDF)
+                            <CloudDownloadIcon className="w-4 h-4 mr-2" /> 3. Layout do PDF
                         </h2>
+                        <input name="eventName" value={formData.eventName} onChange={handleInputChange} placeholder="Nome do Evento" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                        <div className="grid grid-cols-2 gap-4">
+                            <input name="openingTime" value={formData.openingTime} onChange={handleInputChange} placeholder="Abertura" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            <input name="venue" value={formData.venue} onChange={handleInputChange} placeholder="Local" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                        </div>
+                        <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-20" />
                         
-                        <div className="space-y-4">
-                             <div>
-                                <label className="block text-xs text-gray-400 mb-1">Nome do Evento</label>
-                                <input name="eventName" value={formData.eventName} onChange={handleInputChange} placeholder="Nome do Evento" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                        {/* SEÇÃO DA LOGO PERSISTENTE */}
+                        <div className="bg-gray-700/50 p-4 rounded-xl border border-gray-600">
+                            <div className="flex items-center justify-between mb-3">
+                                <span className="text-[10px] text-gray-400 font-bold uppercase flex items-center">
+                                    <LinkIcon className="w-3 h-3 mr-1" /> Imagem da Logo
+                                </span>
+                                {formData.logoUrl && formData.logoUrl.startsWith('data:') && (
+                                    <button 
+                                        onClick={saveLogoToFirestore}
+                                        disabled={isSavingLogo}
+                                        className="text-[10px] bg-green-600 hover:bg-green-700 text-white px-2 py-1 rounded font-bold uppercase transition-all flex items-center"
+                                    >
+                                        {isSavingLogo ? "Salvando..." : "Salvar Logo no Banco"}
+                                    </button>
+                                )}
                             </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Abertura</label>
-                                    <input name="openingTime" value={formData.openingTime} onChange={handleInputChange} placeholder="Abertura" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            <div className="flex items-center gap-4">
+                                <div className="w-16 h-16 bg-gray-900 rounded-lg border border-gray-600 flex items-center justify-center overflow-hidden shrink-0">
+                                    {formData.logoUrl ? <img src={formData.logoUrl} className="w-full h-full object-contain" /> : <TableCellsIcon className="w-6 h-6 text-gray-700" />}
                                 </div>
-                                <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Local</label>
-                                    <input name="venue" value={formData.venue} onChange={handleInputChange} placeholder="Local" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs text-gray-400 mb-1">Endereço</label>
-                                <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-20" />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Produzido</label>
-                                    <input name="producer" value={formData.producer} onChange={handleInputChange} placeholder="Produzido" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-gray-400 mb-1">Contato</label>
-                                    <input name="contact" value={formData.contact} onChange={handleInputChange} placeholder="Contato" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                                </div>
-                            </div>
-
-                            {/* UPLOAD DIRETO DE LOGO */}
-                            <div className="bg-gray-700/50 p-4 rounded-xl border border-gray-600 space-y-3">
-                                <label className="block text-xs text-gray-400 mb-1 flex items-center justify-between">
-                                    <span className="flex items-center"><LinkIcon className="w-3 h-3 mr-1" /> Imagem da Logo</span>
-                                    {formData.logoUrl && <span className="text-[10px] text-green-400 font-bold uppercase">Logo Ativa</span>}
-                                </label>
-                                
-                                <div className="flex items-center gap-4">
-                                    <div className="w-16 h-16 bg-gray-900 rounded-lg border border-gray-600 flex items-center justify-center overflow-hidden shrink-0">
-                                        {formData.logoUrl ? (
-                                            <img src={formData.logoUrl} alt="Logo" className="w-full h-full object-contain" />
-                                        ) : (
-                                            <TableCellsIcon className="w-6 h-6 text-gray-700" />
-                                        )}
-                                    </div>
-                                    <div className="flex-1 space-y-2">
-                                        <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
-                                        <button 
-                                            onClick={() => logoInputRef.current?.click()}
-                                            className="w-full bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold py-2 rounded-lg border border-gray-500 transition-all flex items-center justify-center"
-                                        >
-                                            <CloudUploadIcon className="w-4 h-4 mr-2" /> Subir Logo (PNG/JPG)
-                                        </button>
-                                        <p className="text-[9px] text-gray-500 italic">Recomendado: PNG Transparente (Branco)</p>
-                                    </div>
-                                </div>
-
-                                <div className="relative mt-2">
+                                <div className="flex-1 space-y-2">
+                                    <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
+                                    <button 
+                                        onClick={() => logoInputRef.current?.click()}
+                                        className="w-full bg-gray-700 hover:bg-gray-600 text-xs font-bold py-2 rounded-lg border border-gray-500 transition-all flex items-center justify-center"
+                                    >
+                                        <CloudUploadIcon className="w-3 h-3 mr-2" /> Upload de Logo
+                                    </button>
                                     <input 
                                         name="logoUrl" 
                                         value={formData.logoUrl} 
                                         onChange={handleInputChange} 
-                                        placeholder="Ou cole o link direto aqui..." 
-                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-2 text-[10px] font-mono text-orange-300" 
+                                        placeholder="Ou cole a URL..." 
+                                        className="w-full bg-gray-900 border border-gray-600 rounded p-1.5 text-[10px] font-mono text-orange-300" 
                                     />
                                 </div>
                             </div>
@@ -460,142 +348,45 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         disabled={isGenerating || !selectedEventId}
                         className="w-full max-w-lg bg-orange-600 hover:bg-orange-700 text-white font-bold py-4 rounded-2xl shadow-xl transition-all transform active:scale-95 disabled:opacity-50 text-lg flex items-center justify-center"
                     >
-                        {isGenerating ? "Gerando..." : "Gerar Lote ZIP"}
+                        {isGenerating ? "Gerando Ingressos..." : "Gerar Lote ZIP"}
                     </button>
-                    {lastZipUrl && (
-                        <a href={lastZipUrl} download={`ingressos_${formData.eventName}.zip`} className="mt-4 text-green-400 text-sm font-bold flex items-center underline">
-                            <CheckCircleIcon className="w-5 h-5 mr-2" /> Download Disponível
-                        </a>
-                    )}
                 </div>
             </div>
 
-            {/* LISTA DE REGISTROS GERADOS (FILTRADA) */}
+            {/* LISTA DE REGISTROS (Apenas para este evento) */}
             <div className="w-full max-w-5xl bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden">
-                <div className="p-6 border-b border-gray-700 flex flex-col md:flex-row justify-between items-center gap-4">
-                    <div className="flex items-center space-x-3">
-                        <TableCellsIcon className="w-6 h-6 text-orange-500" />
-                        <h2 className="text-xl font-bold">Ingressos Gerados Aqui</h2>
-                        <span className="bg-gray-700 px-3 py-1 rounded-full text-xs font-mono">{filteredTickets.length} registros</span>
-                    </div>
-
-                    <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
-                        {selectedIds.size > 0 && (
-                            <button 
-                                onClick={handleDeleteSelected}
-                                disabled={isDeletingBatch}
-                                className="bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white px-4 py-2 rounded-lg text-sm font-bold border border-red-500/30 transition-all flex items-center"
-                            >
-                                <TrashIcon className="w-4 h-4 mr-2" />
-                                {isDeletingBatch ? "Apagando..." : `Apagar Selecionados (${selectedIds.size})`}
-                            </button>
-                        )}
-                        
-                        <div className="relative w-full md:w-64">
-                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                            <input 
-                                type="text"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                placeholder="Buscar nesta lista..."
-                                className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-sm focus:border-orange-500 outline-none"
-                            />
-                        </div>
+                <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+                    <h2 className="font-bold flex items-center text-orange-500"><TableCellsIcon className="w-5 h-5 mr-2"/> Histórico de Gerados ({tickets.length})</h2>
+                    <div className="relative w-48">
+                        <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" />
+                        <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Filtrar..." className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:border-orange-500" />
                     </div>
                 </div>
-
-                <div className="overflow-x-auto max-h-[500px] custom-scrollbar">
-                    <table className="w-full text-left border-collapse">
-                        <thead className="sticky top-0 bg-gray-800 shadow-sm z-10">
-                            <tr className="text-gray-400 text-xs uppercase border-b border-gray-700">
-                                <th className="px-6 py-4 w-10">
-                                    <input 
-                                        type="checkbox" 
-                                        className="w-4 h-4 rounded bg-gray-900 border-gray-600 text-orange-600 focus:ring-0 cursor-pointer"
-                                        checked={filteredTickets.length > 0 && selectedIds.size === filteredTickets.length}
-                                        onChange={handleSelectAll}
-                                    />
-                                </th>
-                                <th className="px-6 py-4">Código / QR</th>
-                                <th className="px-6 py-4">Participante</th>
-                                <th className="px-6 py-4">Setor</th>
-                                <th className="px-6 py-4 text-center">Uso</th>
-                                <th className="px-6 py-4 text-right">Ações</th>
+                <div className="max-h-80 overflow-y-auto custom-scrollbar">
+                    <table className="w-full text-left text-xs">
+                        <thead className="sticky top-0 bg-gray-800 text-gray-500 uppercase font-bold border-b border-gray-700">
+                            <tr>
+                                <th className="p-4">Código</th>
+                                <th className="p-4">Participante</th>
+                                <th className="p-4">Setor</th>
+                                <th className="p-4 text-right">Ações</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-700/50">
-                            {filteredTickets.map(ticket => (
-                                <tr key={ticket.id} className={`transition-colors ${selectedIds.has(ticket.id) ? 'bg-orange-600/10' : 'hover:bg-gray-700/30'}`}>
-                                    <td className="px-6 py-4">
-                                        <input 
-                                            type="checkbox" 
-                                            className="w-4 h-4 rounded bg-gray-900 border-gray-600 text-orange-600 focus:ring-0 cursor-pointer"
-                                            checked={selectedIds.has(ticket.id)}
-                                            onChange={() => toggleSelect(ticket.id)}
-                                        />
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <div className="font-mono text-sm text-orange-400 font-bold">{ticket.id}</div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <div className="text-sm font-medium">{ticket.details?.ownerName || '---'}</div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <span className="text-xs bg-gray-700 px-2 py-1 rounded text-gray-300">
-                                            {ticket.sector}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <div className="flex justify-center">
-                                            {ticket.status === 'USED' ? (
-                                                <div className="flex items-center text-red-400 text-[10px] font-black uppercase">
-                                                    <CheckCircleIcon className="w-4 h-4 mr-1" />
-                                                    Utilizado
-                                                </div>
-                                            ) : (
-                                                <div className="flex items-center text-green-400 text-[10px] font-black uppercase">
-                                                    <ClockIcon className="w-4 h-4 mr-1" />
-                                                    Livre
-                                                </div>
-                                            )}
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4 text-right">
-                                        <div className="flex justify-end gap-2">
-                                            <button 
-                                                onClick={() => handleDownloadIndividual(ticket)}
-                                                disabled={!!downloadingId}
-                                                className={`p-2 rounded-lg transition-all ${downloadingId === ticket.id ? 'bg-orange-600 text-white animate-pulse' : 'text-gray-400 hover:text-orange-500 hover:bg-orange-500/10'}`}
-                                                title="Baixar PDF Individual"
-                                            >
-                                                <CloudDownloadIcon className="w-5 h-5" />
-                                            </button>
-                                            <button 
-                                                onClick={() => handleDeleteTicket(ticket.id)}
-                                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
-                                                title="Excluir Registro"
-                                            >
-                                                <TrashIcon className="w-5 h-5" />
-                                            </button>
-                                        </div>
+                            {filteredTickets.map(t => (
+                                <tr key={t.id} className="hover:bg-gray-700/30">
+                                    <td className="p-4 font-mono text-orange-400">{t.id}</td>
+                                    <td className="p-4">{t.details?.ownerName}</td>
+                                    <td className="p-4">{t.sector}</td>
+                                    <td className="p-4 text-right">
+                                        <button onClick={() => deleteDoc(doc(db, 'events', selectedEventId, 'tickets', t.id))} className="text-gray-500 hover:text-red-500 p-2"><TrashIcon className="w-4 h-4"/></button>
                                     </td>
                                 </tr>
                             ))}
-                            {filteredTickets.length === 0 && (
-                                <tr>
-                                    <td colSpan={6} className="px-6 py-12 text-center text-gray-500 italic">
-                                        Nenhum ingresso gerado pelo SecretTicket para este evento.
-                                    </td>
-                                </tr>
-                            )}
                         </tbody>
                     </table>
                 </div>
             </div>
-
-            <button onClick={() => window.location.href = window.location.pathname} className="text-gray-500 hover:text-white text-xs underline">
-                Voltar ao Painel Principal
-            </button>
         </div>
     );
 };
