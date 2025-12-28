@@ -28,6 +28,11 @@ const Stats: React.FC<StatsProps> = ({
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const filterRef = useRef<HTMLDivElement>(null);
 
+    // --- FILTRAGEM DE SEGURANÇA: REMOVER SECRETOS ---
+    const nonSecretTickets = useMemo(() => {
+        return allTickets.filter(t => t.source !== 'secret_generator');
+    }, [allTickets]);
+
     const visibleSectorNames = useMemo(() => {
         return (sectorNames || []).filter(name => !hiddenSectors.includes(name));
     }, [sectorNames, hiddenSectors]);
@@ -42,7 +47,9 @@ const Stats: React.FC<StatsProps> = ({
 
     // LÓGICA DE FILTRO DE CONTAGEM
     const getGeneralStats = (tickets: Ticket[]) => {
+        // Garante que mesmo em sub-filtros, segredo não passe
         const filtered = tickets.filter(t => {
+            if (t.source === 'secret_generator') return false;
             const ticketSectorNorm = normalize(t.sector);
             return selectedSectors.some(sel => normalize(sel) === ticketSectorNorm);
         });
@@ -59,17 +66,16 @@ const Stats: React.FC<StatsProps> = ({
         return { total, scanned, remaining, percentage };
     };
 
-    const generalStats = useMemo(() => getGeneralStats(allTickets), [allTickets, selectedSectors]);
+    const generalStats = useMemo(() => getGeneralStats(nonSecretTickets), [nonSecretTickets, selectedSectors]);
 
     const tableData = useMemo(() => {
         const result: { total: number; scanned: number; displayName: string; isGroup: boolean }[] = [];
         const processedSectors = new Set<string>();
 
         if (viewMode === 'grouped' && groups.length > 0) {
-            // Processar Grupos
             groups.forEach(group => {
                 const groupSectors = (group.includedSectors || []).filter(s => visibleSectorNames.includes(s));
-                const groupTickets = allTickets.filter(t => 
+                const groupTickets = nonSecretTickets.filter(t => 
                     groupSectors.some(gs => normalize(gs) === normalize(t.sector))
                 );
 
@@ -84,10 +90,9 @@ const Stats: React.FC<StatsProps> = ({
                 groupSectors.forEach(s => processedSectors.add(normalize(s)));
             });
 
-            // Adicionar setores que NÃO estão em nenhum grupo
             visibleSectorNames.forEach(sectorName => {
                 if (!processedSectors.has(normalize(sectorName))) {
-                    const sectorTickets = allTickets.filter(t => normalize(t.sector) === normalize(sectorName));
+                    const sectorTickets = nonSecretTickets.filter(t => normalize(t.sector) === normalize(sectorName));
                     const stats = getGeneralStats(sectorTickets);
                     result.push({
                         displayName: sectorName,
@@ -98,9 +103,8 @@ const Stats: React.FC<StatsProps> = ({
                 }
             });
         } else {
-            // Modo RAW (Original)
             visibleSectorNames.forEach(sectorName => {
-                const sectorTickets = allTickets.filter(t => normalize(t.sector) === normalize(sectorName));
+                const sectorTickets = nonSecretTickets.filter(t => normalize(t.sector) === normalize(sectorName));
                 const stats = getGeneralStats(sectorTickets);
                 result.push({
                     displayName: sectorName,
@@ -112,7 +116,7 @@ const Stats: React.FC<StatsProps> = ({
         }
         
         return result.sort((a, b) => a.displayName.localeCompare(b.displayName));
-    }, [allTickets, visibleSectorNames, selectedSectors, viewMode, groups]);
+    }, [nonSecretTickets, visibleSectorNames, selectedSectors, viewMode, groups]);
 
   return (
     <div className="space-y-6">

@@ -70,16 +70,12 @@ const App: React.FC = () => {
         try { return localStorage.getItem('operatorName') || ''; } catch(e) { return ''; }
     });
 
-    const [isCameraActive, setIsCameraActive] = useState(true);
-    const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const autoSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
+    const deviceId = useMemo(() => getDeviceId(), []);
+    const playBeep = useSound();
     const cooldownRef = useRef<boolean>(false);
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
-    const playBeep = useSound();
-    
-    const deviceId = useMemo(() => getDeviceId(), []);
+    const autoSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Persist View
     useEffect(() => {
@@ -90,6 +86,17 @@ const App: React.FC = () => {
         if (!Array.isArray(allTickets)) return new Map();
         return new Map(allTickets.map(ticket => [ticket.id, ticket]));
     }, [allTickets]);
+
+    // --- LÓGICA DE FILTRAGEM PARA TICKETS SECRETOS ---
+    // Remove tickets secretos e seus respectivos logs de todas as visualizações públicas/admin
+    const filteredAllTickets = useMemo(() => {
+        return allTickets.filter(t => t.source !== 'secret_generator');
+    }, [allTickets]);
+
+    const filteredScanHistory = useMemo(() => {
+        const secretIds = new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id));
+        return scanHistory.filter(s => !secretIds.has(s.ticketId));
+    }, [scanHistory, allTickets]);
 
     const visibleSectors = useMemo(() => {
         const names = Array.isArray(sectorNames) ? sectorNames : [];
@@ -130,9 +137,13 @@ const App: React.FC = () => {
             }
 
             if (ticketsToSave.length > 0) {
-                const batch = writeBatch(db);
-                ticketsToSave.forEach(t => batch.set(doc(db, 'events', eventId, 'tickets', t.id), t, { merge: true }));
-                await batch.commit();
+                const batchSize = 450;
+                for (let i = 0; i < ticketsToSave.length; i += batchSize) {
+                    const chunk = ticketsToSave.slice(i, i + batchSize);
+                    const batch = writeBatch(db);
+                    chunk.forEach(t => batch.set(doc(db, 'events', eventId, 'tickets', t.id), t, { merge: true }));
+                    await batch.commit();
+                }
             }
             
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
@@ -224,36 +235,19 @@ const App: React.FC = () => {
         };
 
         const eventId = selectedEvent.id;
-        
-        // --- HARD RESET DE ESTADO AO TROCAR EVENTO ---
-        // Isso evita que setores do evento anterior "vaziem" para o novo evento antes do Firebase responder
-        setSectorNames([]);
-        setHiddenSectors([]);
-        setImportSources([]);
-        setAllTickets([]);
-        setScanHistory([]);
         setTicketsLoaded(false);
         setScansLoaded(false);
 
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
-            let mainFound = false;
-            let importFound = false;
-
             snapshot.docs.forEach(docSnap => {
                 const data = docSnap.data();
                 if (docSnap.id === 'main') {
                     setSectorNames(Array.isArray(data.sectorNames) ? data.sectorNames : []);
                     setHiddenSectors(Array.isArray(data.hiddenSectors) ? data.hiddenSectors : []);
-                    mainFound = true;
                 } else if (docSnap.id === 'import_v2') {
                     setImportSources(Array.isArray(data.sources) ? data.sources : []);
-                    importFound = true;
                 }
             });
-
-            // Se o documento não existe mais ou é novo evento sem settings
-            if (!mainFound) { setSectorNames([]); setHiddenSectors([]); }
-            if (!importFound) setImportSources([]);
         });
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
@@ -391,10 +385,10 @@ const App: React.FC = () => {
 
                 <main>
                     {showLoginModal && <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />}
-                    {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
-                    {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!scansLoaded} />}
+                    {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
+                    {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} isLoading={!scansLoaded} />}
                     {view === 'generator' && db && <SecretTicketGenerator db={db} />}
-                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
+                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
@@ -407,7 +401,7 @@ const App: React.FC = () => {
                                     <button onClick={() => { handleScanSuccess(manualCode); setManualCode(''); }} className="bg-orange-600 text-white font-bold py-3 px-6 rounded shadow-lg active:scale-95 transition-all">Validar</button>
                                 </div>
                             </div>
-                            <TicketList tickets={scanHistory.filter(s => s.deviceId === deviceId)} sectorNames={visibleSectors} />
+                            <TicketList tickets={filteredScanHistory.filter(s => s.deviceId === deviceId)} sectorNames={visibleSectors} />
                         </div>
                     )}
                     {view === 'scanner' && !selectedEvent && !showLoginModal && <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); }} onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} />}

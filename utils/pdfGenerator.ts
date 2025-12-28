@@ -1,3 +1,4 @@
+
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Ticket, DisplayableScanLog, ScanStatus } from '../types';
@@ -22,6 +23,11 @@ export const generateEventReport = (
 ) => {
     const doc = new jsPDF();
 
+    // --- FILTRAGEM DE SEGURANÇA ---
+    const publicTickets = allTickets.filter(t => t.source !== 'secret_generator');
+    const secretIds = new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id));
+    const publicScanHistory = scanHistory.filter(s => !secretIds.has(s.ticketId));
+
     // Title
     doc.setFontSize(22);
     doc.text(`Relatório do Evento: ${eventName}`, 105, 20, { align: 'center' });
@@ -30,7 +36,7 @@ export const generateEventReport = (
 
     // --- Statistics Summary ---
     const calculateStats = (filter?: string) => {
-        const relevantTickets = filter ? allTickets.filter(t => t.sector === filter) : allTickets;
+        const relevantTickets = filter ? publicTickets.filter(t => t.sector === filter) : publicTickets;
         return {
             total: relevantTickets.length,
             scanned: relevantTickets.filter(t => t.status === 'USED').length,
@@ -57,7 +63,7 @@ export const generateEventReport = (
     });
 
     // --- Scan History ---
-    const scanHistoryBody = scanHistory.map(scan => [
+    const scanHistoryBody = publicScanHistory.map(scan => [
         new Date(scan.timestamp).toLocaleString('pt-BR'),
         scan.ticketId,
         scan.ticketSector,
@@ -77,7 +83,7 @@ export const generateEventReport = (
     });
 
     // --- All Tickets Status ---
-    const allTicketsBody = allTickets.map(ticket => [
+    const allTicketsBody = publicTickets.map(ticket => [
         ticket.id,
         ticket.sector,
         ticket.status === 'USED' ? 'Utilizado' : 'Disponível',
