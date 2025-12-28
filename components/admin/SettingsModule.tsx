@@ -20,6 +20,8 @@ interface SettingsModuleProps {
 
 const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sectorNames, hiddenSectors, importSources, onUpdateSectorNames, onUpdateImportSources, isLoading, setIsLoading, allTickets }) => {
     const [importProgress, setImportProgress] = useState<string>('');
+    const [importStats, setImportStats] = useState({ total: 0, new: 0, existing: 0, updated: 0 });
+    
     const [editSource, setEditSource] = useState<Partial<ImportSource>>({ 
         name: '', 
         url: 'https://public-api.stingressos.com.br', 
@@ -62,8 +64,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
         setImportProgress('Iniciando...');
+        setImportStats({ total: 0, new: 0, existing: 0, updated: 0 });
+
         let totalItemsFoundInApi = 0;
         let newItemsAdded = 0;
+        let alreadyExistingCount = 0;
         let updatedItems = 0;
 
         try {
@@ -94,7 +99,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     if (!code) return;
                     totalItemsFoundInApi++;
 
-                    if (!existingTicketsMap.has(code)) {
+                    const existing = existingTicketsMap.get(code);
+                    if (!existing) {
                         const sector = String(row['sector'] || row['setor'] || 'Geral').trim();
                         discoveredSectors.add(sector);
                         allTicketsToSave.push({
@@ -110,7 +116,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             }
                         });
                         newItemsAdded++;
+                    } else {
+                        alreadyExistingCount++;
                     }
+                    // Update stats live for CSV too (though it's fast)
+                    setImportStats({ total: totalItemsFoundInApi, new: newItemsAdded, existing: alreadyExistingCount, updated: updatedItems });
                 });
             } else {
                 const endpoint = source.type === 'checkins' ? 'checkins' : 
@@ -217,19 +227,30 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                     originalId: item.id || null
                                 }
                             });
-                        } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
-                            updatedItems++;
-                            allTicketsToSave.push({
-                                ...existing,
-                                status: 'USED',
-                                usedAt: item.validated_at || Date.now()
-                            });
+                        } else {
+                            alreadyExistingCount++;
+                            if (shouldMarkUsed && existing.status !== 'USED') {
+                                updatedItems++;
+                                allTicketsToSave.push({
+                                    ...existing,
+                                    status: 'USED',
+                                    usedAt: item.validated_at || Date.now()
+                                });
+                            }
                         }
+                    });
+                    
+                    // Update stats live for UI
+                    setImportStats({ 
+                        total: totalItemsFoundInApi, 
+                        new: newItemsAdded, 
+                        existing: alreadyExistingCount, 
+                        updated: updatedItems 
                     });
                 }
             }
 
-            setImportProgress('Salvando no banco...');
+            setImportProgress('Finalizando...');
             const newSectorList = Array.from(discoveredSectors).sort();
             if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
@@ -249,7 +270,13 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             }
 
             setImportProgress('');
-            alert(`Importação Finalizada com Sucesso!`);
+            alert(
+                `Sincronização Finalizada!\n\n` +
+                `• Total Lidos da API: ${totalItemsFoundInApi}\n` +
+                `• Ingressos Novos (Importados): ${newItemsAdded}\n` +
+                `• Já Existentes no Sistema: ${alreadyExistingCount}\n` +
+                `• Marcados como 'Usado' agora: ${updatedItems}`
+            );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
             await onUpdateImportSources(updatedSources);
@@ -261,19 +288,50 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         } finally {
             setIsLoading(false);
             setImportProgress('');
+            setImportStats({ total: 0, new: 0, existing: 0, updated: 0 });
         }
     };
 
     return (
         <div className="space-y-8 pb-32 animate-fade-in relative">
-            {/* Overlay de Progresso */}
-            {isLoading && importProgress && (
-                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-                    <div className="bg-gray-800 border border-orange-500/50 p-8 rounded-3xl shadow-2xl flex flex-col items-center max-w-sm w-full text-center">
-                        <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <h3 className="text-xl font-bold text-white mb-2">Importação em Curso</h3>
-                        <p className="text-orange-400 font-mono text-sm animate-pulse">{importProgress}</p>
-                        <p className="text-gray-400 text-xs mt-4">Capturando dados pessoais dos participantes...</p>
+            {/* Overlay de Progresso Aprimorado */}
+            {isLoading && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-md px-4">
+                    <div className="bg-gray-800 border border-blue-500/30 p-8 rounded-[2.5rem] shadow-2xl flex flex-col items-center max-w-sm w-full text-center space-y-6">
+                        <div className="relative">
+                            <div className="w-20 h-20 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
+                            <div className="absolute inset-0 flex items-center justify-center text-xs font-black text-blue-400">
+                                {importStats.total > 0 ? `${Math.min(100, Math.floor((importStats.new / importStats.total) * 100))}%` : '...'}
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <h3 className="text-xl font-bold text-white mb-1">Importando Dados</h3>
+                            <p className="text-blue-400 font-mono text-xs animate-pulse tracking-widest uppercase">{importProgress}</p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 w-full">
+                            <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Lidos</p>
+                                <p className="text-lg font-black text-white">{importStats.total}</p>
+                            </div>
+                            <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Novos</p>
+                                <p className="text-lg font-black text-green-400">+{importStats.new}</p>
+                            </div>
+                            <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">No Banco</p>
+                                <p className="text-lg font-black text-gray-400">{importStats.existing}</p>
+                            </div>
+                            <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Check-ins</p>
+                                <p className="text-lg font-black text-orange-400">{importStats.updated}</p>
+                            </div>
+                        </div>
+
+                        <p className="text-gray-500 text-[10px] leading-relaxed">
+                            Mantenha esta janela aberta para garantir a integridade dos dados.
+                        </p>
                     </div>
                 </div>
             )}
@@ -464,9 +522,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             <div className="bg-blue-600/10 border border-blue-500/20 p-6 rounded-3xl flex items-start space-x-5">
                 <AlertTriangleIcon className="w-8 h-8 text-blue-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
-                    <p className="font-bold text-blue-400 uppercase tracking-widest">Dica de Importação:</p>
-                    <p>• O sistema agora captura e-mail, telefone e documento se disponíveis na API.</p>
-                    <p>• Use a nova aba "Participantes" para consultar estes dados após a importação.</p>
+                    <p className="font-bold text-blue-400 uppercase tracking-widest">Informação de Segurança:</p>
+                    <p>• O sistema compara os IDs da API com o banco de dados local para evitar duplicidade.</p>
+                    <p>• Apenas registros novos ou com status de uso alterado são gravados no Firebase.</p>
                 </div>
             </div>
         </div>
