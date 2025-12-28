@@ -55,13 +55,10 @@ const App: React.FC = () => {
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string } | null>(null);
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); 
+    const [scansLoaded, setScansLoaded] = useState(false); 
     const [isCheckingUrl, setIsCheckingUrl] = useState(true); 
     const [manualCode, setManualCode] = useState(''); 
     
-    const [isOperatorStep, setIsOperatorStep] = useState(false); 
-    const [isSectorSelectionStep, setIsSectorSelectionStep] = useState(false); 
-    const [lockedSector, setLockedSector] = useState<string | null>(null);
-    const [activeSectors, setActiveSectors] = useState<string[]>([]);
     const [operatorName, setOperatorName] = useState(() => {
         try { return localStorage.getItem('operatorName') || ''; } catch(e) { return ''; }
     });
@@ -69,16 +66,12 @@ const App: React.FC = () => {
     const [isCameraActive, setIsCameraActive] = useState(true);
     const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const autoSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    
-    const [validationMode, setValidationMode] = useState<'OFFLINE' | 'ONLINE_API' | 'ONLINE_SHEETS'>('OFFLINE');
 
     const cooldownRef = useRef<boolean>(false);
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
-    const selectedSectorRef = useRef<SectorFilter>('All');
     const playBeep = useSound();
     
-    useEffect(() => { selectedSectorRef.current = selectedSector; }, [selectedSector]);
     const deviceId = useMemo(() => getDeviceId(), []);
 
     const ticketsMap = useMemo(() => {
@@ -91,12 +84,6 @@ const App: React.FC = () => {
         const hidden = Array.isArray(hiddenSectors) ? hiddenSectors : [];
         return names.filter(s => !hidden.includes(s));
     }, [sectorNames, hiddenSectors]);
-
-    const resetInactivityTimer = useCallback(() => {
-        if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
-        if (!isCameraActive) setIsCameraActive(true);
-        inactivityTimerRef.current = setTimeout(() => setIsCameraActive(false), 60000);
-    }, [isCameraActive]);
 
     const runExternalSync = async (source: ImportSource, eventId: string) => {
         if (!db || !isOnline) return;
@@ -205,11 +192,13 @@ const App: React.FC = () => {
             setScanHistory([]);
             setImportSources([]);
             setTicketsLoaded(false);
+            setScansLoaded(false);
             return;
         };
 
         const eventId = selectedEvent.id;
         setTicketsLoaded(false);
+        setScansLoaded(false);
 
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
             snapshot.docs.forEach(docSnap => {
@@ -235,7 +224,7 @@ const App: React.FC = () => {
             setTicketsLoaded(true);
         }, () => setTicketsLoaded(true));
 
-        // AUMENTADO O LIMITE PARA 20.000 PARA GARANTIR ESTATÍSTICAS DE OPERADORES PRECISAS EM EVENTOS MASSIVOS
+        // QUERY OTIMIZADA COM LIMITE DE 20.000 LOGS
         const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(20000));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
             const historyData = snapshot.docs.map(doc => {
@@ -246,6 +235,13 @@ const App: React.FC = () => {
                 return { id: doc.id, ticketId: data.ticketId || '---', status: data.status || 'ERROR', timestamp: timestamp, ticketSector: data.sector ?? 'Desconhecido', isPending: doc.metadata.hasPendingWrites, deviceId: data.deviceId, operator: data.operator };
             });
             setScanHistory(historyData);
+            setScansLoaded(true);
+        }, (err) => {
+            console.error("Firestore Scans Error:", err);
+            if (err.message.includes('index')) {
+                alert("Atenção: O sistema de monitoramento requer um índice. Verifique o console do navegador e clique no link de criação do Firebase.");
+            }
+            setScansLoaded(true);
         });
 
         return () => {
@@ -347,7 +343,7 @@ const App: React.FC = () => {
                 <main>
                     {showLoginModal && <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />}
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
-                    {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!ticketsLoaded} />}
+                    {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!scansLoaded} />}
                     {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

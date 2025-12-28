@@ -26,10 +26,9 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       error: number;
       lastSeen: number;
       sectors: Record<string, number>;
-      timeline: Record<string, number>;
     }> = {};
 
-    // Processamento de alto desempenho para até 20.000 logs
+    // Processamento linear de alta performance
     for (let i = 0; i < scanHistory.length; i++) {
       const log = scanHistory[i];
       const op = log.operator || 'Sem Nome';
@@ -44,8 +43,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
           wrongSector: 0,
           error: 0,
           lastSeen: 0,
-          sectors: {},
-          timeline: {}
+          sectors: {}
         };
       }
 
@@ -77,6 +75,15 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       return stats.filter(s => (Date.now() - (Number(s.lastSeen) || 0)) < 300000).length;
   }, [stats]);
 
+  if (isLoading) {
+    return (
+        <div className="flex flex-col items-center justify-center py-20 space-y-4">
+            <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-xl font-bold text-gray-400 animate-pulse">Sincronizando {scanHistory.length} de 20.000 logs...</p>
+        </div>
+    );
+  }
+
   return (
     <div className={`${isEmbedded ? 'p-6' : 'min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8 pb-20'}`}>
       <div className={`w-full ${isEmbedded ? '' : 'max-w-7xl mx-auto space-y-8'}`}>
@@ -91,7 +98,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                   <h1 className="text-3xl font-bold text-white tracking-tight">{event.name}</h1>
                   <p className="text-gray-400 text-sm font-medium flex items-center">
                     <UsersIcon className="w-4 h-4 mr-1.5 text-orange-500" />
-                    Monitoramento de Operadores (Sincronizado)
+                    Monitoramento em Tempo Real (Limite: 20k)
                   </p>
                 </div>
               </div>
@@ -101,7 +108,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
                 </span>
-                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Tempo Real</span>
+                <span className="text-xs font-bold text-green-500 uppercase tracking-widest">Conectado</span>
               </div>
             </header>
         )}
@@ -109,7 +116,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
         {/* Dash de Resumo */}
         <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 ${isEmbedded ? 'mb-8' : ''}`}>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-green-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total Validado (Banco)</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total Banco (Sincronizado)</p>
             <p className="text-4xl font-black text-green-400">{totalValidGlobal}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-blue-500">
@@ -117,11 +124,11 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
             <p className="text-4xl font-black text-white">{activeNowCount}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-orange-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Total de Tentativas</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Logs Carregados</p>
             <p className="text-4xl font-black text-orange-400">{totalScans}</p>
           </div>
           <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-xl border-l-4 border-l-red-500">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Recusados (Scan)</p>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2">Erros/Recusas (Scan)</p>
             <p className="text-4xl font-black text-red-500">{totalScans - stats.reduce((acc, curr) => acc + curr.valid, 0)}</p>
           </div>
         </div>
@@ -160,14 +167,14 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                       <p className="text-xl font-black text-green-400">{op.valid}</p>
                     </div>
                     <div className="text-center flex-1">
-                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Bruto (Scans)</p>
+                      <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Total Scans</p>
                       <p className="text-xl font-black text-white">{op.total}</p>
                     </div>
                   </div>
 
                   <div className="space-y-3 pt-2">
                     <div className="flex justify-between items-end">
-                      <p className="text-[10px] font-black text-gray-500 uppercase">Qualidade da Operação</p>
+                      <p className="text-[10px] font-black text-gray-500 uppercase">Qualidade</p>
                       <p className="text-sm font-black text-green-400">{successRate}%</p>
                     </div>
                     <div className="w-full bg-gray-900 h-2 rounded-full overflow-hidden flex">
@@ -191,74 +198,19 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                       <p className="text-sm font-black text-orange-500">{op.wrongSector}</p>
                     </div>
                   </div>
-
-                  <div className="pt-4 border-t border-gray-700 flex justify-between items-center text-[10px] font-bold">
-                    <span className="text-gray-500 uppercase">Filtro / Setor:</span>
-                    <span className="text-gray-300 truncate max-w-[120px]">{topSector}</span>
-                  </div>
                 </div>
               </div>
             );
           })}
 
-          {stats.length === 0 && (
+          {stats.length === 0 && !isLoading && (
             <div className="col-span-full py-20 text-center bg-gray-800/50 rounded-3xl border-2 border-dashed border-gray-700">
               <TableCellsIcon className="w-16 h-16 mx-auto text-gray-700 mb-4" />
-              <p className="text-xl font-bold text-gray-500">Nenhum operador detectado...</p>
-              <p className="text-gray-600">Aguardando scans no histórico (Limite: 20.000).</p>
+              <p className="text-xl font-bold text-gray-500">Nenhum operador detectado nos últimos {totalScans} logs.</p>
+              <p className="text-gray-600">Certifique-se de que os validadores estão usando o campo "Operador" nas configurações.</p>
             </div>
           )}
         </div>
-
-        {/* Resumo de Produtividade em Tabela (Ranking) */}
-        {stats.length > 0 && (
-            <div className="mt-12 bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl overflow-hidden">
-                <div className="bg-gray-700/50 p-6 border-b border-gray-700 flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                        <TableCellsIcon className="w-6 h-6 text-orange-500" />
-                        <h2 className="text-xl font-bold">Produtividade (Baseado nos últimos 20.000 scans)</h2>
-                    </div>
-                </div>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-gray-900/50 text-gray-400 text-xs uppercase font-black tracking-widest">
-                            <tr>
-                                <th className="px-6 py-4">Operador</th>
-                                <th className="px-6 py-4 text-center">Válidos</th>
-                                <th className="px-6 py-4 text-center">Tentativas</th>
-                                <th className="px-6 py-4 text-center">Taxa Sucesso</th>
-                                <th className="px-6 py-4 text-right">Última</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-700">
-                            {stats.map((op, idx) => (
-                                <tr key={op.name} className="hover:bg-gray-700/30 transition-colors">
-                                    <td className="px-6 py-4 font-bold">
-                                        {op.name}
-                                    </td>
-                                    <td className="px-6 py-4 text-center">
-                                        <span className="bg-green-500/10 text-green-400 px-3 py-1 rounded-full font-black border border-green-500/20">
-                                            {op.valid}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-center font-medium text-gray-300">
-                                        {op.total}
-                                    </td>
-                                    <td className="px-6 py-4 text-center">
-                                        <span className="text-blue-400 font-bold">
-                                            {((op.valid / op.total) * 100).toFixed(1)}%
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-right text-xs text-gray-500 font-mono">
-                                        {new Date(op.lastSeen).toLocaleTimeString()}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        )}
       </div>
       
       {!isEmbedded && (
