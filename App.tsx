@@ -42,7 +42,7 @@ const App: React.FC = () => {
     const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
     const [allTickets, setAllTickets] = useState<Ticket[]>([]);
     const [scanHistory, setScanHistory] = useState<DisplayableScanLog[]>([]);
-    const [sectorNames, setSectorNames] = useState<string[]>(['Pista', 'VIP']);
+    const [sectorNames, setSectorNames] = useState<string[]>([]); // Defaulting to empty as per request
     const [hiddenSectors, setHiddenSectors] = useState<string[]>([]); 
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
     
@@ -217,6 +217,7 @@ const App: React.FC = () => {
             setAllTickets([]);
             setScanHistory([]);
             setImportSources([]);
+            setSectorNames([]); // Reset sectors when no event selected
             setTicketsLoaded(false);
             setScansLoaded(false);
             return;
@@ -230,7 +231,8 @@ const App: React.FC = () => {
             snapshot.docs.forEach(docSnap => {
                 const data = docSnap.data();
                 if (docSnap.id === 'main') {
-                    setSectorNames(Array.isArray(data.sectorNames) ? data.sectorNames : ['Pista', 'VIP']);
+                    // Changed fallback to empty array so new events don't get default sectors
+                    setSectorNames(Array.isArray(data.sectorNames) ? data.sectorNames : []);
                     setHiddenSectors(Array.isArray(data.hiddenSectors) ? data.hiddenSectors : []);
                 } else if (docSnap.id === 'import_v2') {
                     setImportSources(Array.isArray(data.sources) ? data.sources : []);
