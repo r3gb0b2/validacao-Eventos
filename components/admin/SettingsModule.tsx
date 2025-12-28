@@ -60,9 +60,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
-        let totalItemsFoundInApi = 0;
-        let newItemsAdded = 0;
-        let existingItemsUpdated = 0;
+        let totalCount = 0;
+        let newCount = 0;
+        let updatedCount = 0;
 
         try {
             const existingTicketsMap = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
@@ -88,7 +88,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 rows.forEach(row => {
                     const code = String(row['code'] || row['codigo'] || row['id'] || '').trim();
                     if (!code) return;
-                    totalItemsFoundInApi++;
+                    totalCount++;
 
                     if (!existingTicketsMap.has(code)) {
                         const sector = String(row['sector'] || row['setor'] || 'Geral').trim();
@@ -100,7 +100,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             source: 'api_import',
                             details: { ownerName: String(row['name'] || row['nome'] || 'Importado') }
                         });
-                        newItemsAdded++;
+                        newCount++;
                     }
                 });
             } else {
@@ -110,55 +110,77 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                 
-                // Força per_page=100 para minimizar requisições e garantir carga maior
-                let initialRequestUrl = `${baseUrl}/${endpoint}`;
-                const urlObj = new URL(initialRequestUrl, window.location.origin);
-                
+                // Forçamos per_page=100 para tentar puxar o máximo de uma vez
+                let currentUrlObj = new URL(`${baseUrl}/${endpoint}`, window.location.origin);
                 if (source.externalEventId) {
-                    urlObj.searchParams.set('event_id', source.externalEventId);
+                    currentUrlObj.searchParams.set('event_id', source.externalEventId);
                 }
-                urlObj.searchParams.set('per_page', '100');
+                currentUrlObj.searchParams.set('per_page', '100');
                 
-                let nextUrl: string | null = urlObj.toString();
-                let pageCount = 0;
+                let nextUrl: string | null = currentUrlObj.toString();
+                let currentPage = 1;
+                let lastPage = 1;
 
                 while (nextUrl) {
-                    pageCount++;
-                    console.log(`Buscando Página ${pageCount}: ${nextUrl}`);
+                    console.log(`Buscando página ${currentPage}... URL: ${nextUrl}`);
+                    const res = await fetch(nextUrl, { headers, mode: 'cors' });
                     
-                    let res = await fetch(nextUrl, { headers, mode: 'cors' });
-                    
-                    // Fallback para ID no Path se o primeiro falhar com 404 (comum em algumas versões da API)
-                    if (!res.ok && pageCount === 1 && source.externalEventId && res.status === 404) {
-                        const fallbackPath = `${baseUrl}/${endpoint}/${source.externalEventId}?per_page=100`;
-                        console.log("Tentando Fallback Path:", fallbackPath);
-                        res = await fetch(fallbackPath, { headers, mode: 'cors' });
-                    }
-
                     if (!res.ok) {
-                        const err = await res.text();
-                        throw new Error(`Erro na API (Pág ${pageCount}): ${err || res.statusText}`);
+                        // Fallback: se o ID do evento estiver no path em vez de query
+                        if (res.status === 404 && currentPage === 1 && source.externalEventId) {
+                            const fallbackUrl = `${baseUrl}/${endpoint}/${source.externalEventId}?per_page=100`;
+                            console.log("Tentando fallback path URL:", fallbackUrl);
+                            const resFallback = await fetch(fallbackUrl, { headers });
+                            if (resFallback.ok) {
+                                const jsonFallback = await resFallback.json();
+                                processPage(jsonFallback);
+                                break; // Algumas APIs retornam tudo no path sem paginação
+                            }
+                        }
+                        throw new Error(`Erro API na página ${currentPage}: ${res.statusText}`);
                     }
 
                     const json = await res.json();
+                    processPage(json);
+
+                    // LÓGICA DE PAGINAÇÃO ST INGRESSOS / LARAVEL
+                    // 1. Tenta pelo link direto
+                    let foundNext = json.links?.next || json.next_page_url || json.pagination?.next_page_url || null;
+                    if (foundNext && typeof foundNext !== 'string') foundNext = foundNext.url || null;
+
+                    // 2. Se não achou link mas tem metadados de página
+                    const meta = json.meta || json.pagination || {};
+                    currentPage = meta.current_page || meta.page || currentPage;
+                    lastPage = meta.last_page || meta.total_pages || lastPage;
+
+                    if (!foundNext && currentPage < lastPage) {
+                        const nextUrlObj = new URL(nextUrl, window.location.origin);
+                        nextUrlObj.searchParams.set('page', (currentPage + 1).toString());
+                        foundNext = nextUrlObj.toString();
+                    }
+
+                    nextUrl = foundNext;
+                    if (currentPage >= lastPage) nextUrl = null;
+                    if (currentPage > 500) break; // Segurança
+                }
+
+                function processPage(json: any) {
                     const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
                     
-                    if (!items || items.length === 0) break;
-
                     items.forEach((item: any) => {
-                        totalItemsFoundInApi++;
+                        totalCount++;
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
                         if (!code) return;
 
-                        // Mapeamento resiliente de setores (Trata se for objeto ou string)
+                        // MAPEAMENTO DE SETOR RESILIENTE
                         let rawSector = 'Geral';
-                        if (typeof item.sector_name === 'string') rawSector = item.sector_name;
-                        else if (item.category && typeof item.category.name === 'string') rawSector = item.category.name;
+                        if (item.sector_name) rawSector = item.sector_name;
+                        else if (item.category?.name) rawSector = item.category.name;
                         else if (typeof item.category === 'string') rawSector = item.category;
                         else if (typeof item.sector === 'string') rawSector = item.sector;
-                        else if (item.ticket_type && typeof item.ticket_type.name === 'string') rawSector = item.ticket_type.name;
+                        else if (item.ticket_type?.name) rawSector = item.ticket_type.name;
                         
-                        const sector = rawSector.trim() || 'Geral';
+                        const sector = String(rawSector).trim();
                         discoveredSectors.add(sector);
 
                         const existing = existingTicketsMap.get(code);
@@ -166,7 +188,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at;
 
                         if (isNew) {
-                            newItemsAdded++;
+                            newCount++;
                             allTicketsToSave.push({
                                 id: code,
                                 sector: sector,
@@ -175,11 +197,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 source: 'api_import',
                                 details: { 
                                     ownerName: String(item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado'),
-                                    originalId: item.id ?? null // Garante que nunca seja undefined
+                                    originalId: item.id || null
                                 }
                             });
                         } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
-                            existingItemsUpdated++;
+                            updatedCount++;
                             allTicketsToSave.push({
                                 ...existing,
                                 status: 'USED',
@@ -187,41 +209,19 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             });
                         }
                     });
-
-                    // Lógica de Paginação Avançada
-                    let foundNext = json.links?.next || json.next_page_url || json.pagination?.next_page_url || null;
-                    
-                    // Se o link de próxima página for um objeto em vez de string (erro comum de mapeamento)
-                    if (foundNext && typeof foundNext !== 'string') {
-                        foundNext = foundNext.url || null;
-                    }
-
-                    // Se não houver link direto, mas houver metadados, constrói a URL manualmente
-                    if (!foundNext) {
-                        const meta = json.meta || json.pagination || {};
-                        const current = Number(meta.current_page || meta.page || 0);
-                        const last = Number(meta.last_page || meta.total_pages || 0);
-                        
-                        if (current > 0 && last > 0 && current < last) {
-                            const nextUrlObj = new URL(nextUrl, window.location.origin);
-                            nextUrlObj.searchParams.set('page', (current + 1).toString());
-                            foundNext = nextUrlObj.toString();
-                        }
-                    }
-
-                    nextUrl = foundNext;
-                    if (pageCount > 500) break; // Limite de segurança contra loops infinitos
                 }
             }
 
-            // Atualizar Setores no Firestore para garantir que apareçam no Dashboard
+            // ATUALIZAR SETORES NO FIREBASE (AUTO-DESCOBERTA)
             const newSectorList = Array.from(discoveredSectors).sort();
-            const sectorsChanged = JSON.stringify(newSectorList) !== JSON.stringify(sectorNames);
-            if (sectorsChanged) {
+            const hasNewSectors = newSectorList.some(s => !sectorNames.includes(s));
+            
+            if (hasNewSectors) {
+                console.log("Novos setores encontrados, atualizando lista...");
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
             }
 
-            // Salvar no Firestore em lotes de 450
+            // SALVAR EM LOTES
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
@@ -232,23 +232,17 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     });
                     await batch.commit();
                 }
+                alert(`Sucesso!\n\n• Ingressos encontrados: ${totalCount}\n• Novos cadastrados: ${newCount}\n• Atualizados para 'Usado': ${updatedCount}\n• Setores mapeados: ${discoveredSectors.size}`);
+            } else {
+                alert(`Importação concluída.\n• ${totalCount} registros verificados.\n• Nenhuma alteração necessária.`);
             }
-
-            // Feedback detalhado para o usuário
-            alert(
-                `Sincronização Finalizada!\n\n` +
-                `• Localizados na API: ${totalItemsFoundInApi}\n` +
-                `• Novos Ingressos: ${newItemsAdded}\n` +
-                `• Atualizados para Usado: ${existingItemsUpdated}\n` +
-                `• Total de Setores: ${discoveredSectors.size}`
-            );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
             await onUpdateImportSources(updatedSources);
 
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
-            alert(`Falha na Sincronização:\n${e.message}\n\nVerifique se o Token é válido para o ID do evento informado.`);
+            alert(`Falha na Sincronização:\n${e.message}`);
         } finally {
             setIsLoading(false);
         }
