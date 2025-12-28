@@ -20,6 +20,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [isGenerating, setIsGenerating] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
     const [isDeletingBatch, setIsDeletingBatch] = useState(false);
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [quantity, setQuantity] = useState(1);
     const [lastZipUrl, setLastZipUrl] = useState<string | null>(null);
     const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -158,6 +159,34 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
+    const handleDownloadIndividual = async (ticket: Ticket) => {
+        if (downloadingId) return;
+        setDownloadingId(ticket.id);
+        
+        try {
+            // Reconstituir o PDF a partir dos dados salvos no 'details'
+            // Se não houver config salva (tickets antigos), usamos o formData atual como fallback
+            const pdfConfig: TicketPdfDetails = (ticket.details as any)?.pdfConfig || {
+                ...formData,
+                ownerName: ticket.details?.ownerName || formData.ownerName,
+                sector: ticket.sector
+            };
+
+            const { blob } = await generateSingleTicketBlob(pdfConfig, ticket.id);
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `ingresso_${ticket.id}.pdf`;
+            link.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error("Erro ao reconstruir PDF:", e);
+            alert("Erro ao gerar arquivo para download.");
+        } finally {
+            setDownloadingId(null);
+        }
+    };
+
     const handleDeleteTicket = async (ticketId: string) => {
         if (!selectedEventId) return;
         if (!confirm(`Deseja remover o código ${ticketId} permanentemente?`)) return;
@@ -176,7 +205,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         setIsDeletingBatch(true);
         try {
             const idsArray = Array.from(selectedIds);
-            const BATCH_SIZE = 450; // Limite do Firestore é 500
+            const BATCH_SIZE = 450; 
 
             for (let i = 0; i < idsArray.length; i += BATCH_SIZE) {
                 const chunk = idsArray.slice(i, i + BATCH_SIZE);
@@ -219,7 +248,9 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     source: 'secret_generator',
                     details: {
                         ownerName: formData.ownerName,
-                        eventName: formData.eventName
+                        eventName: formData.eventName,
+                        // SALVAMOS A CONFIG COMPLETA PARA RE-DOWNLOAD INDIVIDUAL POSTERIOR
+                        pdfConfig: { ...formData }
                     }
                 });
 
@@ -409,7 +440,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <th className="px-6 py-4">Código / QR</th>
                                 <th className="px-6 py-4">Participante</th>
                                 <th className="px-6 py-4">Setor</th>
-                                <th className="px-6 py-4">Uso</th>
+                                <th className="px-6 py-4 text-center">Uso</th>
                                 <th className="px-6 py-4 text-right">Ações</th>
                             </tr>
                         </thead>
@@ -436,26 +467,38 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">
-                                        {ticket.status === 'USED' ? (
-                                            <div className="flex items-center text-red-400 text-xs font-bold uppercase">
-                                                <CheckCircleIcon className="w-4 h-4 mr-1" />
-                                                Utilizado
-                                            </div>
-                                        ) : (
-                                            <div className="flex items-center text-green-400 text-xs font-bold uppercase">
-                                                <ClockIcon className="w-4 h-4 mr-1" />
-                                                Livre
-                                            </div>
-                                        )}
+                                        <div className="flex justify-center">
+                                            {ticket.status === 'USED' ? (
+                                                <div className="flex items-center text-red-400 text-[10px] font-black uppercase">
+                                                    <CheckCircleIcon className="w-4 h-4 mr-1" />
+                                                    Utilizado
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center text-green-400 text-[10px] font-black uppercase">
+                                                    <ClockIcon className="w-4 h-4 mr-1" />
+                                                    Livre
+                                                </div>
+                                            )}
+                                        </div>
                                     </td>
                                     <td className="px-6 py-4 text-right">
-                                        <button 
-                                            onClick={() => handleDeleteTicket(ticket.id)}
-                                            className="p-2 text-gray-500 hover:text-red-500 transition-colors"
-                                            title="Excluir Registro"
-                                        >
-                                            <TrashIcon className="w-5 h-5" />
-                                        </button>
+                                        <div className="flex justify-end gap-2">
+                                            <button 
+                                                onClick={() => handleDownloadIndividual(ticket)}
+                                                disabled={!!downloadingId}
+                                                className={`p-2 rounded-lg transition-all ${downloadingId === ticket.id ? 'bg-orange-600 text-white animate-pulse' : 'text-gray-400 hover:text-orange-500 hover:bg-orange-500/10'}`}
+                                                title="Baixar PDF Individual"
+                                            >
+                                                <CloudDownloadIcon className="w-5 h-5" />
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteTicket(ticket.id)}
+                                                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                                                title="Excluir Registro"
+                                            >
+                                                <TrashIcon className="w-5 h-5" />
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}

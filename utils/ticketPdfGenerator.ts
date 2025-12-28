@@ -12,7 +12,7 @@ export interface TicketPdfDetails {
   ownerName: string;
 }
 
-export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
+export const generateSingleTicketBlob = async (details: TicketPdfDetails, forcedCode?: string) => {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -20,7 +20,8 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   });
 
   const generateCode = () => Math.random().toString(36).substring(2, 14).toUpperCase();
-  const ticketCode = generateCode();
+  // Se forcedCode existir (re-download), usamos ele. Se não, geramos um novo.
+  const ticketCode = forcedCode || generateCode();
   const purchaseCode = generateCode();
   
   // Cores Oficiais da Imagem
@@ -58,36 +59,34 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   const stWidth = doc.getTextWidth('ST');
   doc.text('ingressos', logoX + 16 + stWidth, logoY + 11);
 
-  // Linha pontilhada topo (Mais sutil)
+  // Linha pontilhada topo
   doc.setDrawColor(255, 255, 255);
   doc.setLineWidth(0.15);
   doc.setLineDashPattern([1.5, 1.5], 0);
   doc.line(15, 48, 195, 48);
 
-  // "C A R T Ã O  D E  A C E S S O" (Espaçamento Largo conforme solicitado)
+  // "C A R T Ã O  D E  A C E S S O"
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
-  // Usando espaçamento triplo para ocupar quase toda a largura
   const accessText = 'C   A   R   T   Ã   O      D   E      A   C   E   S   S   O';
   doc.text(accessText, 105, 58, { align: 'center' });
 
-  // Nome do Evento (Grande, Bold e ocupando largura)
+  // Nome do Evento
   doc.setFontSize(28);
   doc.setFont('helvetica', 'bold');
-  const eventNameUpper = details.eventName.toUpperCase();
+  const eventNameUpper = (details.eventName || 'EVENTO').toUpperCase();
   doc.text(eventNameUpper, 105, 76, { align: 'center', maxWidth: 180 });
 
   // Linha pontilhada meio
   doc.line(15, 92, 195, 92);
 
-  // --- INFORMAÇÕES DO EVENTO (DENTRO DO LARANJA) ---
+  // --- INFORMAÇÕES DO EVENTO ---
   doc.setFontSize(10.5);
   
-  // Linha 1: Abertura e Local
   const l1Label1 = 'Abertura: ';
-  const l1Val1 = details.openingTime;
+  const l1Val1 = details.openingTime || '--/--/---- --:--';
   const l1Label2 = '   Local: ';
-  const l1Val2 = details.venue;
+  const l1Val2 = details.venue || 'A Definir';
   
   const fullL1Width = doc.getTextWidth(l1Label1) + doc.getTextWidth(l1Val1) + doc.getTextWidth(l1Label2) + doc.getTextWidth(l1Val2);
   let curX = 105 - (fullL1Width / 2);
@@ -97,10 +96,10 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setFont('helvetica', 'normal'); doc.text(l1Label2, curX, 105); curX += doc.getTextWidth(l1Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l1Val2, curX, 105);
 
-  // Linha 2: Endereço (Com quebra se necessário)
+  // Linha 2: Endereço
   doc.setFontSize(9.5);
   const addrLabel = 'Endereço: ';
-  const addrValue = details.address;
+  const addrValue = details.address || 'Não informado';
   const splitAddr = doc.splitTextToSize(addrValue, 160);
   
   let addrY = 112;
@@ -117,9 +116,9 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setFontSize(10.5);
   const prodY = addrY + (splitAddr.length * 5) + 2;
   const l3Label1 = 'Produzido: ';
-  const l3Val1 = details.producer;
+  const l3Val1 = details.producer || 'Organização';
   const l3Label2 = '   Contato: ';
-  const l3Val2 = details.contact;
+  const l3Val2 = details.contact || '-';
   
   const fullL3Width = doc.getTextWidth(l3Label1) + doc.getTextWidth(l3Val1) + doc.getTextWidth(l3Label2) + doc.getTextWidth(l3Val2);
   let curX3 = 105 - (fullL3Width / 2);
@@ -129,7 +128,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setFont('helvetica', 'normal'); doc.text(l3Label2, curX3, prodY); curX3 += doc.getTextWidth(l3Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
 
-  // --- ÁREA BRANCA (DADOS COMPRA) ---
+  // --- ÁREA BRANCA ---
   const startDataY = 155;
   doc.setTextColor(labelGray[0], labelGray[1], labelGray[2]);
   doc.setFontSize(10);
@@ -140,8 +139,8 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setTextColor(textDarkGray[0], textDarkGray[1], textDarkGray[2]);
   doc.setFontSize(15);
   doc.setFont('helvetica', 'bold');
-  doc.text(details.sector, 15, startDataY + 8);
-  doc.text(details.ownerName, 195, startDataY + 8, { align: 'right' });
+  doc.text(details.sector || 'Geral', 15, startDataY + 8);
+  doc.text(details.ownerName || 'Convidado', 195, startDataY + 8, { align: 'right' });
 
   // Bloco de Códigos
   const secondDataY = 182;
@@ -169,7 +168,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   img.src = qrUrl;
   await new Promise((resolve) => {
     img.onload = () => {
-      // QR Code um pouco maior e centralizado
       doc.addImage(img, 'PNG', 65, 212, 80, 80);
       resolve(true);
     };
@@ -181,7 +179,6 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails) => {
   doc.setDrawColor(orangeSt[0], orangeSt[1], orangeSt[2]); 
   doc.setLineWidth(0.4);
   doc.setLineDashPattern([], 0);
-  // Borda arredondada conforme imagem
   doc.roundedRect(10, 10, 190, 277, 4, 4);
 
   doc.setTextColor(orangeSt[0], orangeSt[1], orangeSt[2]);
