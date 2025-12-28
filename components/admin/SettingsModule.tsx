@@ -111,7 +111,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
                 
-                // LÓGICA DE PAGINAÇÃO POR CONTADOR MANUAL (A que funcionava anteriormente)
                 let currentPage = 1;
                 let hasMorePages = true;
 
@@ -120,7 +119,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     
                     const urlObj = new URL(`${baseUrl}/${endpoint}`, window.location.origin);
                     urlObj.searchParams.set('page', String(currentPage));
-                    urlObj.searchParams.set('per_page', '100'); // Solicita 100 por vez para ser eficiente
+                    urlObj.searchParams.set('per_page', '100'); 
                     
                     if (source.externalEventId) {
                         urlObj.searchParams.set('event_id', source.externalEventId);
@@ -128,23 +127,34 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     
                     const res = await fetch(urlObj.toString(), { headers, mode: 'cors' });
                     
+                    // TRATAMENTO DE ERRO 404: Se falhar após a página 1, assumimos que os dados acabaram.
                     if (!res.ok) {
-                        // Fallback para ID no Path se o primeiro falhar com 404 (comum em algumas rotas da ST)
+                        if (res.status === 404 && currentPage > 1) {
+                            console.log("Fim da lista alcançado (404 na página seguinte).");
+                            hasMorePages = false;
+                            break;
+                        }
+                        
+                        // Fallback apenas para a primeira tentativa
                         if (res.status === 404 && currentPage === 1 && source.externalEventId) {
                             const fallbackPath = `${baseUrl}/${endpoint}/${source.externalEventId}?per_page=100`;
                             const resFallback = await fetch(fallbackPath, { headers, mode: 'cors' });
                             if (resFallback.ok) {
                                 const jsonFallback = await resFallback.json();
                                 processPageItems(jsonFallback);
-                                hasMorePages = false; // Geralmente rotas de ID direto não paginam
-                                break;
                             }
                         }
-                        throw new Error(`Erro na API Página ${currentPage}: ${res.status}`);
+                        
+                        if (currentPage === 1 && !res.ok) {
+                             throw new Error(`Erro na API: ${res.status}`);
+                        }
+                        
+                        hasMorePages = false;
+                        break;
                     }
 
                     const json = await res.json();
-                    const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
+                    const items = json.data || json.participants || json.tickets || json.checkins || json.buyers || (Array.isArray(json) ? json : []);
                     
                     if (!items || items.length === 0) {
                         hasMorePages = false;
@@ -161,12 +171,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         currentPage++;
                     }
 
-                    // Segurança contra loops infinitos
                     if (currentPage > 500) hasMorePages = false;
                 }
 
                 function processPageItems(json: any) {
-                    const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
+                    const items = json.data || json.participants || json.tickets || json.checkins || json.buyers || (Array.isArray(json) ? json : []);
                     if (!Array.isArray(items)) return;
 
                     items.forEach((item: any) => {
@@ -174,15 +183,14 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
                         if (!code) return;
 
-                        // Mapeamento resiliente de setores
-                        let sector = 'Geral';
-                        if (item.sector_name) sector = item.sector_name;
-                        else if (item.category?.name) sector = item.category.name;
-                        else if (item.category) sector = item.category;
-                        else if (item.sector) sector = item.sector;
-                        else if (item.ticket_type?.name) sector = item.ticket_type.name;
+                        let rawSector = 'Geral';
+                        if (item.sector_name) rawSector = item.sector_name;
+                        else if (item.category?.name) rawSector = item.category.name;
+                        else if (item.category) rawSector = item.category;
+                        else if (item.sector) rawSector = item.sector;
+                        else if (item.ticket_type?.name) rawSector = item.ticket_type.name;
                         
-                        sector = String(sector).trim();
+                        const sector = String(rawSector).trim() || 'Geral';
                         discoveredSectors.add(sector);
 
                         const existing = existingTicketsMap.get(code);
@@ -214,13 +222,13 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            // Atualiza setores se novos foram encontrados
+            // Atualiza setores no Firebase para que apareçam no Dashboard
             const newSectorList = Array.from(discoveredSectors).sort();
             if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
             }
 
-            // Salva no Firestore em lotes
+            // Salva no Firestore em lotes mesmo que tenha havido erro de 404 em páginas futuras
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
@@ -234,11 +242,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             }
 
             alert(
-                `Sincronização Concluída!\n\n` +
-                `• Ingressos na API: ${totalItemsFoundInApi}\n` +
-                `• Novos Importados: ${newItemsAdded}\n` +
-                `• Marcados como Usados: ${updatedItems}\n` +
-                `• Setores Identificados: ${discoveredSectors.size}`
+                `Sincronização Finalizada!\n\n` +
+                `• Ingressos lidos da API: ${totalItemsFoundInApi}\n` +
+                `• Novos adicionados: ${newItemsAdded}\n` +
+                `• Atualizados para 'Usado': ${updatedItems}\n` +
+                `• Total de Setores: ${discoveredSectors.size}`
             );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
@@ -246,7 +254,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
         } catch (e: any) {
             console.error("Erro na sincronização:", e);
-            alert(`Falha na Importação:\n${e.message}`);
+            alert(`Falha Crítica na Importação:\n${e.message}\n\nVerifique se o Token é válido para este evento.`);
         } finally {
             setIsLoading(false);
         }
@@ -282,7 +290,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 <input 
                                     value={editSource.externalEventId} 
                                     onChange={e => setEditSource({...editSource, externalEventId: e.target.value})} 
-                                    placeholder="Ex: 3604" 
+                                    placeholder="Ex: 4377" 
                                     className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none" 
                                 />
                             </div>
@@ -441,8 +449,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 <AlertTriangleIcon className="w-8 h-8 text-blue-500 flex-shrink-0" />
                 <div className="text-xs space-y-2 text-gray-400">
                     <p className="font-bold text-blue-400 uppercase tracking-widest">Dica de Importação:</p>
-                    <p>• O sistema percorre todas as páginas da API solicitando blocos de 100 registros.</p>
-                    <p>• A importação para automaticamente ao detectar o fim dos dados.</p>
+                    <p>• O sistema percorre todas as páginas da API automaticamente.</p>
+                    <p>• Caso a API retorne erro em uma página avançada, os dados anteriores são preservados.</p>
                 </div>
             </div>
         </div>
