@@ -29,7 +29,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
       sectors: Record<string, number>;
     }> = {};
 
-    // Processamento linear de alta performance para até 20.000 logs
+    // Processamento linear de alta performance para até 10.000 logs
     for (let i = 0; i < scanHistory.length; i++) {
       const log = scanHistory[i];
       // Fallback para logs sem operador definido
@@ -82,7 +82,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
         <div className="flex flex-col items-center justify-center py-20 space-y-4">
             <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
             <p className="text-xl font-bold text-gray-400 animate-pulse">Sincronizando logs do banco...</p>
-            <p className="text-xs text-gray-500">Isso pode levar alguns segundos dependendo da sua conexão.</p>
+            <p className="text-xs text-gray-500">Aguardando dados (Máximo: 10.000 logs)</p>
         </div>
     );
   }
@@ -101,7 +101,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
                   <h1 className="text-3xl font-bold text-white tracking-tight">{event.name}</h1>
                   <p className="text-gray-400 text-sm font-medium flex items-center">
                     <UsersIcon className="w-4 h-4 mr-1.5 text-orange-500" />
-                    Monitoramento de Produtividade (Limite: 20k)
+                    Monitoramento de Produtividade (Limite: 10k)
                   </p>
                 </div>
               </div>
@@ -137,12 +137,12 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
         </div>
 
         {/* Diagnóstico de Erro */}
-        {totalValidGlobal > 0 && totalScans === 0 && (
+        {totalValidGlobal > 0 && totalScans === 0 && !isLoading && (
             <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl flex items-center space-x-4 animate-pulse">
                 <AlertTriangleIcon className="w-10 h-10 text-red-500" />
                 <div>
                     <h3 className="text-lg font-bold text-red-400 uppercase">Atenção: Falha na Sincronização de Logs</h3>
-                    <p className="text-sm text-gray-300">O sistema detectou que existem ingressos validados, mas nenhum log foi carregado. Isso acontece quando o <strong>Índice do Firestore</strong> não foi criado. Verifique o console do navegador e clique no link de criação do Firebase.</p>
+                    <p className="text-sm text-gray-300">O sistema detectou que existem ingressos validados, mas nenhum log foi carregado. Certifique-se de que os índices do Firestore foram criados corretamente.</p>
                 </div>
             </div>
         )}
@@ -206,7 +206,7 @@ const OperatorMonitor: React.FC<OperatorMonitorProps> = ({ event, allTickets, sc
               <TableCellsIcon className="w-16 h-16 mx-auto text-gray-700 mb-4" />
               <p className="text-xl font-bold text-gray-500">Aguardando novos logs...</p>
               <p className="text-gray-600 text-sm mt-2">Nenhum operador detectado nos {totalScans} registros carregados.</p>
-              <p className="text-orange-500 text-xs mt-4 font-bold">Dica: Os validadores devem preencher o nome do "Operador" na tela de login/scanner.</p>
+              <p className="text-orange-500 text-xs mt-4 font-bold">Limite de análise: Últimos 10.000 scans do evento.</p>
             </div>
           )}
         </div>

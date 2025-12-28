@@ -224,9 +224,8 @@ const App: React.FC = () => {
             setTicketsLoaded(true);
         }, () => setTicketsLoaded(true));
 
-        // QUERY OTIMIZADA COM LIMITE DE 20.000 LOGS
-        // IMPORTANTE: Se o Firestore retornar 0 registros mas o console do navegador mostrar erro, é necessário criar o índice.
-        const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(20000));
+        // AJUSTADO O LIMITE PARA 10.000 (O MÁXIMO PERMITIDO PELO FIRESTORE)
+        const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(10000));
         const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
             console.log(`Firestore: Recebidos ${snapshot.size} logs de scan.`);
             const historyData = snapshot.docs.map(doc => {
@@ -248,11 +247,7 @@ const App: React.FC = () => {
             setScanHistory(historyData);
             setScansLoaded(true);
         }, (err) => {
-            console.error("ERRO CRÍTICO FIRESTORE SCANS:", err);
-            if (err.message.includes('index')) {
-                const link = err.message.match(/https:\/\/console.firebase.google.com[^\s]+/);
-                alert(`ERRO DE ÍNDICE: O monitor de operadoras não carregará até que você crie o índice no Firebase. Verifique o console do navegador ou use o link: ${link ? link[0] : 'No Console do Firebase'}`);
-            }
+            console.error("ERRO FIRESTORE SCANS:", err);
             setScansLoaded(true);
         });
 
