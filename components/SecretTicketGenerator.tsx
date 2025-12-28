@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
-import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon } from './Icons';
+import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon } from './Icons';
 import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
@@ -36,7 +36,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         producer: 'D&E MUSIC',
         contact: '+5585987737330',
         sector: 'Setor Único [Meia] 3º Lote',
-        ownerName: 'VENDA ONLINE'
+        ownerName: 'VENDA ONLINE',
+        logoUrl: 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'
     });
 
     // Carregar Eventos
@@ -165,7 +166,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         
         try {
             // Reconstituir o PDF a partir dos dados salvos no 'details'
-            // Se não houver config salva (tickets antigos), usamos o formData atual como fallback
             const pdfConfig: TicketPdfDetails = (ticket.details as any)?.pdfConfig || {
                 ...formData,
                 ownerName: ticket.details?.ownerName || formData.ownerName,
@@ -371,6 +371,13 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         <div className="grid grid-cols-2 gap-4">
                             <input name="producer" value={formData.producer} onChange={handleInputChange} placeholder="Produzido" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
                             <input name="contact" value={formData.contact} onChange={handleInputChange} placeholder="Contato" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                        </div>
+                        {/* NOVO CAMPO PARA URL DA LOGO */}
+                        <div className="relative">
+                            <label className="block text-xs text-gray-400 mb-1 flex items-center">
+                                <LinkIcon className="w-3 h-3 mr-1" /> URL da Logo (PNG/JPG)
+                            </label>
+                            <input name="logoUrl" value={formData.logoUrl} onChange={handleInputChange} placeholder="Link da imagem (ImgBB, Imgur, etc)" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm font-mono text-orange-300" />
                         </div>
                     </div>
                 </div>

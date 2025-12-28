@@ -10,11 +10,8 @@ export interface TicketPdfDetails {
   contact: string;
   sector: string;
   ownerName: string;
+  logoUrl?: string; // Nova propriedade para logo dinâmica
 }
-
-// COLE A URL DA SUA LOGO AQUI (Pode ser um link HTTPS ou Base64)
-// Recomendado: Imagem com fundo transparente (PNG)
-const LOGO_IMAGE_URL = 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'; 
 
 const loadImage = (url: string): Promise<HTMLImageElement> => {
   return new Promise((resolve, reject) => {
@@ -49,11 +46,11 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFillColor(orangeHeader[0], orangeHeader[1], orangeHeader[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
-  // --- LOGO (SUBSTITUÍDO POR IMAGEM) ---
+  // --- LOGO (DINÂMICA) ---
+  const finalLogoUrl = details.logoUrl || 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png';
+  
   try {
-    const logoImg = await loadImage(LOGO_IMAGE_URL);
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
+    const logoImg = await loadImage(finalLogoUrl);
     
     // Calcula proporções para a logo (altura fixa de 18mm)
     const targetHeight = 18;
