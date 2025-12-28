@@ -90,9 +90,20 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 source.type === 'participants' ? 'participants' :
                                 source.type === 'buyers' ? 'buyers' : 'tickets';
                 
-                // Construção robusta da URL
+                // Construção robusta da URL (Ajuste para evitar 404 de ID direto no path se for coleção)
                 const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
-                const fullUrl = `${baseUrl}/${endpoint}${source.externalEventId ? `/${source.externalEventId}` : ''}`;
+                
+                // Algumas APIs da ST usam o ID no path, outras como query. Tentando formato padrão de coleção filtrada:
+                let fullUrl = `${baseUrl}/${endpoint}`;
+                if (source.externalEventId) {
+                    if (source.type === 'checkins') {
+                        fullUrl += `/${source.externalEventId}`;
+                    } else {
+                        // Se não for checkin individual, tenta como query param ou subrecurso padrão
+                        fullUrl += `?event_id=${source.externalEventId}`;
+                        // Alternativa: fullUrl += `/${source.externalEventId}`;
+                    }
+                }
                 
                 const headers: HeadersInit = { 
                     'Accept': 'application/json',
@@ -109,40 +120,53 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 const res = await fetch(fullUrl, { headers, mode: 'cors' });
                 if (!res.ok) {
                     const errText = await res.text();
+                    // Se der 404 com query param, tenta formato de path direto como fallback
+                    if (res.status === 404 && source.externalEventId) {
+                         const fallbackUrl = `${baseUrl}/${endpoint}/${source.externalEventId}`;
+                         console.log("Tentando fallback URL:", fallbackUrl);
+                         const res2 = await fetch(fallbackUrl, { headers, mode: 'cors' });
+                         if (res2.ok) {
+                             processJson(await res2.json());
+                             return;
+                         }
+                    }
                     throw new Error(`Erro API (${res.status}): ${errText || 'Resposta não amigável'}`);
                 }
                 
-                const json = await res.json();
-                const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
-                
-                items.forEach((item: any) => {
-                    const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode).trim();
-                    if (!code) return;
+                processJson(await res.json());
 
-                    const existing = existingTickets.get(code) as Ticket | undefined;
-                    const isNew = !existing;
-                    const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || !!item.validated_at;
+                function processJson(json: any) {
+                    const items = json.data || json.participants || json.tickets || json.checkins || (Array.isArray(json) ? json : []);
+                    
+                    items.forEach((item: any) => {
+                        const code = String(item.access_code || item.code || item.qr_code || item.id || item.barcode).trim();
+                        if (!code) return;
 
-                    if (isNew) {
-                        ticketsToSave.push({
-                            id: code,
-                            sector: String(item.sector_name || item.category || item.sector || 'Geral'),
-                            status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
-                            usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
-                            source: 'api_import',
-                            details: { 
-                                ownerName: item.name || item.customer_name || item.buyer_name || 'Importado',
-                                originalId: item.id
-                            }
-                        });
-                    } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
-                        ticketsToSave.push({
-                            ...existing,
-                            status: 'USED',
-                            usedAt: item.validated_at || Date.now()
-                        });
-                    }
-                });
+                        const existing = existingTickets.get(code) as Ticket | undefined;
+                        const isNew = !existing;
+                        const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || !!item.validated_at;
+
+                        if (isNew) {
+                            ticketsToSave.push({
+                                id: code,
+                                sector: String(item.sector_name || item.category || item.sector || 'Geral'),
+                                status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
+                                usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
+                                source: 'api_import',
+                                details: { 
+                                    ownerName: item.name || item.customer_name || item.buyer_name || 'Importado',
+                                    originalId: item.id
+                                }
+                            });
+                        } else if (shouldMarkUsed && existing && existing.status !== 'USED') {
+                            ticketsToSave.push({
+                                ...existing,
+                                status: 'USED',
+                                usedAt: item.validated_at || Date.now()
+                            });
+                        }
+                    });
+                }
             }
 
             if (ticketsToSave.length > 0) {
@@ -197,7 +221,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                                 <input 
                                     value={editSource.externalEventId} 
                                     onChange={e => setEditSource({...editSource, externalEventId: e.target.value})} 
-                                    placeholder="Ex: 12345" 
+                                    placeholder="Ex: 3604" 
                                     className="w-full bg-gray-800 border border-gray-700 p-3 rounded-xl text-sm focus:border-blue-500 outline-none" 
                                 />
                             </div>
@@ -355,7 +379,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     <p className="font-bold text-orange-400 uppercase tracking-widest">Ajuda com Erros de API:</p>
                     <p>• <b>Token:</b> Deve ser o Token de Acesso da ST Ingressos. O sistema adiciona automaticamente "Bearer" se você não colocar.</p>
                     <p>• <b>CORS:</b> APIs públicas as vezes bloqueiam acessos via navegador. Se a falha persistir mesmo com dados corretos, a API pode estar restringindo o acesso.</p>
-                    <p>• <b>Sincronização de Setores:</b> Os setores são únicos por evento. Ao criar um evento novo, ele começa vazio para garantir organização total.</p>
+                    <p>• <b>Sincronização de Setores:</b> Os setores são únicos por evento. Ao trocar de evento, o painel é resetado para evitar confusão de dados.</p>
                 </div>
             </div>
         </div>

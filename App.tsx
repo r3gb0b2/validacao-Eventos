@@ -225,15 +225,17 @@ const App: React.FC = () => {
 
         const eventId = selectedEvent.id;
         
-        // CRITICAL FIX: Reset configurations immediately when switching event
+        // --- HARD RESET DE ESTADO AO TROCAR EVENTO ---
+        // Isso evita que setores do evento anterior "vaziem" para o novo evento antes do Firebase responder
         setSectorNames([]);
         setHiddenSectors([]);
         setImportSources([]);
+        setAllTickets([]);
+        setScanHistory([]);
         setTicketsLoaded(false);
         setScansLoaded(false);
 
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
-            // Se o snapshot estiver vazio ou documentos específicos não existirem, resetamos os nomes
             let mainFound = false;
             let importFound = false;
 
@@ -249,6 +251,7 @@ const App: React.FC = () => {
                 }
             });
 
+            // Se o documento não existe mais ou é novo evento sem settings
             if (!mainFound) { setSectorNames([]); setHiddenSectors([]); }
             if (!importFound) setImportSources([]);
         });
