@@ -19,20 +19,20 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
     format: 'a4'
   });
 
-  const generateCode = () => Math.random().toString(36).substring(2, 14).toUpperCase();
-  // Se forcedCode existir (re-download), usamos ele. Se não, geramos um novo.
+  // Gera códigos de exatamente 12 caracteres
+  const generateCode = () => Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
+  
   const ticketCode = forcedCode || generateCode();
   const purchaseCode = generateCode();
   
-  // Cores Oficiais da Imagem
-  const orangeSt = [255, 80, 0]; 
-  const textDarkGray = [60, 60, 60];
+  // Nova Cor Solicitada: #506c7b (R: 80, G: 108, B: 123)
+  const primaryColor = [80, 108, 123]; 
   const labelGray = [140, 140, 140];
 
   // --- PÁGINA 1 ---
   
-  // Fundo Laranja do Topo (Largura total 190mm)
-  doc.setFillColor(orangeSt[0], orangeSt[1], orangeSt[2]);
+  // Fundo com a cor principal no topo
+  doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
   doc.rect(10, 10, 190, 130, 'F');
 
   // --- LOGO ---
@@ -42,7 +42,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFillColor(255, 255, 255);
   doc.roundedRect(logoX, logoY, 13, 13, 2.5, 2.5, 'F');
   
-  doc.setFillColor(orangeSt[0], orangeSt[1], orangeSt[2]);
+  doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
   doc.roundedRect(logoX + 3.5, logoY + 3.5, 6, 6, 1, 1, 'F');
   
   doc.setFillColor(255, 255, 255);
@@ -128,37 +128,34 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   doc.setFont('helvetica', 'normal'); doc.text(l3Label2, curX3, prodY); curX3 += doc.getTextWidth(l3Label2);
   doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
 
-  // --- ÁREA BRANCA ---
+  // --- ÁREA BRANCA (DADOS COMPACTOS E GORDINHOS) ---
   const startDataY = 155;
-  doc.setTextColor(labelGray[0], labelGray[1], labelGray[2]);
+  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
   doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont('helvetica', 'bold'); // Rótulos agora são bold (gordinhos)
   doc.text('Ingresso', 15, startDataY);
   doc.text('Participante', 195, startDataY, { align: 'right' });
   
-  doc.setTextColor(textDarkGray[0], textDarkGray[1], textDarkGray[2]);
   doc.setFontSize(15);
-  doc.setFont('helvetica', 'bold');
-  doc.text(details.sector || 'Geral', 15, startDataY + 8);
-  doc.text(details.ownerName || 'Convidado', 195, startDataY + 8, { align: 'right' });
+  // Reduzi o offset de 8 para 5 para ficarem "bem juntinhos"
+  doc.text(details.sector || 'Geral', 15, startDataY + 5.5);
+  doc.text(details.ownerName || 'Convidado', 195, startDataY + 5.5, { align: 'right' });
 
   // Bloco de Códigos
-  const secondDataY = 182;
-  doc.setTextColor(labelGray[0], labelGray[1], labelGray[2]);
+  const secondDataY = 180; // Subi um pouco a posição Y para manter harmonia
   doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont('helvetica', 'bold');
   doc.text('Código da Compra', 15, secondDataY);
   doc.text('Código do ingresso', 195, secondDataY, { align: 'right' });
 
-  doc.setTextColor(textDarkGray[0], textDarkGray[1], textDarkGray[2]);
-  doc.setFontSize(15);
-  doc.setFont('helvetica', 'bold');
-  doc.text(purchaseCode, 15, secondDataY + 8);
-  doc.text(ticketCode, 195, secondDataY + 8, { align: 'right' });
+  doc.setFontSize(16); // Aumentei um pouco o tamanho para destacar a fonte gordinha
+  doc.text(purchaseCode, 15, secondDataY + 5.5);
+  doc.text(ticketCode, 195, secondDataY + 5.5, { align: 'right' });
 
   // Linha separadora antes do QR
-  doc.setDrawColor(230, 230, 230);
-  doc.setLineDashPattern([2, 1], 0);
+  doc.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.setLineWidth(0.1);
+  doc.setLineDashPattern([1.5, 1], 0);
   doc.line(15, 202, 195, 202);
 
   // QR CODE
@@ -174,14 +171,14 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
     img.onerror = () => resolve(false);
   });
 
-  // --- PÁGINA 2 (TERMOS) ---
+  // --- PÁGINA 2 (TERMOS COM A NOVA COR) ---
   doc.addPage();
-  doc.setDrawColor(orangeSt[0], orangeSt[1], orangeSt[2]); 
+  doc.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]); 
   doc.setLineWidth(0.4);
   doc.setLineDashPattern([], 0);
   doc.roundedRect(10, 10, 190, 277, 4, 4);
 
-  doc.setTextColor(orangeSt[0], orangeSt[1], orangeSt[2]);
+  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
   doc.text('INFORMAÇÃO IMPORTANTE!', 105, 30, { align: 'center' });
@@ -192,7 +189,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
   
   doc.text(infoText, 15, 48, { maxWidth: 180, align: 'justify' });
 
-  doc.setTextColor(110, 110, 110);
+  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]); // Mudança para cor solicitada também nos termos
   doc.setFontSize(9.5);
   doc.setFont('helvetica', 'normal');
   doc.setLineHeightFactor(1.2);
