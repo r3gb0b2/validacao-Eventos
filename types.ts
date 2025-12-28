@@ -1,3 +1,4 @@
+
 import { Timestamp, FieldValue } from 'firebase/firestore';
 
 export interface Event {
@@ -15,6 +16,7 @@ export interface Ticket {
   sector: Sector;
   status: TicketStatus;
   usedAt?: number; // Milliseconds since epoch for client-side use
+  source?: string; // Origem do ingresso (ex: 'secret_generator')
   details?: {
     ownerName?: string;
     eventName?: string;
@@ -71,4 +73,17 @@ export interface SectorGroup {
     id: string;
     name: string;
     includedSectors: string[];
+}
+
+export type ImportType = 'tickets' | 'participants' | 'buyers' | 'checkins' | 'custom' | 'google_sheets';
+
+export interface ImportSource {
+    id: string;
+    name: string;
+    url: string;
+    token: string;
+    externalEventId?: string; // ID do evento na ST Ingressos
+    type: ImportType;
+    autoImport: boolean;
+    lastImportTime?: number;
 }
