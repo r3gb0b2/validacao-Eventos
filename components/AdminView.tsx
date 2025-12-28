@@ -136,8 +136,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
             case 'operators': return <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isEmbedded />;
-            case 'locator': return <LocalizadorasModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} />;
-            case 'manual': return <ManualAddModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} />;
+            case 'locator': return <LocalizadorasModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
+            case 'manual': return <ManualAddModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             default: return null;
         }
     };
