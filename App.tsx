@@ -1,25 +1,24 @@
 
-// FIX: Implement the main App component, resolving "not a module" and other related errors.
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { getDb } from './firebaseConfig';
+import { getDb } from './firebaseConfig.ts';
 import { collection, onSnapshot, doc, writeBatch, serverTimestamp, query, orderBy, addDoc, Timestamp, Firestore, setDoc, limit, updateDoc, getDocs, where, getDoc } from 'firebase/firestore';
 import Papa from 'papaparse';
 
-import Scanner from './components/Scanner';
-import StatusDisplay from './components/StatusDisplay';
-import AdminView from './components/AdminView';
-import SetupInstructions from './components/SetupInstructions';
-import AlertBanner from './components/AlertBanner';
-import EventSelector from './components/EventSelector';
-import TicketList from './components/TicketList';
-import PublicStatsView from './components/PublicStatsView';
-import LoginModal from './components/LoginModal';
-import SecretTicketGenerator from './components/SecretTicketGenerator'; 
-import OperatorMonitor from './components/OperatorMonitor'; 
-import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon, LogoSVG } from './components/Icons';
-import { useSound } from './hooks/useSound';
+import Scanner from './components/Scanner.tsx';
+import StatusDisplay from './components/StatusDisplay.tsx';
+import AdminView from './components/AdminView.tsx';
+import SetupInstructions from './components/SetupInstructions.tsx';
+import AlertBanner from './components/AlertBanner.tsx';
+import EventSelector from './components/EventSelector.tsx';
+import TicketList from './components/TicketList.tsx';
+import PublicStatsView from './components/PublicStatsView.tsx';
+import LoginModal from './components/LoginModal.tsx';
+import SecretTicketGenerator from './components/SecretTicketGenerator.tsx'; 
+import OperatorMonitor from './components/OperatorMonitor.tsx'; 
+import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon, LogoSVG } from './components/Icons.tsx';
+import { useSound } from './hooks/useSound.ts';
 
-import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types';
+import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types.ts';
 
 const getDeviceId = () => {
     try {
@@ -52,7 +51,6 @@ const App: React.FC = () => {
 
     const [selectedSector, setSelectedSector] = useState<SectorFilter>('All');
     
-    // VIEW STATE PERSISTENCE
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
         try {
             return (localStorage.getItem('current_view') as any) || 'scanner';
@@ -77,7 +75,6 @@ const App: React.FC = () => {
     const lastCodeTimeRef = useRef<number>(0);
     const autoSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Persist View
     useEffect(() => {
         localStorage.setItem('current_view', view);
     }, [view]);
@@ -87,7 +84,6 @@ const App: React.FC = () => {
         return new Map(allTickets.map(ticket => [ticket.id, ticket]));
     }, [allTickets]);
 
-    // --- LÓGICA DE FILTRAGEM PARA TICKETS SECRETOS ---
     const filteredAllTickets = useMemo(() => {
         return allTickets.filter(t => t.source !== 'secret_generator');
     }, [allTickets]);
@@ -251,7 +247,6 @@ const App: React.FC = () => {
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
             const ticketsData = snapshot.docs.map(doc => {
-                // HABILITA ESTIMATIVA PARA OFFLINE
                 const data = doc.data({ serverTimestamps: 'estimate' });
                 const ticket: Ticket = { id: doc.id, sector: data.sector || 'Geral', status: data.status || 'AVAILABLE', source: data.source, details: data.details };
                 
@@ -341,7 +336,6 @@ const App: React.FC = () => {
         const ticket = ticketsMap.get(ticketId);
         const eventId = selectedEvent.id;
         
-        // PRIORIDADE 1: EXIBIR ALERTA VISUAL IMEDIATAMENTE
         if (!ticket) {
             showScanResult('INVALID', `Não encontrado: ${ticketId}`);
             addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Desconhecido', deviceId, operator: operatorName });
@@ -355,14 +349,13 @@ const App: React.FC = () => {
             return;
         }
 
-        // Caso válido
         showScanResult('VALID', `Liberado: ${ticket.sector}!`);
         
         try {
             const batch = writeBatch(db);
             batch.update(doc(db, 'events', eventId, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
             batch.set(doc(collection(db, 'events', eventId, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
-            batch.commit(); // Não aguardamos o commit para não atrasar a interface
+            batch.commit();
         } catch (error) { 
             console.error("Erro ao salvar scan", error);
         }

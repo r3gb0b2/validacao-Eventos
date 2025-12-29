@@ -6,9 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>ST INGRESSOS CHECK IN</title>
     
-    <!-- CSP Otimizada para iOS Capacitor -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval' data: blob: gap:; img-src 'self' https: data: blob:; style-src 'self' https: 'unsafe-inline'; script-src 'self' https: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' https: wss:;">
-
     <!-- PWA Settings -->
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#111827" />
@@ -26,56 +23,45 @@
         --safe-area-top: env(safe-area-inset-top);
         --safe-area-bottom: env(safe-area-inset-bottom);
       }
-      
       body {
         overscroll-behavior-y: none;
         background-color: #111827;
         padding-top: var(--safe-area-top);
         padding-bottom: var(--safe-area-bottom);
+        margin: 0;
       }
-
-      .ios-safe-top {
-        padding-top: var(--safe-area-top);
-      }
-
-      .ios-safe-bottom {
-        padding-bottom: var(--safe-area-bottom);
-      }
-
       #reader __video {
         object-fit: cover !important;
       }
-      
       .animate-fade-in {
         animation: fadeIn 0.3s ease-in-out;
       }
-      
       @keyframes fadeIn {
         from { opacity: 0; transform: translateY(10px); }
         to { opacity: 1; transform: translateY(0); }
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^19.1.1",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
-    "react/": "https://aistudiocdn.com/react@^19.1.1/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.20.0",
-    "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
-    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
-    "html5-qrcode": "https://aistudiocdn.com/html5-qrcode@^2.3.8",
-    "firebase/": "https://aistudiocdn.com/firebase@^12.2.1/",
-    "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
-    "jspdf-autotable": "https://aistudiocdn.com/jspdf-autotable@^3.8.2",
-    "papaparse": "https://aistudiocdn.com/papaparse@^5.4.1",
-    "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
-    "pdfjs-dist": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm"
-  }
-}
-</script>
-</head>
-  <body class="bg-gray-900 text-white antialiased overscroll-none">
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://aistudiocdn.com/react@^19.1.1",
+        "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
+        "react/": "https://aistudiocdn.com/react@^19.1.1/",
+        "@google/genai": "https://aistudiocdn.com/@google/genai@^1.20.0",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
+        "html5-qrcode": "https://aistudiocdn.com/html5-qrcode@^2.3.8",
+        "firebase/": "https://aistudiocdn.com/firebase@^12.2.1/",
+        "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
+        "jspdf-autotable": "https://aistudiocdn.com/jspdf-autotable@^3.8.2",
+        "papaparse": "https://aistudiocdn.com/papaparse@^5.4.1",
+        "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
+        "pdfjs-dist": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm"
+      }
+    }
+    </script>
+  </head>
+  <body class="bg-gray-900 text-white antialiased">
     <div id="root"></div>
     <script type="module" src="index.tsx"></script>
   </body>

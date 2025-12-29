@@ -1,20 +1,20 @@
 
 import React, { useState, useEffect } from 'react';
-import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from '../types';
+import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from '../types.ts';
 import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { PlusCircleIcon, TrashIcon } from './Icons';
+import { PlusCircleIcon, TrashIcon } from './Icons.tsx';
 
 // Módulos
-import DashboardModule from './admin/DashboardModule';
-import SettingsModule from './admin/SettingsModule';
-import GroupingModule from './admin/GroupingModule';
-import LocalizadorasModule from './admin/LocalizadorasModule';
-import ManualAddModule from './admin/ManualAddModule';
-import ParticipantsModule from './admin/ParticipantsModule';
-import AutoImportModule from './admin/AutoImportModule';
-import OperatorMonitor from './OperatorMonitor';
-import TicketList from './TicketList';
-import SuperAdminView from './SuperAdminView';
+import DashboardModule from './admin/DashboardModule.tsx';
+import SettingsModule from './admin/SettingsModule.tsx';
+import GroupingModule from './admin/GroupingModule.tsx';
+import LocalizadorasModule from './admin/LocalizadorasModule.tsx';
+import ManualAddModule from './admin/ManualAddModule.tsx';
+import ParticipantsModule from './admin/ParticipantsModule.tsx';
+import AutoImportModule from './admin/AutoImportModule.tsx';
+import OperatorMonitor from './OperatorMonitor.tsx';
+import TicketList from './TicketList.tsx';
+import SuperAdminView from './SuperAdminView.tsx';
 
 interface AdminViewProps {
   db: Firestore;
@@ -50,7 +50,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     useEffect(() => {
         if (!selectedEvent || !db) return;
         
-        // Listener para Grupos
         const unsubStats = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
@@ -63,7 +62,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setGroups([]);
         });
 
-        // Listener para Importações
         const unsubImport = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
