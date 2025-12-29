@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>ST INGRESSOS CHECK IN</title>
     
-    <!-- CSP para iOS Capacitor: Permite CDNs e Câmera -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval' data: blob:; img-src 'self' https: data: blob:; frame-src 'self' https:; connect-src 'self' https: wss:;">
+    <!-- CSP Otimizada para iOS Capacitor -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval' data: blob: gap:; img-src 'self' https: data: blob:; style-src 'self' https: 'unsafe-inline'; script-src 'self' https: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' https: wss:;">
 
     <!-- PWA Settings -->
     <link rel="manifest" href="manifest.json" />
@@ -30,7 +30,6 @@
       body {
         overscroll-behavior-y: none;
         background-color: #111827;
-        /* Padding para evitar que o conteúdo fique embaixo do notch do iPhone */
         padding-top: var(--safe-area-top);
         padding-bottom: var(--safe-area-bottom);
       }
@@ -45,6 +44,15 @@
 
       #reader __video {
         object-fit: cover !important;
+      }
+      
+      .animate-fade-in {
+        animation: fadeIn 0.3s ease-in-out;
+      }
+      
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
       }
     </style>
   <script type="importmap">

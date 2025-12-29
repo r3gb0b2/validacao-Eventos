@@ -16,7 +16,7 @@ import PublicStatsView from './components/PublicStatsView';
 import LoginModal from './components/LoginModal';
 import SecretTicketGenerator from './components/SecretTicketGenerator'; 
 import OperatorMonitor from './components/OperatorMonitor'; 
-import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon } from './components/Icons';
+import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon, LogoSVG } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types';
@@ -383,9 +383,12 @@ const App: React.FC = () => {
             <div className="w-full max-w-6xl mx-auto space-y-6 pt-4">
                 {!isOnline && <AlertBanner message="Você está offline." type="warning" />}
                 <header className="flex justify-between items-center w-full">
-                    <div>
-                        <h1 className="text-3xl font-bold text-orange-500 tracking-tighter">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
-                        {selectedEvent && <button onClick={() => { setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
+                    <div className="flex items-center space-x-3">
+                        <LogoSVG className="w-10 h-10 text-white" />
+                        <div>
+                            <h1 className="text-2xl font-black text-white tracking-tighter leading-tight">ST CHECK-IN</h1>
+                            <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">{selectedEvent?.name || 'Selecione um Evento'}</p>
+                        </div>
                     </div>
                     <div className="flex items-center space-x-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Configurações"><CogIcon className="w-6 h-6" /></button>
