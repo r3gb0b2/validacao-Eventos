@@ -6,59 +6,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>ST INGRESSOS CHECK IN</title>
     
-    <!-- PWA Settings -->
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#111827" />
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ST Check-in">
     
-    <!-- Icons -->
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
     <link rel="apple-touch-icon" href="icon-192.png">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-      :root {
-        --safe-area-top: env(safe-area-inset-top);
-        --safe-area-bottom: env(safe-area-inset-bottom);
-      }
-      body {
-        overscroll-behavior-y: none;
-        background-color: #111827;
-        padding-top: var(--safe-area-top);
-        padding-bottom: var(--safe-area-bottom);
-        margin: 0;
-      }
-      #reader __video {
-        object-fit: cover !important;
-      }
-      .animate-fade-in {
-        animation: fadeIn 0.3s ease-in-out;
-      }
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
+      :root { --safe-area-top: env(safe-area-inset-top); --safe-area-bottom: env(safe-area-inset-bottom); }
+      body { overscroll-behavior-y: none; background-color: #111827; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); margin: 0; }
+      #root:empty::after { content: 'Carregando interface...'; display: flex; align-items: center; justify-content: center; height: 100vh; color: #4b5563; font-family: sans-serif; }
     </style>
+
     <script type="importmap">
-    {
-      "imports": {
-        "react": "https://aistudiocdn.com/react@^19.1.1",
-        "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
-        "react/": "https://aistudiocdn.com/react@^19.1.1/",
-        "@google/genai": "https://aistudiocdn.com/@google/genai@^1.20.0",
-        "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
-        "html5-qrcode": "https://aistudiocdn.com/html5-qrcode@^2.3.8",
-        "firebase/": "https://aistudiocdn.com/firebase@^12.2.1/",
-        "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
-        "jspdf-autotable": "https://aistudiocdn.com/jspdf-autotable@^3.8.2",
-        "papaparse": "https://aistudiocdn.com/papaparse@^5.4.1",
-        "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
-        "pdfjs-dist": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm"
-      }
-    }
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.20.0",
+    "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
+    "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8",
+    "jspdf": "https://esm.sh/jspdf@2.5.1",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
+    "papaparse": "https://esm.sh/papaparse@5.4.1",
+    "jszip": "https://esm.sh/jszip@3.10.1",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "firebase/": "https://esm.sh/firebase@^12.7.0/"
+  }
+}
+</script>
+
+    <!-- Depurador de Erros Global para diagnosticar tela branca -->
+    <script>
+      window.onerror = function(msg, url, line, col, error) {
+        const errorDiv = document.createElement('div');
+        errorDiv.style.position = 'fixed';
+        errorDiv.style.bottom = '0';
+        errorDiv.style.left = '0';
+        errorDiv.style.right = '0';
+        errorDiv.style.backgroundColor = '#7f1d1d';
+        errorDiv.style.color = '#fecaca';
+        errorDiv.style.padding = '20px';
+        errorDiv.style.zIndex = '9999';
+        errorDiv.style.fontSize = '12px';
+        errorDiv.style.fontFamily = 'monospace';
+        errorDiv.innerHTML = `<b>Erro detectado:</b> ${msg}<br><b>Arquivo:</b> ${url}<br><b>Linha:</b> ${line}`;
+        document.body.appendChild(errorDiv);
+        return false;
+      };
     </script>
   </head>
   <body class="bg-gray-900 text-white antialiased">
