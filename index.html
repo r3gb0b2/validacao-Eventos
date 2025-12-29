@@ -40,8 +40,8 @@
     "react": "https://esm.sh/react@19.0.0",
     "react-dom": "https://esm.sh/react-dom@19.0.0",
     "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
-    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
+    "firebase/app": "https://esm.sh/firebase@10.12.2/app",
+    "firebase/firestore": "https://esm.sh/firebase@10.12.2/firestore",
     "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8",
     "jspdf": "https://esm.sh/jspdf@2.5.1",
     "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
@@ -61,17 +61,17 @@
         const root = document.getElementById('root');
         if (root) {
           root.innerHTML = `
-            <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626;">
-              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Falha ao Carregar</h1>
+            <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
+              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Falha Crítica ao Iniciar</h1>
               <p style="font-size: 13px; opacity: 0.8; line-height: 1.4;">${msg}</p>
-              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%;">Tentar Novamente</button>
+              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">Tentar Novamente</button>
             </div>
           `;
         }
       };
 
       window.onerror = (msg, url, line) => {
-        showError(`Erro de Script: ${msg}<br><small>${url}:${line}</small>`);
+        showError(`Erro de Script: ${msg}<br><small>Arquivo: ${url}:${line}</small>`);
         return false;
       };
 
