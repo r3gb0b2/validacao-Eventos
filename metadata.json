@@ -1,7 +1,7 @@
 {
-  "name": "Event QR Code Check-in",
-  "description": "A simple and efficient web application for validating event attendee QR codes. The app uses the device's camera to scan codes, checks them against a pre-defined list, and provides real-time feedback on the check-in status.",
   "requestFramePermissions": [
     "camera"
-  ]
+  ],
+  "name": "",
+  "description": ""
 }
