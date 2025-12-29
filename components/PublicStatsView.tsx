@@ -1,10 +1,10 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Event, Ticket, DisplayableScanLog, AnalyticsData, SectorGroup } from '../types.ts';
-import Stats from './Stats.tsx';
-import AnalyticsChart from './AnalyticsChart.tsx';
-import PieChart from './PieChart.tsx';
-import { getDb } from '../firebaseConfig.ts';
+import { Event, Ticket, DisplayableScanLog, AnalyticsData, SectorGroup } from '../types';
+import Stats from './Stats';
+import AnalyticsChart from './AnalyticsChart';
+import PieChart from './PieChart';
+import { getDb } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 
 interface PublicStatsViewProps {

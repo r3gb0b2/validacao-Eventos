@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { Ticket, SectorGroup } from '../types.ts';
-import { TableCellsIcon, FunnelIcon, PlusCircleIcon, TrashIcon, CogIcon, UsersIcon } from './Icons.tsx';
+import { Ticket, SectorGroup } from '../types';
+import { TableCellsIcon, FunnelIcon, PlusCircleIcon, TrashIcon, CogIcon, UsersIcon } from './Icons';
 
 interface StatsProps {
   allTickets: Ticket[];
