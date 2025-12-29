@@ -5,7 +5,7 @@
   "description": "App de Check-in ST Ingressos para iPhone",
   "main": "index.js",
   "scripts": {
-    "build": "mkdir -p dist && cp index.html index.tsx App.tsx types.ts firebaseConfig.ts manifest.json metadata.json dist/ && cp -r components dist/ 2>/dev/null || true && cp -r hooks dist/ 2>/dev/null || true && cp -r utils dist/ 2>/dev/null || true",
+    "build": "mkdir -p dist && cp index.html dist/ && (cp *.tsx dist/ 2>/dev/null || true) && (cp *.ts dist/ 2>/dev/null || true) && (cp *.json dist/ 2>/dev/null || true) && (cp -r components dist/ 2>/dev/null || true) && (cp -r hooks dist/ 2>/dev/null || true) && (cp -r utils dist/ 2>/dev/null || true) && echo '--- Conteúdo da pasta dist ---' && ls dist",
     "cap-add-ios": "npx @capacitor/cli add ios",
     "cap-sync": "npx @capacitor/cli sync ios",
     "cap-open": "npx @capacitor/cli open ios"
