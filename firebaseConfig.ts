@@ -40,7 +40,7 @@ export const getDb = (): Promise<Firestore> => {
         })
         .catch((err: any) => {
             if (err.code === 'failed-precondition') {
-                console.warn('Persistência falhou: multiplas abas abertas.');
+                console.warn('Persistência falhou: múltiplas abas abertas.');
             } else if (err.code === 'unimplemented') {
                 console.warn('O navegador não suporta persistência offline.');
             }

@@ -12,8 +12,8 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ST Check-in">
     
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-    <link rel="apple-touch-icon" href="icon-192.png">
+    <!-- Removido ícone que causava 404 até que o arquivo seja providenciado -->
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%23FE551D%22/><text y=%22.9em%22 font-size=%2290%22 fill=%22white%22>ST</text></svg>">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -56,24 +56,20 @@
 </script>
 
     <script>
-      // Mostrador de erros visual para depuração rápida
+      // Mostrador de erros visual para depuração rápida no dispositivo
       window.onerror = function(msg, url, line) {
         const root = document.getElementById('root');
         if (root && root.innerHTML === '') {
           root.innerHTML = `
             <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
-              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Erro de Inicialização</h1>
+              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Erro Crítico</h1>
               <p style="font-size: 13px; opacity: 0.8; line-height: 1.4;">${msg}</p>
               <p style="font-size: 11px; margin-top: 10px; opacity: 0.6;">Arquivo: ${url}:${line}</p>
-              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">Tentar Novamente</button>
+              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">Recarregar Aplicativo</button>
             </div>
           `;
         }
         return false;
-      };
-
-      window.onunhandledrejection = function(event) {
-        console.error('Falha em Promessa:', event.reason);
       };
     </script>
   </head>

@@ -1,7 +1,7 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App.tsx';
+import App from './App';
 
 /**
  * Inicialização da Aplicação ST Check-in
@@ -26,7 +26,7 @@ const mount = () => {
   }
 };
 
-// Executa a montagem
+// Executa a montagem quando o documento estiver pronto
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', mount);
 } else {
