@@ -3,29 +3,32 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
 
-const startApp = () => {
+/**
+ * Inicialização da Aplicação ST Check-in
+ */
+const mount = () => {
   const container = document.getElementById('root');
+  if (!container) {
+    console.error("ST Check-in: Elemento #root não encontrado.");
+    return;
+  }
 
-  if (container) {
-    try {
-      const root = ReactDOM.createRoot(container);
-      root.render(
-        <React.StrictMode>
-          <App />
-        </React.StrictMode>
-      );
-      console.log("ST Check-in: Interface renderizada com sucesso.");
-    } catch (err) {
-      console.error("ST Check-in: Erro fatal no React DOM:", err);
-    }
-  } else {
-    console.error("ST Check-in: #root não encontrado.");
+  try {
+    const root = ReactDOM.createRoot(container);
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+    console.log("ST Check-in: Interface montada com sucesso.");
+  } catch (err) {
+    console.error("ST Check-in: Erro crítico na renderização:", err);
   }
 };
 
-// Garante que o script rode apenas quando o DOM estiver totalmente pronto
+// Executa a montagem
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', startApp);
+  document.addEventListener('DOMContentLoaded', mount);
 } else {
-  startApp();
+  mount();
 }

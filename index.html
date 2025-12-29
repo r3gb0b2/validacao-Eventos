@@ -20,7 +20,7 @@
       :root { --safe-area-top: env(safe-area-inset-top); --safe-area-bottom: env(safe-area-inset-bottom); }
       body { overscroll-behavior-y: none; background-color: #111827; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); margin: 0; }
       #root:empty::after { 
-        content: 'Iniciando ST Check-in...'; 
+        content: 'Carregando Sistema...'; 
         display: flex; 
         align-items: center; 
         justify-content: center; 
@@ -37,17 +37,17 @@
     <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@19.0.0?bundle",
-    "react-dom": "https://esm.sh/react-dom@19.0.0?bundle",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client?bundle",
-    "firebase/app": "https://esm.sh/firebase@10.12.2/app?bundle",
-    "firebase/firestore": "https://esm.sh/firebase@10.12.2/firestore?bundle",
-    "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8?bundle",
-    "jspdf": "https://esm.sh/jspdf@2.5.1?bundle",
-    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2?bundle",
-    "papaparse": "https://esm.sh/papaparse@5.4.1?bundle",
-    "jszip": "https://esm.sh/jszip@3.10.1?bundle",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174/build/pdf.min.js?bundle",
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "firebase/app": "https://esm.sh/firebase@10.12.2/app",
+    "firebase/firestore": "https://esm.sh/firebase@10.12.2/firestore",
+    "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8",
+    "jspdf": "https://esm.sh/jspdf@2.5.1",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
+    "papaparse": "https://esm.sh/papaparse@5.4.1",
+    "jszip": "https://esm.sh/jszip@3.10.1",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/",
     "firebase/": "https://esm.sh/firebase@^12.7.0/"
@@ -56,18 +56,24 @@
 </script>
 
     <script>
-      // Captura erros críticos de carregamento de módulos e exibe no UI
+      // Mostrador de erros visual para depuração rápida
       window.onerror = function(msg, url, line) {
-        const errorDiv = document.getElementById('debug-error') || document.createElement('div');
-        errorDiv.id = 'debug-error';
-        errorDiv.style.cssText = 'position:fixed; bottom:0; left:0; right:0; background:#7f1d1d; color:#fecaca; padding:20px; font-size:12px; z-index:9999; font-family:monospace;';
-        errorDiv.innerHTML = `<b>FALHA NA INICIALIZAÇÃO:</b><br>${msg}<br><br><button onclick="location.reload()" style="background:#fff; color:#000; border:0; padding:8px 12px; font-weight:bold; border-radius:4px">TENTAR NOVAMENTE</button>`;
-        document.body.appendChild(errorDiv);
+        const root = document.getElementById('root');
+        if (root && root.innerHTML === '') {
+          root.innerHTML = `
+            <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
+              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Erro de Inicialização</h1>
+              <p style="font-size: 13px; opacity: 0.8; line-height: 1.4;">${msg}</p>
+              <p style="font-size: 11px; margin-top: 10px; opacity: 0.6;">Arquivo: ${url}:${line}</p>
+              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">Tentar Novamente</button>
+            </div>
+          `;
+        }
         return false;
       };
 
       window.onunhandledrejection = function(event) {
-        console.error('Promise rejection:', event.reason);
+        console.error('Falha em Promessa:', event.reason);
       };
     </script>
   </head>
