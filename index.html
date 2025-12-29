@@ -3,12 +3,9 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>ST INGRESSOS CHECK IN</title>
     
-    <!-- CSP para iOS Capacitor: Permite CDNs e Câmera -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval' data: blob:; img-src 'self' https: data: blob:; frame-src 'self' https:; connect-src 'self' https: wss:;">
-
     <!-- PWA Settings -->
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#111827" />
@@ -21,32 +18,6 @@
     <link rel="apple-touch-icon" href="icon-192.png">
 
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-      :root {
-        --safe-area-top: env(safe-area-inset-top);
-        --safe-area-bottom: env(safe-area-inset-bottom);
-      }
-      
-      body {
-        overscroll-behavior-y: none;
-        background-color: #111827;
-        /* Padding para evitar que o conteúdo fique embaixo do notch do iPhone */
-        padding-top: var(--safe-area-top);
-        padding-bottom: var(--safe-area-bottom);
-      }
-
-      .ios-safe-top {
-        padding-top: var(--safe-area-top);
-      }
-
-      .ios-safe-bottom {
-        padding-bottom: var(--safe-area-bottom);
-      }
-
-      #reader __video {
-        object-fit: cover !important;
-      }
-    </style>
   <script type="importmap">
 {
   "imports": {

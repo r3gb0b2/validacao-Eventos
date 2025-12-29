@@ -1,29 +1,29 @@
-
 {
-  "name": "st-checkin-ios",
-  "version": "1.0.0",
-  "description": "App de Check-in ST Ingressos para iPhone",
-  "main": "index.js",
+  "name": "event-qr-code-check-in",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "build": "mkdir -p dist && cp index.html dist/ && (cp *.tsx dist/ 2>/dev/null || true) && (cp *.ts dist/ 2>/dev/null || true) && (cp *.json dist/ 2>/dev/null || true) && (cp -r components dist/ 2>/dev/null || true) && (cp -r hooks dist/ 2>/dev/null || true) && (cp -r utils dist/ 2>/dev/null || true) && echo 'Build concluído na pasta dist.'",
-    "cap-add": "npx @capacitor/cli add ios",
-    "cap-sync": "npx @capacitor/cli sync ios",
-    "cap-open": "npx @capacitor/cli open ios",
-    "cap-reset": "rm -rf ios && npm run build && npx @capacitor/cli add ios"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/ios": "^6.0.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "firebase": "^10.12.2",
+    "@google/genai": "^1.20.0",
     "html5-qrcode": "^2.3.8",
+    "firebase": "^12.2.1",
     "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.8.2",
     "papaparse": "^5.4.1",
-    "jszip": "^3.10.1",
-    "pdfjs-dist": "^3.11.174"
+    "jszip": "3.10.1",
+    "pdfjs-dist": "3.11.174"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.0.0"
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
   }
 }

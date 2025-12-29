@@ -379,8 +379,8 @@ const App: React.FC = () => {
     if (firebaseStatus === 'error') return <SetupInstructions />;
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center px-4 md:px-8 ios-safe-top ios-safe-bottom">
-            <div className="w-full max-w-6xl mx-auto space-y-6 pt-4">
+        <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
+            <div className="w-full max-w-6xl mx-auto space-y-6">
                 {!isOnline && <AlertBanner message="Você está offline." type="warning" />}
                 <header className="flex justify-between items-center w-full">
                     <div>
@@ -398,9 +398,9 @@ const App: React.FC = () => {
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} isLoading={!scansLoaded} />}
                     {view === 'generator' && db && <SecretTicketGenerator db={db} />}
-                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
+                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
                                 <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-lg overflow-hidden border-4 border-gray-700 shadow-xl">
                                     {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} extra={scanResult.extra} />}
