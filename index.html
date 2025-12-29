@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ST Check-in">
     
-    <!-- Ícone via Data URI para evitar 404 -->
+    <!-- Ícone via Data URI para evitar erro 404 -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%23FE551D%22/><text y=%22.9em%22 font-size=%2280%22 fill=%22white%22>ST</text></svg>">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%23FE551D%22/><text y=%22.9em%22 font-size=%2280%22 fill=%22white%22>ST</text></svg>">
 
@@ -21,7 +21,7 @@
       :root { --safe-area-top: env(safe-area-inset-top); --safe-area-bottom: env(safe-area-inset-bottom); }
       body { overscroll-behavior-y: none; background-color: #111827; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); margin: 0; }
       #root:empty::after { 
-        content: 'Carregando ST Check-in...'; 
+        content: 'Carregando Sistema...'; 
         display: flex; 
         align-items: center; 
         justify-content: center; 
@@ -58,6 +58,6 @@
   </head>
   <body class="bg-gray-900 text-white antialiased">
     <div id="root"></div>
-    <script type="module" src="index.js"></script>
+    <script type="module" src="index.tsx"></script>
   </body>
 </html>

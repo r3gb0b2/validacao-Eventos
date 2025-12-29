@@ -17,4 +17,6 @@ if (container) {
   } catch (err) {
     console.error("ST Check-in: Erro na montagem:", err);
   }
+} else {
+  console.error("ST Check-in: Elemento #root não encontrado no DOM.");
 }
