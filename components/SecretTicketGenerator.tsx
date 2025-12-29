@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
-import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon, PlusCircleIcon } from './Icons';
+import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon, PlusCircleIcon, LogoSVG } from './Icons';
 import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where, getDoc } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
@@ -30,6 +30,9 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const logoInputRef = useRef<HTMLInputElement>(null);
 
+    // Nova logo padrão em Base64 (SVG convertido)
+    const DEFAULT_LOGO = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMjAwIDIwMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB4PSIyMCIgeT0iNTUiIHdpZHRoPSIxNjAiIGhlaWdodD0iOTAiIHJ4PSIxNCIgZmlsbD0iI0ZFNTUxRCIvPjxjaXJjbGUgY3g9IjIwIiBjeT0iMTAwIiByPSIxNSIgZmlsbD0iIzExMTgyNyIvPjxjaXJjbGUgY3g9IjE4MCIgY3k9IjEwMCIgcj0iMTUiIGZpbGw9IiMxMTE4MjciLz48cGF0aCBkPSJNNzUgMTAwTDkyIDExN0wxMjUgODMiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMTQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxyZWN0IHg9IjQ1IiB5PSI3MCIgd2lkdGg9IjQiIGhlaWdodD0iNjAiIHJ4PSIyIiBmaWxsPSJ3aGl0ZSIgZmlsbC1vcGFjaXR5PSIwLjMiLz48cmVjdCB4PSI1NCIgeT0iNzAiIHdpZHRoPSIyIiBoZWlnaHQ9IjYwIiByeD0iMSIgZmlsbD0id2hpdGUiIGZpbGwtb3BhY2l0eT0iMC4zIi8+PC9zdmc+";
+
     const [formData, setFormData] = useState<TicketPdfDetails>({
         eventName: 'NOME DO EVENTO',
         openingTime: '01/01/2026 16:00',
@@ -39,7 +42,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         contact: '+5500000000000',
         sector: 'Setor Único',
         ownerName: 'PARTICIPANTE',
-        logoUrl: 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'
+        logoUrl: DEFAULT_LOGO
     });
 
     // 1. Carregar lista de Eventos
@@ -77,7 +80,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         contact: data.contact || prev.contact,
                         sector: data.sector || prev.sector,
                         ownerName: data.ownerName || prev.ownerName,
-                        logoUrl: data.logoUrl || prev.logoUrl
+                        logoUrl: data.logoUrl || prev.logoUrl || DEFAULT_LOGO
                     }));
                 }
             } catch (e) {
@@ -281,7 +284,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             <div className="w-full max-w-5xl bg-gray-800 rounded-2xl shadow-2xl border border-orange-500/20 overflow-hidden">
                 <div className="bg-[#fe551d] p-6 flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center space-x-4">
-                        <TicketIcon className="w-10 h-10 text-white" />
+                        <LogoSVG className="w-10 h-10 text-white" />
                         <div>
                             <h1 className="text-2xl font-bold">Gerador SecretTicket</h1>
                             <p className="text-orange-100 text-sm">Personalize e gere lotes de ingressos PDF.</p>
@@ -366,7 +369,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             </div>
                             <div className="flex items-center gap-4">
                                 <div className="w-16 h-16 bg-gray-900 rounded-lg border border-gray-600 flex items-center justify-center overflow-hidden shrink-0">
-                                    {formData.logoUrl ? <img src={formData.logoUrl} className="w-full h-full object-contain" /> : <TableCellsIcon className="w-6 h-6 text-gray-700" />}
+                                    {formData.logoUrl ? <img src={formData.logoUrl} className="w-full h-full object-contain" /> : <LogoSVG className="w-6 h-6 text-gray-700" />}
                                 </div>
                                 <div className="flex-1 space-y-2">
                                     <input type="file" ref={logoInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
