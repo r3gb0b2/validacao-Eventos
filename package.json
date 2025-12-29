@@ -5,9 +5,9 @@
   "description": "App de Check-in ST Ingressos para iPhone",
   "main": "index.js",
   "scripts": {
-    "build": "mkdir -p dist && cp index.html dist/ && cp index.tsx dist/ && cp types.ts dist/ && cp firebaseConfig.ts dist/ && cp manifest.json dist/ && cp metadata.json dist/ && cp -r components dist/ 2>/dev/null || true && cp -r hooks dist/ 2>/dev/null || true && cp -r utils dist/ 2>/dev/null || true",
+    "build": "mkdir -p dist && cp index.html index.tsx App.tsx types.ts firebaseConfig.ts manifest.json metadata.json dist/ && cp -r components dist/ 2>/dev/null || true && cp -r hooks dist/ 2>/dev/null || true && cp -r utils dist/ 2>/dev/null || true",
     "cap-add-ios": "npx @capacitor/cli add ios",
-    "cap-sync": "npx @capacitor/cli sync",
+    "cap-sync": "npx @capacitor/cli sync ios",
     "cap-open": "npx @capacitor/cli open ios"
   },
   "dependencies": {
