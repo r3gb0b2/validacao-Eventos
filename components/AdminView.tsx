@@ -50,6 +50,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     useEffect(() => {
         if (!selectedEvent || !db) return;
         
+        // Listener para Grupos
         const unsubStats = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'stats'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
@@ -62,6 +63,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             setGroups([]);
         });
 
+        // Listener para Importações
         const unsubImport = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();

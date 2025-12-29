@@ -28,6 +28,7 @@ const Stats: React.FC<StatsProps> = ({
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const filterRef = useRef<HTMLDivElement>(null);
 
+    // --- FILTRAGEM DE SEGURANÇA: REMOVER SECRETOS ---
     const nonSecretTickets = useMemo(() => {
         return allTickets.filter(t => t.source !== 'secret_generator');
     }, [allTickets]);
@@ -44,7 +45,9 @@ const Stats: React.FC<StatsProps> = ({
 
     const normalize = (s: string) => (s || '').trim().toLowerCase();
 
+    // LÓGICA DE FILTRO DE CONTAGEM
     const getGeneralStats = (tickets: Ticket[]) => {
+        // Garante que mesmo em sub-filtros, segredo não passe
         const filtered = tickets.filter(t => {
             if (t.source === 'secret_generator') return false;
             const ticketSectorNorm = normalize(t.sector);
@@ -117,25 +120,31 @@ const Stats: React.FC<StatsProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Cards de Resumo */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl">
+          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-full -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
               <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest">Carga Total</p>
               <p className="text-4xl font-black text-white mt-1">{generalStats.total}</p>
           </div>
-          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl">
+          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-full -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
               <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest">Check-ins</p>
               <p className="text-4xl font-black text-green-400 mt-1">{generalStats.scanned}</p>
           </div>
-           <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl">
+           <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-full -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
               <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest">Ocupação</p>
               <p className="text-4xl font-black text-orange-400 mt-1">{generalStats.percentage}%</p>
           </div>
-          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl">
+          <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-24 h-24 bg-yellow-500/5 rounded-full -mr-8 -mt-8 transition-transform group-hover:scale-150"></div>
               <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest">Restantes</p>
               <p className="text-4xl font-black text-yellow-400 mt-1">{generalStats.remaining}</p>
           </div>
       </div>
 
+      {/* Tabela de Detalhamento */}
       <div className="bg-gray-800 rounded-[2rem] p-6 border border-gray-700 shadow-2xl">
           <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-black text-white flex items-center uppercase tracking-tighter">
@@ -154,9 +163,9 @@ const Stats: React.FC<StatsProps> = ({
                   {isFilterOpen && (
                       <div className="absolute right-0 mt-3 w-64 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl z-50 p-3 animate-fade-in">
                           <p className="text-[10px] font-black text-gray-600 uppercase mb-2 px-2">Setores Disponíveis</p>
-                          <div className="max-h-60 overflow-y-auto">
+                          <div className="max-h-60 overflow-y-auto custom-scrollbar">
                             {visibleSectorNames.map(sector => (
-                                <label key={sector} className="flex items-center p-2.5 hover:bg-gray-800 rounded-xl cursor-pointer text-xs">
+                                <label key={sector} className="flex items-center p-2.5 hover:bg-gray-800 rounded-xl cursor-pointer text-xs group">
                                     <input 
                                         type="checkbox" 
                                         checked={selectedSectors.includes(sector)} 
@@ -164,9 +173,9 @@ const Stats: React.FC<StatsProps> = ({
                                             if (selectedSectors.includes(sector)) setSelectedSectors(selectedSectors.filter(s => s !== sector));
                                             else setSelectedSectors([...selectedSectors, sector]);
                                         }} 
-                                        className="mr-3 w-4 h-4 accent-orange-500" 
+                                        className="mr-3 w-4 h-4 accent-orange-500 rounded border-gray-700 bg-gray-900" 
                                     />
-                                    <span className="text-gray-300">{sector}</span>
+                                    <span className="text-gray-300 group-hover:text-white transition-colors">{sector}</span>
                                 </label>
                             ))}
                           </div>
@@ -191,18 +200,42 @@ const Stats: React.FC<StatsProps> = ({
                           <tr key={stats.displayName} className={`group hover:bg-gray-700/30 transition-all ${stats.isGroup ? 'bg-orange-500/5' : ''}`}>
                               <td className="px-4 py-4">
                                   <div className="flex items-center">
-                                      <span className={`w-1.5 h-6 rounded-full mr-3 ${stats.isGroup ? 'bg-orange-500' : 'bg-gray-700'}`}></span>
-                                      <p className={`text-sm font-bold ${stats.isGroup ? 'text-orange-400' : 'text-white'}`}>{stats.displayName}</p>
+                                      {stats.isGroup ? (
+                                          <span className="w-1.5 h-6 bg-orange-500 rounded-full mr-3"></span>
+                                      ) : (
+                                          <span className="w-1.5 h-6 bg-gray-700 rounded-full mr-3"></span>
+                                      )}
+                                      <div>
+                                          <p className={`text-sm font-bold ${stats.isGroup ? 'text-orange-400' : 'text-white'}`}>
+                                            {stats.displayName}
+                                          </p>
+                                          {stats.isGroup && (
+                                              <p className="text-[9px] text-gray-500 uppercase font-black tracking-widest mt-0.5">Grupo Consolidado</p>
+                                          )}
+                                      </div>
                                   </div>
                               </td>
                               <td className="py-4 text-center text-sm font-bold text-gray-400">{stats.total}</td>
                               <td className="py-4 text-center text-lg font-black text-green-400">{stats.scanned}</td>
                               <td className="py-4 text-center text-sm font-bold text-yellow-500/80">{stats.total - stats.scanned}</td>
                               <td className="px-4 py-4 text-center">
-                                  <span className="text-sm font-black text-white">{stats.total > 0 ? ((stats.scanned/stats.total)*100).toFixed(1) : 0}%</span>
+                                  <div className="flex flex-col items-center">
+                                      <span className="text-sm font-black text-white">{stats.total > 0 ? ((stats.scanned/stats.total)*100).toFixed(1) : 0}%</span>
+                                      <div className="w-16 bg-gray-900 h-1 rounded-full mt-1 overflow-hidden">
+                                          <div 
+                                            className={`h-full ${stats.isGroup ? 'bg-orange-500' : 'bg-blue-500'}`} 
+                                            style={{ width: `${stats.total > 0 ? (stats.scanned/stats.total)*100 : 0}%` }}
+                                          ></div>
+                                      </div>
+                                  </div>
                               </td>
                           </tr>
                       ))}
+                      {tableData.length === 0 && (
+                          <tr>
+                              <td colSpan={5} className="py-20 text-center text-gray-600 italic text-sm">Nenhum dado disponível para os filtros selecionados.</td>
+                          </tr>
+                      )}
                   </tbody>
               </table>
           </div>

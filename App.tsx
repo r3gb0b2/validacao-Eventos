@@ -1,4 +1,5 @@
 
+// FIX: Implement the main App component, resolving "not a module" and other related errors.
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getDb } from './firebaseConfig';
 import { collection, onSnapshot, doc, writeBatch, serverTimestamp, query, orderBy, addDoc, Timestamp, Firestore, setDoc, limit, updateDoc, getDocs, where, getDoc } from 'firebase/firestore';
@@ -15,7 +16,7 @@ import PublicStatsView from './components/PublicStatsView';
 import LoginModal from './components/LoginModal';
 import SecretTicketGenerator from './components/SecretTicketGenerator'; 
 import OperatorMonitor from './components/OperatorMonitor'; 
-import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon, LogoSVG } from './components/Icons';
+import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
 import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types';
@@ -51,6 +52,7 @@ const App: React.FC = () => {
 
     const [selectedSector, setSelectedSector] = useState<SectorFilter>('All');
     
+    // VIEW STATE PERSISTENCE
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
         try {
             return (localStorage.getItem('current_view') as any) || 'scanner';
@@ -75,6 +77,7 @@ const App: React.FC = () => {
     const lastCodeTimeRef = useRef<number>(0);
     const autoSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+    // Persist View
     useEffect(() => {
         localStorage.setItem('current_view', view);
     }, [view]);
@@ -84,6 +87,7 @@ const App: React.FC = () => {
         return new Map(allTickets.map(ticket => [ticket.id, ticket]));
     }, [allTickets]);
 
+    // --- LÓGICA DE FILTRAGEM PARA TICKETS SECRETOS ---
     const filteredAllTickets = useMemo(() => {
         return allTickets.filter(t => t.source !== 'secret_generator');
     }, [allTickets]);
@@ -247,6 +251,7 @@ const App: React.FC = () => {
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
             const ticketsData = snapshot.docs.map(doc => {
+                // HABILITA ESTIMATIVA PARA OFFLINE
                 const data = doc.data({ serverTimestamps: 'estimate' });
                 const ticket: Ticket = { id: doc.id, sector: data.sector || 'Geral', status: data.status || 'AVAILABLE', source: data.source, details: data.details };
                 
@@ -336,6 +341,7 @@ const App: React.FC = () => {
         const ticket = ticketsMap.get(ticketId);
         const eventId = selectedEvent.id;
         
+        // PRIORIDADE 1: EXIBIR ALERTA VISUAL IMEDIATAMENTE
         if (!ticket) {
             showScanResult('INVALID', `Não encontrado: ${ticketId}`);
             addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Desconhecido', deviceId, operator: operatorName });
@@ -349,13 +355,14 @@ const App: React.FC = () => {
             return;
         }
 
+        // Caso válido
         showScanResult('VALID', `Liberado: ${ticket.sector}!`);
         
         try {
             const batch = writeBatch(db);
             batch.update(doc(db, 'events', eventId, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
             batch.set(doc(collection(db, 'events', eventId, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
-            batch.commit();
+            batch.commit(); // Não aguardamos o commit para não atrasar a interface
         } catch (error) { 
             console.error("Erro ao salvar scan", error);
         }
@@ -376,12 +383,9 @@ const App: React.FC = () => {
             <div className="w-full max-w-6xl mx-auto space-y-6 pt-4">
                 {!isOnline && <AlertBanner message="Você está offline." type="warning" />}
                 <header className="flex justify-between items-center w-full">
-                    <div className="flex items-center space-x-3">
-                        <LogoSVG className="w-10 h-10 text-white" />
-                        <div>
-                            <h1 className="text-2xl font-black text-white tracking-tighter leading-tight">ST CHECK-IN</h1>
-                            <p className="text-[10px] font-bold text-orange-500 uppercase tracking-widest">{selectedEvent?.name || 'Selecione um Evento'}</p>
-                        </div>
+                    <div>
+                        <h1 className="text-3xl font-bold text-orange-500 tracking-tighter">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
+                        {selectedEvent && <button onClick={() => { setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="text-sm text-gray-400 hover:underline">Trocar Evento</button>}
                     </div>
                     <div className="flex items-center space-x-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Configurações"><CogIcon className="w-6 h-6" /></button>
@@ -394,7 +398,7 @@ const App: React.FC = () => {
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} isLoading={!scansLoaded} />}
                     {view === 'generator' && db && <SecretTicketGenerator db={db} />}
-                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
+                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
                             <div className="space-y-4">
