@@ -20,7 +20,7 @@
       :root { --safe-area-top: env(safe-area-inset-top); --safe-area-bottom: env(safe-area-inset-bottom); }
       body { overscroll-behavior-y: none; background-color: #111827; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); margin: 0; }
       #root:empty::after { 
-        content: 'Carregando Aplicativo...'; 
+        content: 'Carregando Sistema...'; 
         display: flex; 
         align-items: center; 
         justify-content: center; 
@@ -56,27 +56,18 @@
 </script>
 
     <script>
-      // Mostrador de erros visual caso a inicialização falhe
-      const showError = (msg) => {
-        const root = document.getElementById('root');
-        if (root) {
-          root.innerHTML = `
-            <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
-              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Falha Crítica ao Iniciar</h1>
-              <p style="font-size: 13px; opacity: 0.8; line-height: 1.4;">${msg}</p>
-              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">Tentar Novamente</button>
-            </div>
-          `;
-        }
-      };
-
-      window.onerror = (msg, url, line) => {
-        showError(`Erro de Script: ${msg}<br><small>Arquivo: ${url}:${line}</small>`);
+      // Sistema de alerta de erro para depuração em dispositivos móveis
+      window.onerror = function(msg, url, line, col, error) {
+        const errorDiv = document.getElementById('error-display') || document.createElement('div');
+        errorDiv.id = 'error-display';
+        errorDiv.style.cssText = 'position:fixed; bottom:0; left:0; right:0; background:#7f1d1d; color:#fecaca; padding:15px; font-size:10px; z-index:9999; font-family:monospace; border-top:2px solid #ef4444';
+        errorDiv.innerHTML = `<b>ERRO DE CARREGAMENTO:</b><br>${msg}<br><small>${url}:${line}</small><br><button onclick="location.reload()" style="margin-top:10px; background:#fff; color:#000; border:0; padding:4px 8px; font-weight:bold; border-radius:4px">Recarregar</button>`;
+        document.body.appendChild(errorDiv);
         return false;
       };
 
-      window.onunhandledrejection = (event) => {
-        showError(`Erro de Módulo: ${event.reason}`);
+      window.onunhandledrejection = function(event) {
+        console.error('Promise rejection:', event.reason);
       };
     </script>
   </head>
