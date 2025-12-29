@@ -1,9 +1,8 @@
-
 import React, { useMemo, useState, useEffect } from 'react';
-import { Ticket, DisplayableScanLog, Event, SectorGroup } from '../../types.ts';
-import Stats from '../Stats.tsx';
-import { generateEventReport } from '../../utils/pdfGenerator.ts';
-import { CloudDownloadIcon, LinkIcon, TableCellsIcon, FunnelIcon } from '../Icons.tsx';
+import { Ticket, DisplayableScanLog, Event, SectorGroup } from '../../types';
+import Stats from '../Stats';
+import { generateEventReport } from '../../utils/pdfGenerator';
+import { CloudDownloadIcon, LinkIcon, TableCellsIcon, FunnelIcon } from '../Icons';
 
 interface DashboardModuleProps {
   selectedEvent: Event;

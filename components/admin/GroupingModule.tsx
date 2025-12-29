@@ -1,8 +1,6 @@
-
 import React, { useState } from 'react';
 import { SectorGroup, Event } from '../../types';
 import { Firestore, doc, setDoc } from 'firebase/firestore';
-// FIX: Added missing AlertTriangleIcon to imports
 import { PlusCircleIcon, TrashIcon, TableCellsIcon, CheckCircleIcon, AlertTriangleIcon } from '../Icons';
 
 interface GroupingModuleProps {
@@ -17,7 +15,6 @@ const GroupingModule: React.FC<GroupingModuleProps> = ({ db, selectedEvent, sect
     const [newGroupName, setNewGroupName] = useState('');
     const [isSaving, setIsSaving] = useState(false);
 
-    // SEGURANÇA MÁXIMA: Garante que os iteráveis sejam arrays válidos antes de qualquer processamento
     const safeGroups = Array.isArray(groups) ? groups : [];
     const safeSectorNames = Array.isArray(sectorNames) ? sectorNames : [];
 
