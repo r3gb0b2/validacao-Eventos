@@ -20,7 +20,7 @@
       :root { --safe-area-top: env(safe-area-inset-top); --safe-area-bottom: env(safe-area-inset-bottom); }
       body { overscroll-behavior-y: none; background-color: #111827; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); margin: 0; }
       #root:empty::after { 
-        content: 'Iniciando sistema...'; 
+        content: 'Carregando Aplicativo...'; 
         display: flex; 
         align-items: center; 
         justify-content: center; 
@@ -37,17 +37,17 @@
     <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@19.0.0?bundle",
-    "react-dom": "https://esm.sh/react-dom@19.0.0?bundle",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client?bundle&external=react",
-    "firebase/app": "https://esm.sh/firebase@10.12.2/app?bundle",
-    "firebase/firestore": "https://esm.sh/firebase@10.12.2/firestore?bundle",
-    "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8?bundle",
-    "jspdf": "https://esm.sh/jspdf@2.5.1?bundle",
-    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2?bundle",
-    "papaparse": "https://esm.sh/papaparse@5.4.1?bundle",
-    "jszip": "https://esm.sh/jszip@3.10.1?bundle",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174?bundle",
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
+    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
+    "html5-qrcode": "https://esm.sh/html5-qrcode@2.3.8",
+    "jspdf": "https://esm.sh/jspdf@2.5.1",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.8.2",
+    "papaparse": "https://esm.sh/papaparse@5.4.1",
+    "jszip": "https://esm.sh/jszip@3.10.1",
+    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/",
     "firebase/": "https://esm.sh/firebase@^12.7.0/"
@@ -56,33 +56,27 @@
 </script>
 
     <script>
-      // Captura erros globais e de promessas (comum em módulos ESM)
-      const showError = (error) => {
-        const errorDiv = document.getElementById('debug-error') || document.createElement('div');
-        errorDiv.id = 'debug-error';
-        errorDiv.style.position = 'fixed';
-        errorDiv.style.bottom = '0';
-        errorDiv.style.left = '0';
-        errorDiv.style.right = '0';
-        errorDiv.style.backgroundColor = '#7f1d1d';
-        errorDiv.style.color = '#fecaca';
-        errorDiv.style.padding = '20px';
-        errorDiv.style.zIndex = '9999';
-        errorDiv.style.fontSize = '12px';
-        errorDiv.style.fontFamily = 'monospace';
-        errorDiv.style.maxHeight = '50vh';
-        errorDiv.style.overflow = 'auto';
-        errorDiv.innerHTML = `<b>FALHA NA INICIALIZAÇÃO:</b><br>${error}<br><br><button onclick="location.reload()" style="background:#fff; color:#000; border:0; padding:5px 10px; font-weight:bold; border-radius:4px">Recarregar</button>`;
-        document.body.appendChild(errorDiv);
+      // Mostrador de erros visual caso a inicialização falhe
+      const showError = (msg) => {
+        const root = document.getElementById('root');
+        if (root) {
+          root.innerHTML = `
+            <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626;">
+              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Falha ao Carregar</h1>
+              <p style="font-size: 13px; opacity: 0.8; line-height: 1.4;">${msg}</p>
+              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%;">Tentar Novamente</button>
+            </div>
+          `;
+        }
       };
 
       window.onerror = (msg, url, line) => {
-        showError(`${msg} em ${url}:${line}`);
+        showError(`Erro de Script: ${msg}<br><small>${url}:${line}</small>`);
         return false;
       };
 
       window.onunhandledrejection = (event) => {
-        showError(`Erro Assíncrono: ${event.reason}`);
+        showError(`Erro de Módulo: ${event.reason}`);
       };
     </script>
   </head>
