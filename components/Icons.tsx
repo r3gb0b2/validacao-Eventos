@@ -5,17 +5,6 @@ interface IconProps {
   className?: string;
 }
 
-export const LogoSVG: React.FC<IconProps> = ({ className }) => (
-  <svg viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
-    <rect x="20" y="55" width="160" height="90" rx="14" fill="#FE551D" />
-    <circle cx="20" cy="100" r="15" fill="currentColor" />
-    <circle cx="180" cy="100" r="15" fill="currentColor" />
-    <path d="M75 100L92 117L125 83" stroke="white" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-    <rect x="45" y="70" width="4" height="60" rx="2" fill="white" fillOpacity="0.3" />
-    <rect x="54" y="70" width="2" height="60" rx="1" fill="white" fillOpacity="0.3" />
-  </svg>
-);
-
 export const CogIcon: React.FC<IconProps> = ({ className }) => (
   <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />

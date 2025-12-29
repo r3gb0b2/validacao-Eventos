@@ -48,9 +48,7 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
 
   doc.setTextColor(255, 255, 255);
 
-  // Logo padrão em Base64 para garantir funcionamento offline
-  const DEFAULT_LOGO = "data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMjAwIDIwMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB4PSIyMCIgeT0iNTUiIHdpZHRoPSIxNjAiIGhlaWdodD0iOTAiIHJ4PSIxNCIgZmlsbD0iI0ZFNTUxRCIvPjxjaXJjbGUgY3g9IjIwIiBjeT0iMTAwIiByPSIxNSIgZmlsbD0iIzExMTgyNyIvPjxjaXJjbGUgY3g9IjE4MCIgY3k9IjEwMCIgcj0iMTUiIGZpbGw9IiMxMTE4MjciLz48cGF0aCBkPSJNNzUgMTAwTDkyIDExN0wxMjUgODMiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMTQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxyZWN0IHg9IjQ1IiB5PSI3MCIgd2lkdGg9IjQiIGhlaWdodD0iNjAiIHJ4PSIyIiBmaWxsPSJ3aGl0ZSIgZmlsbC1vcGFjaXR5PSIwLjMiLz48cmVjdCB4PSI1NCIgeT0iNzAiIHdpZHRoPSIyIiBoZWlnaHQ9IjYwIiByeD0iMSIgZmlsbD0id2hpdGUiIGZpbGwtb3BhY2l0eT0iMC4zIi8+PC9zdmc+";
-  const finalLogoUrl = details.logoUrl || DEFAULT_LOGO;
+  const finalLogoUrl = details.logoUrl || 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png';
   
   try {
     const logoImg = await loadImage(finalLogoUrl);
