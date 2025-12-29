@@ -3,33 +3,33 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
 
-console.log("ST Check-in: Iniciando montagem do DOM...");
+console.log("ST Check-in: Módulo index.tsx carregado.");
 
-const rootElement = document.getElementById('root');
+const startApp = () => {
+  const rootElement = document.getElementById('root');
 
-if (!rootElement) {
-  const msg = "Erro crítico: Elemento #root não encontrado no HTML.";
-  console.error(msg);
-  throw new Error(msg);
-}
+  if (!rootElement) {
+    console.error("ST Check-in: Elemento #root não encontrado.");
+    return;
+  }
 
-try {
-  const root = ReactDOM.createRoot(rootElement);
-  root.render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  );
-  console.log("ST Check-in: React montado com sucesso.");
-} catch (error: any) {
-  console.error("ST Check-in: Falha ao renderizar App:", error);
-  // Força exibição do erro na tela se o montador falhar
-  const errorOverlay = document.createElement('div');
-  errorOverlay.className = "fixed inset-0 bg-red-900 text-white p-10 z-[10000] overflow-auto";
-  errorOverlay.innerHTML = `
-    <h1 class="text-2xl font-bold mb-4">Falha na Renderização</h1>
-    <pre class="bg-black/30 p-4 rounded text-xs">${error?.stack || error?.message || error}</pre>
-    <button onclick="window.location.reload()" class="mt-4 bg-white text-red-900 px-4 py-2 rounded font-bold">Tentar Novamente</button>
-  `;
-  document.body.appendChild(errorOverlay);
+  try {
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
+    console.log("ST Check-in: Renderização iniciada.");
+  } catch (error: any) {
+    console.error("ST Check-in: Erro fatal no ReactDOM:", error);
+    throw error; // Repassa para o onunhandledrejection no index.html
+  }
+};
+
+// Aguarda o DOM estar pronto para garantir que o ImportMap foi processado
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
 }
