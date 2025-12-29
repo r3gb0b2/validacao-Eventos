@@ -1,24 +1,24 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { getDb } from './firebaseConfig.ts';
+import { getDb } from './firebaseConfig';
 import { collection, onSnapshot, doc, writeBatch, serverTimestamp, query, orderBy, addDoc, Timestamp, Firestore, setDoc, limit, updateDoc, getDocs, where, getDoc } from 'firebase/firestore';
 import Papa from 'papaparse';
 
-import Scanner from './components/Scanner.tsx';
-import StatusDisplay from './components/StatusDisplay.tsx';
-import AdminView from './components/AdminView.tsx';
-import SetupInstructions from './components/SetupInstructions.tsx';
-import AlertBanner from './components/AlertBanner.tsx';
-import EventSelector from './components/EventSelector.tsx';
-import TicketList from './components/TicketList.tsx';
-import PublicStatsView from './components/PublicStatsView.tsx';
-import LoginModal from './components/LoginModal.tsx';
-import SecretTicketGenerator from './components/SecretTicketGenerator.tsx'; 
-import OperatorMonitor from './components/OperatorMonitor.tsx'; 
-import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon, LogoSVG } from './components/Icons.tsx';
-import { useSound } from './hooks/useSound.ts';
+import Scanner from './components/Scanner';
+import StatusDisplay from './components/StatusDisplay';
+import AdminView from './components/AdminView';
+import SetupInstructions from './components/SetupInstructions';
+import AlertBanner from './components/AlertBanner';
+import EventSelector from './components/EventSelector';
+import TicketList from './components/TicketList';
+import PublicStatsView from './components/PublicStatsView';
+import LoginModal from './components/LoginModal';
+import SecretTicketGenerator from './components/SecretTicketGenerator'; 
+import OperatorMonitor from './components/OperatorMonitor'; 
+import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon, LogoSVG } from './components/Icons';
+import { useSound } from './hooks/useSound';
 
-import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types.ts';
+import { Ticket, ScanStatus, DisplayableScanLog, SectorFilter, Event, User, ImportSource } from './types';
 
 const getDeviceId = () => {
     try {
@@ -394,7 +394,7 @@ const App: React.FC = () => {
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} isLoading={!scansLoaded} />}
                     {view === 'generator' && db && <SecretTicketGenerator db={db} />}
-                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
+                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
                             <div className="space-y-4">

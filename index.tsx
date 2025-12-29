@@ -13,10 +13,8 @@ if (container) {
         <App />
       </React.StrictMode>
     );
-    console.log("ST Check-in: Inicializado.");
+    console.log("ST Check-in: Inicializado com sucesso.");
   } catch (err) {
     console.error("ST Check-in: Erro na montagem:", err);
   }
-} else {
-  console.error("ST Check-in: Container #root não encontrado.");
 }

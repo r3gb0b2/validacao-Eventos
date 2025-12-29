@@ -12,14 +12,16 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ST Check-in">
     
-    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%23FE551D%22/><text y=%22.9em%22 font-size=%2290%22 fill=%22white%22>ST</text></svg>">
+    <!-- Ícone via Data URI para evitar 404 -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%23FE551D%22/><text y=%22.9em%22 font-size=%2280%22 fill=%22white%22>ST</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 fill=%22%23FE551D%22/><text y=%22.9em%22 font-size=%2280%22 fill=%22white%22>ST</text></svg>">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       :root { --safe-area-top: env(safe-area-inset-top); --safe-area-bottom: env(safe-area-inset-bottom); }
       body { overscroll-behavior-y: none; background-color: #111827; padding-top: var(--safe-area-top); padding-bottom: var(--safe-area-bottom); margin: 0; }
       #root:empty::after { 
-        content: 'Carregando Sistema...'; 
+        content: 'Carregando ST Check-in...'; 
         display: flex; 
         align-items: center; 
         justify-content: center; 
@@ -53,26 +55,9 @@
   }
 }
 </script>
-
-    <script>
-      window.onerror = function(msg, url, line) {
-        const root = document.getElementById('root');
-        if (root && root.innerHTML === '') {
-          root.innerHTML = `
-            <div style="padding: 24px; color: #fecaca; background: #450a0a; font-family: sans-serif; border-radius: 16px; margin: 20px; border: 1px solid #dc2626; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);">
-              <h1 style="font-size: 18px; font-weight: bold; margin-bottom: 8px;">Falha de Carregamento</h1>
-              <p style="font-size: 13px; opacity: 0.8; line-height: 1.4;">${msg}</p>
-              <p style="font-size: 11px; margin-top: 10px; opacity: 0.6;">Local: ${url}:${line}</p>
-              <button onclick="location.reload()" style="margin-top: 20px; background: #dc2626; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer;">Tentar Novamente</button>
-            </div>
-          `;
-        }
-        return false;
-      };
-    </script>
   </head>
   <body class="bg-gray-900 text-white antialiased">
     <div id="root"></div>
-    <script type="module" src="index.tsx"></script>
+    <script type="module" src="index.js"></script>
   </body>
 </html>
