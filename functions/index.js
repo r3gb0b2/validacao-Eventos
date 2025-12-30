@@ -1,20 +1,23 @@
+
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const Papa = require('papaparse');
 
-// Configuração Global (Opcional: define a região padrão como us-central1 ou a que preferir)
+// Define a região padrão
 setGlobalOptions({ region: 'us-central1' });
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Cloud Function agendada para rodar a cada 5 minutos usando a API v2.
- * Percorre todos os eventos e processa as fontes com 'autoImport' ativo.
+ * Função Renomeada para evitar erro de upgrade de geração do Firebase.
+ * Roda a cada 5 minutos.
  */
-exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
+exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
+    console.log("Iniciando ciclo de auto-importação...");
+    
     const eventsSnapshot = await db.collection('events').get();
     
     for (const eventDoc of eventsSnapshot.docs) {
@@ -22,10 +25,11 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
         const eventData = eventDoc.data();
         const eventName = eventData.name || 'Sem Nome';
 
-        // 1. Carregar fontes de importação
+        // 1. Carregar configurações de importação
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         
+        // CORREÇÃO: exists é uma propriedade booleana no Admin SDK
         if (!importSnap.exists) continue;
         
         const sources = importSnap.data().sources || [];
@@ -33,18 +37,19 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
 
         if (autoSources.length === 0) continue;
 
-        // 2. Carregar tickets existentes para comparação
+        // 2. Carregar IDs existentes para evitar duplicatas e processar check-ins
         const ticketsSnapshot = await db.collection(`events/${eventId}/tickets`).get();
         const existingIds = new Set();
         const ticketsMap = new Map();
         
         ticketsSnapshot.forEach(doc => {
-            existingIds.add(doc.id);
-            ticketsMap.set(doc.id, doc.data());
+            const id = String(doc.id).trim();
+            existingIds.add(id);
+            ticketsMap.set(id, doc.data());
         });
 
         for (const source of autoSources) {
-            console.log(`[${eventName}] Iniciando importação da fonte: ${source.name}`);
+            console.log(`[${eventName}] Processando fonte: ${source.name}`);
             
             let newItems = 0;
             let updatedCount = 0;
@@ -57,7 +62,9 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
 
                 if (source.type === 'google_sheets') {
                     let fetchUrl = source.url.trim();
-                    if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
+                    if (fetchUrl.includes('/edit')) {
+                        fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
+                    }
                     
                     const response = await axios.get(fetchUrl);
                     const csvData = Papa.parse(response.data, { header: true, skipEmptyLines: true });
@@ -75,8 +82,6 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
                                     source.type === 'buyers' ? 'buyers' : 'tickets';
                     
                     const baseUrl = source.url.endsWith('/') ? source.url.slice(0, -1) : source.url;
-                    
-                    // Tratativa para tokens
                     const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
 
                     const response = await axios.get(`${baseUrl}/${endpoint}`, {
@@ -102,7 +107,7 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
                     }));
                 }
 
-                // 3. Processar itens
+                // 3. Cruzamento de dados
                 for (const item of items) {
                     const code = String(item.code || '').trim();
                     if (!code) continue;
@@ -145,7 +150,7 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
                     }
                 }
 
-                // 4. Salvar em lotes (Batch)
+                // 4. Gravação em Batch (Lotes)
                 if (ticketsToSave.length > 0) {
                     const BATCH_SIZE = 400;
                     for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
@@ -158,7 +163,7 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
                     }
                 }
 
-                // 5. Registrar Log e atualizar lastImportTime
+                // 5. Registrar Log e Atualizar Timestamp
                 if (newItems > 0 || updatedCount > 0) {
                     await db.collection(`events/${eventId}/import_logs`).add({
                         timestamp: Date.now(),
@@ -171,14 +176,13 @@ exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
                     });
                 }
 
-                // Atualizar o timestamp da última importação na fonte
                 const updatedSources = sources.map(s => 
                     s.id === source.id ? { ...s, lastImportTime: Date.now() } : s
                 );
                 await importRef.update({ sources: updatedSources });
 
             } catch (err) {
-                console.error(`Erro ao processar fonte ${source.name} do evento ${eventName}:`, err);
+                console.error(`Erro na fonte ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: Date.now(),
                     sourceName: source.name,
