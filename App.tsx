@@ -15,6 +15,9 @@ import LoginModal from './components/LoginModal';
 import SecretTicketGenerator from './components/SecretTicketGenerator'; 
 import OperatorMonitor from './components/OperatorMonitor'; 
 import AlertConfirmationModal from './components/AlertConfirmationModal';
+// Import missing modules to fix "Cannot find name" errors in App component
+import SecurityModule from './components/admin/SecurityModule';
+import LookupModule from './components/admin/LookupModule';
 import { CogIcon, LogoutIcon, TicketIcon, UsersIcon, FunnelIcon, CheckCircleIcon, QrCodeIcon } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
@@ -36,9 +39,9 @@ const getDeviceId = () => {
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
-    const [isInitializing, setIsInitializing] = useState(true); // Flag de inicialização
+    const [isInitializing, setIsInitializing] = useState(true);
     
-    // --- PERSISTÊNCIA SÍNCRONA DE SESSÃO ---
+    // --- RESTAURAÇÃO DE SESSÃO ---
     const [currentUser, setCurrentUser] = useState<User | null>(() => {
         try {
             const saved = localStorage.getItem('auth_user_session');
@@ -51,8 +54,9 @@ const App: React.FC = () => {
         return null;
     });
 
-    // --- PERSISTÊNCIA SÍNCRONA DE NAVEGAÇÃO ---
-    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
+    // --- RESTAURAÇÃO DE VISÃO ---
+    // Updated view state type definition to include 'security' and 'lookup' modes
+    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators' | 'security' | 'lookup'>(() => {
         const params = new URLSearchParams(window.location.search);
         if (params.get('mode') === 'stats') return 'public_stats';
         
@@ -92,6 +96,7 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
 
+    // Salva a view atual no localStorage para persistência
     useEffect(() => { 
         localStorage.setItem('current_view', view); 
     }, [view]);
@@ -115,6 +120,7 @@ const App: React.FC = () => {
         }).catch(() => setFirebaseStatus('error'));
     }, []);
 
+    // Listener de Eventos com Lógica de Hidratação de Sessão
     useEffect(() => {
         if (!db) return;
         
@@ -130,7 +136,7 @@ const App: React.FC = () => {
             }));
             setEvents(eventsData);
             
-            // Tentativa de restauração
+            // Tenta restaurar o evento que estava sendo usado
             if (savedEventId) {
                 const found = eventsData.find(e => e.id === savedEventId);
                 if (found) {
@@ -142,15 +148,19 @@ const App: React.FC = () => {
                         setSelectedSectors(parsed.sectors || []);
                         setIsOperatorConfigured(true);
                     } else if (view === 'scanner' && !urlEventId) {
+                        // Só mostra o modal de config se não estiver carregando via link de stats
                         setShowOpConfigModal(true);
                     }
                 }
             }
-            // Finaliza inicialização após o primeiro snapshot de eventos
+            
+            // IMPORTANTE: Só termina a inicialização depois que tentamos restaurar o evento
             setIsInitializing(false);
-        }, () => {
+        }, (err) => {
+            console.error("Erro ao carregar eventos:", err);
             setIsInitializing(false);
         });
+        
         return () => eventsUnsubscribe();
     }, [db, view]);
 
@@ -295,7 +305,7 @@ const App: React.FC = () => {
     if (!db || firebaseStatus === 'loading' || isInitializing) return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 space-y-4">
             <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-orange-500 font-black uppercase tracking-widest text-xs animate-pulse">Carregando Sessão...</p>
+            <p className="text-orange-500 font-black uppercase tracking-widest text-xs animate-pulse">Iniciando Aplicativo...</p>
         </div>
     );
     
@@ -409,7 +419,8 @@ const App: React.FC = () => {
 
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!scansLoaded} />}
-                    {view === 'generator' && db && <SecretTicketGenerator db={db} />}
+                    {view === 'security' && <SecurityModule scanHistory={scanHistory} />}
+                    {view === 'lookup' && <LookupModule allTickets={allTickets} scanHistory={scanHistory} />}
                 </main>
             </div>
         </div>
