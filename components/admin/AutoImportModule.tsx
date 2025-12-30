@@ -2,7 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { ImportSource, Event, Ticket, ImportLog } from '../../types';
 import { Firestore, collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
-import { ClockIcon, CheckCircleIcon, AlertTriangleIcon, TableCellsIcon, ShieldCheckIcon } from '../Icons';
+import { httpsCallable } from 'firebase/functions';
+import { functionsInstance } from '../../firebaseConfig';
+import { ClockIcon, CheckCircleIcon, AlertTriangleIcon, ShieldCheckIcon, CloudUploadIcon } from '../Icons';
 
 interface AutoImportModuleProps {
   db: Firestore;
@@ -12,6 +14,7 @@ interface AutoImportModuleProps {
 
 const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, importSources }) => {
     const [logs, setLogs] = useState<ImportLog[]>([]);
+    const [isManualSyncing, setIsManualSyncing] = useState(false);
     
     useEffect(() => {
         if (!selectedEvent || !db) return;
@@ -26,6 +29,21 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         });
         return () => unsub();
     }, [db, selectedEvent]);
+
+    const handleManualServerSync = async () => {
+        setIsManualSyncing(true);
+        try {
+            const manualSync = httpsCallable(functionsInstance, 'manualTriggerSync');
+            const result = await manualSync();
+            console.log("Sync manual concluído:", result.data);
+            alert("Sincronização do servidor solicitada com sucesso! Verifique os logs abaixo em alguns instantes.");
+        } catch (e) {
+            console.error("Erro ao disparar sync manual:", e);
+            alert("Erro ao disparar sincronização: " + e.message);
+        } finally {
+            setIsManualSyncing(false);
+        }
+    };
 
     const activeSources = importSources.filter(s => s.autoImport);
 
@@ -48,22 +66,32 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-4 bg-gray-900/50 p-4 rounded-3xl border border-gray-700">
-                        <div className="text-right border-r border-gray-700 pr-4">
-                            <p className="text-[10px] text-gray-500 font-bold uppercase">Fontes Ativas</p>
-                            <p className="text-xl font-black text-white">{activeSources.length}</p>
+                    <div className="flex flex-col items-end gap-3">
+                        <div className="flex items-center gap-4 bg-gray-900/50 p-4 rounded-3xl border border-gray-700">
+                            <div className="text-right border-r border-gray-700 pr-4">
+                                <p className="text-[10px] text-gray-500 font-bold uppercase">Fontes Ativas</p>
+                                <p className="text-xl font-black text-white">{activeSources.length}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
+                                <span className="text-xs font-black text-green-500 uppercase">Servidor Online</span>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
-                            <span className="text-xs font-black text-green-500 uppercase">Servidor Online</span>
-                        </div>
+                        <button 
+                            onClick={handleManualServerSync}
+                            disabled={isManualSyncing}
+                            className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg active:scale-95 ${isManualSyncing ? 'bg-gray-700 text-gray-500' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+                        >
+                            <CloudUploadIcon className={`w-4 h-4 ${isManualSyncing ? 'animate-bounce' : ''}`} />
+                            {isManualSyncing ? 'Processando no Servidor...' : 'Forçar Sync Agora (Servidor)'}
+                        </button>
                     </div>
                 </div>
 
                 <div className="bg-blue-600/5 border border-blue-500/10 p-5 rounded-3xl flex items-start gap-4">
                     <AlertTriangleIcon className="w-6 h-6 text-blue-400 shrink-0 mt-0.5" />
                     <p className="text-xs text-gray-400 leading-relaxed">
-                        <b>Aba Independente:</b> Este módulo agora roda diretamente nos servidores do Google a cada 5 minutos. Você não precisa mais manter esta janela ou o computador ligado para que os ingressos sejam importados.
+                        <b>Aba Independente:</b> Este módulo agora roda diretamente nos servidores do Google a cada 1 minuto (para testes). Você não precisa mais manter esta janela ou o computador ligado para que os ingressos sejam importados.
                     </p>
                 </div>
             </div>

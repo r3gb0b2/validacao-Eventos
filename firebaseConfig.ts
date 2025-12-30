@@ -1,8 +1,8 @@
+
 import { initializeApp, FirebaseApp } from "firebase/app";
 import { getFirestore, enableIndexedDbPersistence, Firestore } from "firebase/firestore";
+import { getFunctions, Functions } from "firebase/functions";
 
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyDsi6VpfhLQW8UWgAp5c4TRV7vqOkDyauU",
   authDomain: "stingressos-e0a5f.firebaseapp.com",
@@ -13,19 +13,13 @@ const firebaseConfig = {
   measurementId: "G-M30E0D9TP2"
 };
 
-// Initialize Firebase
 const app: FirebaseApp = initializeApp(firebaseConfig);
-
-// Initialize Firestore
 const firestoreInstance: Firestore = getFirestore(app);
+export const functionsInstance: Functions = getFunctions(app, "us-central1");
 
 let dbInstance: Firestore | null = null;
 let dbInitializationPromise: Promise<Firestore> | null = null;
 
-/**
- * Ensures Firebase is initialized only once and returns a promise that resolves with the Firestore instance.
- * This pattern prevents race conditions by making sure persistence is enabled before the app uses Firestore.
- */
 export const getDb = (): Promise<Firestore> => {
     if (dbInstance) {
         return Promise.resolve(dbInstance);
@@ -45,8 +39,6 @@ export const getDb = (): Promise<Firestore> => {
             } else if (err.code === 'unimplemented') {
                 console.warn('The current browser does not support all of the features required to enable persistence.');
             }
-            // Still resolve with the instance even if persistence fails.
-            // The app can function, just without full offline support.
             dbInstance = firestoreInstance;
             return dbInstance;
         });

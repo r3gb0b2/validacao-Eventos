@@ -1,43 +1,41 @@
 
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { onCall } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const Papa = require('papaparse');
 
-// Define a região padrão
 setGlobalOptions({ region: 'us-central1' });
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Função Renomeada para evitar erro de upgrade de geração do Firebase.
- * Roda a cada 5 minutos.
+ * Lógica central de importação extraída para ser usada tanto no agendamento quanto no trigger manual.
  */
-exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
-    console.log("Iniciando ciclo de auto-importação...");
-    
+async function performSync() {
+    console.log("Iniciando processamento de sincronização...");
     const eventsSnapshot = await db.collection('events').get();
-    
+    let totalProcessedSources = 0;
+
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
         const eventData = eventDoc.data();
         const eventName = eventData.name || 'Sem Nome';
 
-        // 1. Carregar configurações de importação
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         
-        // CORREÇÃO: exists é uma propriedade booleana no Admin SDK
+        // No Admin SDK, exists é uma propriedade booleana (true/false)
         if (!importSnap.exists) continue;
         
-        const sources = importSnap.data().sources || [];
+        const data = importSnap.data() || {};
+        const sources = data.sources || [];
         const autoSources = sources.filter(s => s.autoImport);
 
         if (autoSources.length === 0) continue;
 
-        // 2. Carregar IDs existentes para evitar duplicatas e processar check-ins
         const ticketsSnapshot = await db.collection(`events/${eventId}/tickets`).get();
         const existingIds = new Set();
         const ticketsMap = new Map();
@@ -49,6 +47,7 @@ exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
         });
 
         for (const source of autoSources) {
+            totalProcessedSources++;
             console.log(`[${eventName}] Processando fonte: ${source.name}`);
             
             let newItems = 0;
@@ -107,7 +106,6 @@ exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
                     }));
                 }
 
-                // 3. Cruzamento de dados
                 for (const item of items) {
                     const code = String(item.code || '').trim();
                     if (!code) continue;
@@ -150,7 +148,6 @@ exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
                     }
                 }
 
-                // 4. Gravação em Batch (Lotes)
                 if (ticketsToSave.length > 0) {
                     const BATCH_SIZE = 400;
                     for (let i = 0; i < ticketsToSave.length; i += BATCH_SIZE) {
@@ -163,7 +160,6 @@ exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
                     }
                 }
 
-                // 5. Registrar Log e Atualizar Timestamp
                 if (newItems > 0 || updatedCount > 0) {
                     await db.collection(`events/${eventId}/import_logs`).add({
                         timestamp: Date.now(),
@@ -192,5 +188,23 @@ exports.syncTicketsScheduled = onSchedule('every 5 minutes', async (event) => {
             }
         }
     }
-    return null;
+    return { success: true, processedSources: totalProcessedSources };
+}
+
+/**
+ * Função agendada (1 em 1 minuto agora para facilitar teste)
+ */
+exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
+    return await performSync();
+});
+
+/**
+ * Função chamável pelo frontend para teste manual imediato.
+ */
+exports.manualTriggerSync = onCall(async (request) => {
+    try {
+        return await performSync();
+    } catch (e) {
+        throw new Error(e.message);
+    }
 });
