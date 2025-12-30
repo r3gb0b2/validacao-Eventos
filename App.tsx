@@ -36,6 +36,7 @@ const getDeviceId = () => {
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
+    const [isInitializing, setIsInitializing] = useState(true); // Flag de inicialização
     
     // --- PERSISTÊNCIA SÍNCRONA DE SESSÃO ---
     const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -52,11 +53,9 @@ const App: React.FC = () => {
 
     // --- PERSISTÊNCIA SÍNCRONA DE NAVEGAÇÃO ---
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
-        // 1. Prioridade para parâmetros de URL (Deep Linking)
         const params = new URLSearchParams(window.location.search);
         if (params.get('mode') === 'stats') return 'public_stats';
         
-        // 2. Fallback para localStorage
         try { 
             const savedView = localStorage.getItem('current_view');
             if (savedView) return savedView as any;
@@ -75,7 +74,6 @@ const App: React.FC = () => {
     const [showOpConfigModal, setShowOpConfigModal] = useState(false);
     const [isAuthLoading, setIsAuthLoading] = useState(false);
 
-    // Configurações do Operador
     const [operatorName, setOperatorName] = useState('');
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const [isOperatorConfigured, setIsOperatorConfigured] = useState(false);
@@ -94,7 +92,6 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
 
-    // Salvar navegação sempre que mudar
     useEffect(() => { 
         localStorage.setItem('current_view', view); 
     }, [view]);
@@ -111,7 +108,6 @@ const App: React.FC = () => {
         return names.filter(s => !hidden.includes(s));
     }, [sectorNames, hiddenSectors]);
 
-    // Firestore Init
     useEffect(() => {
         getDb().then(database => {
             setDb(database);
@@ -119,11 +115,9 @@ const App: React.FC = () => {
         }).catch(() => setFirebaseStatus('error'));
     }, []);
 
-    // Events Listener e Restauração Automática do Evento Selecionado
     useEffect(() => {
         if (!db) return;
         
-        // Se estivermos em public_stats, pegamos o ID da URL
         const params = new URLSearchParams(window.location.search);
         const urlEventId = params.get('eventId');
         const savedEventId = urlEventId || localStorage.getItem('selected_event_id');
@@ -136,27 +130,30 @@ const App: React.FC = () => {
             }));
             setEvents(eventsData);
             
-            if (savedEventId && !selectedEvent) {
+            // Tentativa de restauração
+            if (savedEventId) {
                 const found = eventsData.find(e => e.id === savedEventId);
                 if (found) {
                     setSelectedEvent(found);
-                    // Restaurar configuração do operador se estiver no modo scanner
                     const savedConfig = localStorage.getItem(`op_config_${found.id}`);
                     if (savedConfig) {
                         const parsed = JSON.parse(savedConfig);
                         setOperatorName(parsed.name || '');
                         setSelectedSectors(parsed.sectors || []);
                         setIsOperatorConfigured(true);
-                    } else if (view === 'scanner') {
+                    } else if (view === 'scanner' && !urlEventId) {
                         setShowOpConfigModal(true);
                     }
                 }
             }
+            // Finaliza inicialização após o primeiro snapshot de eventos
+            setIsInitializing(false);
+        }, () => {
+            setIsInitializing(false);
         });
         return () => eventsUnsubscribe();
-    }, [db, selectedEvent, view]);
+    }, [db, view]);
 
-    // Event Data Listener
     useEffect(() => {
         if (!db || !selectedEvent) return;
         const eventId = selectedEvent.id;
@@ -280,7 +277,6 @@ const App: React.FC = () => {
     const handleLogout = () => {
         setCurrentUser(null);
         localStorage.removeItem('auth_user_session');
-        // Manter a view 'scanner' por segurança após logout
         setView('scanner');
     };
 
@@ -293,11 +289,16 @@ const App: React.FC = () => {
         setSelectedSectors([]);
         setShowOpConfigModal(false);
         localStorage.removeItem('selected_event_id');
-        // Ao trocar evento, forçar volta para o scanner
         setView('scanner');
     };
 
-    if (!db || firebaseStatus === 'loading') return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-orange-500 font-black uppercase animate-pulse">Iniciando...</div>;
+    if (!db || firebaseStatus === 'loading' || isInitializing) return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 space-y-4">
+            <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-orange-500 font-black uppercase tracking-widest text-xs animate-pulse">Carregando Sessão...</p>
+        </div>
+    );
+    
     if (firebaseStatus === 'error') return <SetupInstructions />;
 
     return (
@@ -305,7 +306,6 @@ const App: React.FC = () => {
             <div className="w-full max-w-6xl space-y-6">
                 {!isOnline && <AlertBanner message="Offline" type="warning" />}
                 
-                {/* MODAL CONFIG OPERADOR */}
                 {showOpConfigModal && (
                     <div className="fixed inset-0 z-[110] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4">
                         <div className="w-full max-w-md bg-gray-800 border border-gray-700 rounded-[2.5rem] p-8 shadow-2xl space-y-8 animate-fade-in">
