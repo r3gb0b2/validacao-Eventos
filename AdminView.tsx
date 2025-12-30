@@ -1,5 +1,6 @@
 
-import React, { useState, useEffect } from 'export interface Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
+import React, { useState, useEffect } from 'react';
+import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
 import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon, CloudDownloadIcon } from './components/Icons';
 
@@ -13,7 +14,7 @@ import ManualAddModule from './components/admin/ManualAddModule';
 import ParticipantsModule from './components/admin/ParticipantsModule';
 import AutoImportModule from './components/admin/AutoImportModule';
 import LookupModule from './components/admin/LookupModule';
-import SecurityModule from './components/admin/SecurityModule'; // Novo
+import SecurityModule from './components/admin/SecurityModule';
 import OperatorMonitor from './components/OperatorMonitor';
 import TicketList from './components/TicketList';
 import SuperAdminView from './components/SuperAdminView';
@@ -148,7 +149,6 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
-            // Fix: Remove extra props not defined in AutoImportModuleProps
             case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} />;
             case 'security': return <SecurityModule scanHistory={scanHistory} />;
             case 'lookup': return <LookupModule allTickets={allTickets} scanHistory={scanHistory} />;
