@@ -15,35 +15,35 @@ export interface Ticket {
   id: string;
   sector: Sector;
   status: TicketStatus;
-  usedAt?: number; // Milliseconds since epoch for client-side use
-  source?: string; // Origem do ingresso (ex: 'secret_generator', 'api_import')
+  usedAt?: number;
+  source?: string;
   details?: {
     ownerName?: string;
     email?: string;
     phone?: string;
     document?: string;
     eventName?: string;
-    originalId?: string | number; // ID numérico/original da API externa
-    // FIX: Added pdfConfig to store PDF generation settings for re-printing
+    originalId?: string | number;
     pdfConfig?: any;
-    // FIX: Added purchaseCode to track batches of generated tickets
     purchaseCode?: string;
+    // NOVA PROPRIEDADE: Mensagem de alerta para o operador
+    alertMessage?: string;
   };
 }
 
-export type ScanStatus = 'VALID' | 'INVALID' | 'USED' | 'ERROR' | 'WRONG_SECTOR';
+export type ScanStatus = 'VALID' | 'INVALID' | 'USED' | 'ERROR' | 'WRONG_SECTOR' | 'ALERT_REQUIRED';
 
 export interface ScanLog {
     ticketId: string;
     status: ScanStatus;
     timestamp: Timestamp | FieldValue;
-    deviceId?: string; // ID of the device that performed the scan
-    operator?: string; // Name of the operator/gate
+    deviceId?: string;
+    operator?: string;
 }
 
 export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
     id: string;
-    timestamp: number; // Milliseconds
+    timestamp: number;
     ticketSector: Sector;
     isPending?: boolean;
     deviceId?: string;
@@ -83,9 +83,9 @@ export type UserRole = 'SUPER_ADMIN' | 'ADMIN';
 export interface User {
     id: string;
     username: string;
-    password?: string; // Only used for creation/auth, prefer not to store plainly in prod but per request
+    password?: string;
     role: UserRole;
-    allowedEvents: string[]; // Array of Event IDs
+    allowedEvents: string[];
 }
 
 export interface SectorGroup {
@@ -101,7 +101,7 @@ export interface ImportSource {
     name: string;
     url: string;
     token: string;
-    externalEventId?: string; // ID do evento na ST Ingressos
+    externalEventId?: string;
     type: ImportType;
     autoImport: boolean;
     lastImportTime?: number;

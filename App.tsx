@@ -7,7 +7,7 @@ import Papa from 'papaparse';
 
 import Scanner from './components/Scanner';
 import StatusDisplay from './components/StatusDisplay';
-import AdminView from './components/AdminView';
+import AdminView from './AdminView';
 import SetupInstructions from './components/SetupInstructions';
 import AlertBanner from './components/AlertBanner';
 import EventSelector from './components/EventSelector';
@@ -16,6 +16,7 @@ import PublicStatsView from './components/PublicStatsView';
 import LoginModal from './components/LoginModal';
 import SecretTicketGenerator from './components/SecretTicketGenerator'; 
 import OperatorMonitor from './components/OperatorMonitor'; 
+import AlertConfirmationModal from './components/AlertConfirmationModal'; // Novo
 import { CogIcon, QrCodeIcon, VideoCameraIcon, LogoutIcon, TicketIcon } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
@@ -52,7 +53,6 @@ const App: React.FC = () => {
 
     const [selectedSector, setSelectedSector] = useState<SectorFilter>('All');
     
-    // VIEW STATE PERSISTENCE
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
         try {
             return (localStorage.getItem('current_view') as any) || 'scanner';
@@ -60,6 +60,9 @@ const App: React.FC = () => {
     });
 
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string; extra?: string } | null>(null);
+    // ESTADO PARA ALERTA PENDENTE
+    const [pendingAlert, setPendingAlert] = useState<{ticket: Ticket, code: string} | null>(null);
+
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); 
     const [scansLoaded, setScansLoaded] = useState(false); 
@@ -77,7 +80,6 @@ const App: React.FC = () => {
     const lastCodeTimeRef = useRef<number>(0);
     const autoSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Persist View
     useEffect(() => {
         localStorage.setItem('current_view', view);
     }, [view]);
@@ -87,7 +89,6 @@ const App: React.FC = () => {
         return new Map(allTickets.map(ticket => [ticket.id, ticket]));
     }, [allTickets]);
 
-    // --- LÓGICA DE FILTRAGEM PARA TICKETS SECRETOS ---
     const filteredAllTickets = useMemo(() => {
         return allTickets.filter(t => t.source !== 'secret_generator');
     }, [allTickets]);
@@ -103,76 +104,10 @@ const App: React.FC = () => {
         return names.filter(s => !hidden.includes(s));
     }, [sectorNames, hiddenSectors]);
 
-    const runExternalSync = async (source: ImportSource, eventId: string) => {
-        if (!db || !isOnline) return;
-        try {
-            const ticketsToSave: any[] = [];
-            const existingIds = new Set(allTickets.map(t => String(t.id).trim()));
-
-            if (source.type === 'google_sheets') {
-                let fetchUrl = (source.url || '').trim();
-                if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
-                const res = await fetch(fetchUrl);
-                const csvText = await res.text();
-                const rows = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data as any[];
-                rows.forEach(row => {
-                    const code = String(row['code'] || row['codigo'] || row['id']).trim();
-                    if (code && !existingIds.has(code)) {
-                        ticketsToSave.push({ id: code, sector: String(row['sector'] || row['setor'] || 'Geral'), status: 'AVAILABLE', details: { ownerName: row['name'] || row['nome'] } });
-                    }
-                });
-            } else {
-                const headers: HeadersInit = { 'Accept': 'application/json' };
-                if (source.token) headers['Authorization'] = `Bearer ${source.token}`;
-                const res = await fetch(source.url, { headers });
-                const json = await res.json();
-                const items = json.data || json.participants || (Array.isArray(json) ? json : []);
-                items.forEach((item: any) => {
-                    const code = String(item.access_code || item.code || item.qr_code || item.id).trim();
-                    if (code && !existingIds.has(code)) {
-                        ticketsToSave.push({ id: code, sector: String(item.sector_name || item.category || 'Geral'), status: 'AVAILABLE', details: { ownerName: item.name } });
-                    }
-                });
-            }
-
-            if (ticketsToSave.length > 0) {
-                const batchSize = 450;
-                for (let i = 0; i < ticketsToSave.length; i += batchSize) {
-                    const chunk = ticketsToSave.slice(i, i + batchSize);
-                    const batch = writeBatch(db);
-                    chunk.forEach(t => batch.set(doc(db, 'events', eventId, 'tickets', t.id), t, { merge: true }));
-                    await batch.commit();
-                }
-            }
-            
-            const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
-            await setDoc(doc(db, 'events', eventId, 'settings', 'import_v2'), { sources: updatedSources }, { merge: true });
-        } catch (e) { console.error(`Auto-Sync Error:`, e); }
-    };
-
-    useEffect(() => {
-        if (autoSyncIntervalRef.current) clearInterval(autoSyncIntervalRef.current);
-        const sourcesToSync = importSources.filter(s => s.autoImport);
-        if (sourcesToSync.length > 0 && selectedEvent && isOnline) {
-            autoSyncIntervalRef.current = setInterval(() => {
-                sourcesToSync.forEach(s => runExternalSync(s, selectedEvent.id));
-            }, 300000); 
-        }
-        return () => { if (autoSyncIntervalRef.current) clearInterval(autoSyncIntervalRef.current); };
-    }, [importSources, selectedEvent, isOnline]);
-
     useEffect(() => {
         getDb().then(async database => {
             setDb(database);
             setFirebaseStatus('success');
-            try {
-                const storedUser = localStorage.getItem('auth_user_session');
-                if (storedUser) {
-                    const userObj = JSON.parse(storedUser);
-                    if (userObj && userObj._expiry > Date.now()) setCurrentUser(userObj);
-                    else localStorage.removeItem('auth_user_session');
-                }
-            } catch (e) { console.warn("Session restore failed", e); }
         }).catch(() => setFirebaseStatus('error'));
     }, []);
 
@@ -188,7 +123,6 @@ const App: React.FC = () => {
                 if (docSnap.exists()) {
                     const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
                     setSelectedEvent(ev);
-                    localStorage.setItem('selected_event_id', ev.id);
                     setView('public_stats');
                 }
             } else if (modeParam === 'operators' && eventIdParam) {
@@ -196,7 +130,6 @@ const App: React.FC = () => {
                  if (docSnap.exists()) {
                     const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
                     setSelectedEvent(ev);
-                    localStorage.setItem('selected_event_id', ev.id);
                     setView('operators');
                  }
             } else if (modeParam === 'generator') {
@@ -212,7 +145,6 @@ const App: React.FC = () => {
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
             const eventsData = snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name || 'Sem Nome', isHidden: doc.data().isHidden ?? false }));
             setEvents(eventsData);
-
             const savedEventId = localStorage.getItem('selected_event_id');
             if (savedEventId && !selectedEvent) {
                 const found = eventsData.find(e => e.id === savedEventId);
@@ -223,20 +155,8 @@ const App: React.FC = () => {
     }, [db, view, selectedEvent]);
 
     useEffect(() => {
-        if (!db || !selectedEvent) {
-            setAllTickets([]);
-            setScanHistory([]);
-            setImportSources([]);
-            setSectorNames([]); 
-            setTicketsLoaded(false);
-            setScansLoaded(false);
-            return;
-        };
-
+        if (!db || !selectedEvent) return;
         const eventId = selectedEvent.id;
-        setTicketsLoaded(false);
-        setScansLoaded(false);
-
         const settingsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'settings'), (snapshot) => {
             snapshot.docs.forEach(docSnap => {
                 const data = docSnap.data();
@@ -251,14 +171,11 @@ const App: React.FC = () => {
 
         const ticketsUnsubscribe = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snapshot) => {
             const ticketsData = snapshot.docs.map(doc => {
-                // HABILITA ESTIMATIVA PARA OFFLINE
                 const data = doc.data({ serverTimestamps: 'estimate' });
                 const ticket: Ticket = { id: doc.id, sector: data.sector || 'Geral', status: data.status || 'AVAILABLE', source: data.source, details: data.details };
-                
                 if (data.usedAt instanceof Timestamp) ticket.usedAt = data.usedAt.toMillis();
                 else if (data.usedAt instanceof Date) ticket.usedAt = data.usedAt.getTime();
                 else if (typeof data.usedAt === 'number') ticket.usedAt = data.usedAt;
-                
                 return ticket;
             });
             setAllTickets(ticketsData);
@@ -271,8 +188,6 @@ const App: React.FC = () => {
                 const data = doc.data({ serverTimestamps: 'estimate' });
                 let timestamp = Date.now();
                 if (data.timestamp?.toMillis) timestamp = data.timestamp.toMillis();
-                else if (data.timestamp instanceof Date) timestamp = data.timestamp.getTime();
-                else if (typeof data.timestamp === 'number') timestamp = data.timestamp;
                 return { 
                     id: doc.id, 
                     ticketId: data.ticketId || '---', 
@@ -286,16 +201,9 @@ const App: React.FC = () => {
             });
             setScanHistory(historyData);
             setScansLoaded(true);
-        }, (err) => {
-            console.error("ERRO FIRESTORE SCANS:", err);
-            setScansLoaded(true);
         });
 
-        return () => {
-            ticketsUnsubscribe();
-            scansUnsubscribe();
-            settingsUnsubscribe();
-        };
+        return () => { ticketsUnsubscribe(); scansUnsubscribe(); settingsUnsubscribe(); };
     }, [db, selectedEvent]);
 
     const handleLogin = async (username: string, pass: string) => {
@@ -327,6 +235,18 @@ const App: React.FC = () => {
         } catch (e) { alert("Erro no login."); } finally { setIsAuthLoading(false); }
     };
 
+    const processFinalValidation = useCallback(async (ticket: Ticket, ticketId: string) => {
+        if (!db || !selectedEvent) return;
+        const eventId = selectedEvent.id;
+        showScanResult('VALID', `Liberado: ${ticket.sector}!`);
+        try {
+            const batch = writeBatch(db);
+            batch.update(doc(db, 'events', eventId, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
+            batch.set(doc(collection(db, 'events', eventId, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
+            batch.commit();
+        } catch (error) { console.error("Erro ao salvar scan", error); }
+    }, [db, selectedEvent, deviceId, operatorName]);
+
     const handleScanSuccess = useCallback(async (decodedText: string) => {
         const now = Date.now();
         if (cooldownRef.current || !db || !selectedEvent) return;
@@ -341,7 +261,6 @@ const App: React.FC = () => {
         const ticket = ticketsMap.get(ticketId);
         const eventId = selectedEvent.id;
         
-        // PRIORIDADE 1: EXIBIR ALERTA VISUAL IMEDIATAMENTE
         if (!ticket) {
             showScanResult('INVALID', `Não encontrado: ${ticketId}`);
             addDoc(collection(db, 'events', eventId, 'scans'), { ticketId, status: 'INVALID', timestamp: serverTimestamp(), sector: 'Desconhecido', deviceId, operator: operatorName });
@@ -355,18 +274,16 @@ const App: React.FC = () => {
             return;
         }
 
-        // Caso válido
-        showScanResult('VALID', `Liberado: ${ticket.sector}!`);
-        
-        try {
-            const batch = writeBatch(db);
-            batch.update(doc(db, 'events', eventId, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
-            batch.set(doc(collection(db, 'events', eventId, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
-            batch.commit(); // Não aguardamos o commit para não atrasar a interface
-        } catch (error) { 
-            console.error("Erro ao salvar scan", error);
+        // VERIFICA SE HÁ ALERTA
+        if (ticket.details?.alertMessage) {
+            playBeep('error'); // Som de atenção
+            setPendingAlert({ ticket, code: ticketId });
+            return;
         }
-    }, [db, selectedEvent, ticketsMap, deviceId, operatorName]);
+
+        // Validação normal
+        processFinalValidation(ticket, ticketId);
+    }, [db, selectedEvent, ticketsMap, deviceId, operatorName, processFinalValidation, playBeep]);
 
     const showScanResult = (status: ScanStatus, message: string, extra?: string) => {
         if (status === 'VALID') playBeep('success');
@@ -382,6 +299,23 @@ const App: React.FC = () => {
         <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
             <div className="w-full max-w-6xl mx-auto space-y-6">
                 {!isOnline && <AlertBanner message="Você está offline." type="warning" />}
+                
+                {/* MODAL DE ALERTA PENDENTE */}
+                {pendingAlert && (
+                    <AlertConfirmationModal 
+                        message={pendingAlert.ticket.details?.alertMessage || ''}
+                        ticketId={pendingAlert.code}
+                        ownerName={pendingAlert.ticket.details?.ownerName}
+                        onConfirm={() => {
+                            const t = pendingAlert.ticket;
+                            const c = pendingAlert.code;
+                            setPendingAlert(null);
+                            processFinalValidation(t, c);
+                        }}
+                        onCancel={() => setPendingAlert(null)}
+                    />
+                )}
+
                 <header className="flex justify-between items-center w-full">
                     <div>
                         <h1 className="text-3xl font-bold text-orange-500 tracking-tighter">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
@@ -389,7 +323,7 @@ const App: React.FC = () => {
                     </div>
                     <div className="flex items-center space-x-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-2 rounded-full transition-colors ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-700 hover:bg-gray-600'}`} title="Configurações"><CogIcon className="w-6 h-6" /></button>
-                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); localStorage.removeItem('selected_event_id'); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>}
+                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setSelectedEvent(null); setView('scanner'); }} className="p-2 rounded-full bg-red-600 hover:bg-red-700 ml-2" title="Sair"><LogoutIcon className="w-6 h-6" /></button>}
                     </div>
                 </header>
 
@@ -398,7 +332,7 @@ const App: React.FC = () => {
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} isLoading={!scansLoaded} />}
                     {view === 'generator' && db && <SecretTicketGenerator db={db} />}
-                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
+                    {view === 'admin' && <AdminView db={db} events={events} selectedEvent={selectedEvent} allTickets={filteredAllTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />}
                     {view === 'scanner' && selectedEvent && (
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                             <div className="space-y-4">
