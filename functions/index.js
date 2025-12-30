@@ -16,13 +16,16 @@ exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun
     
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
-        const eventName = eventDoc.data().name;
+        const eventData = eventDoc.data();
+        const eventName = eventData.name || 'Sem Nome';
 
         // 1. Carregar fontes de importação
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         
-        if (!importSnap.exists()) continue;
+        // CORREÇÃO: No Admin SDK, exists é uma propriedade, não uma função
+        if (!importSnap.exists) continue;
+        
         const sources = importSnap.data().sources || [];
         const autoSources = sources.filter(s => s.autoImport);
 
@@ -70,21 +73,29 @@ exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun
                                     source.type === 'buyers' ? 'buyers' : 'tickets';
                     
                     const baseUrl = source.url.endsWith('/') ? source.url.slice(0, -1) : source.url;
+                    
+                    // Tratativa para tokens
+                    const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
+
                     const response = await axios.get(`${baseUrl}/${endpoint}`, {
-                        params: { event_id: source.externalEventId, per_page: 500 },
-                        headers: { 'Authorization': source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}` }
+                        params: { 
+                            event_id: source.externalEventId, 
+                            per_page: 500 
+                        },
+                        headers: { 'Authorization': cleanToken }
                     });
 
-                    const data = response.data.data || response.data.participants || response.data.tickets || response.data.checkins || response.data.buyers || (Array.isArray(response.data) ? response.data : []);
+                    const responseData = response.data;
+                    const itemsRaw = responseData.data || responseData.participants || responseData.tickets || responseData.checkins || responseData.buyers || (Array.isArray(responseData) ? responseData : []);
                     
-                    items = data.map(item => ({
-                        code: item.access_code || item.code || item.qr_code || item.id,
-                        sector: item.sector_name || item.category?.name || item.category || item.sector || 'Geral',
-                        name: item.name || item.customer_name || 'Importado',
-                        email: item.email || '',
-                        phone: item.phone || '',
-                        document: item.document || item.cpf || '',
-                        used: source.type === 'checkins' || item.used === true || !!item.validated_at,
+                    items = itemsRaw.map(item => ({
+                        code: item.access_code || item.code || item.qr_code || item.barcode || item.id,
+                        sector: item.sector_name || item.category?.name || item.category || item.sector || item.ticket_type?.name || 'Geral',
+                        name: item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado',
+                        email: item.email || (item.customer && item.customer.email) || '',
+                        phone: item.phone || item.mobile || (item.customer && item.customer.phone) || '',
+                        document: item.document || item.cpf || (item.customer && item.customer.document) || '',
+                        used: source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at,
                         usedAt: item.validated_at || null
                     }));
                 }
@@ -95,7 +106,7 @@ exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun
                     if (!code) continue;
 
                     const isNew = !existingIds.has(code);
-                    const sector = item.sector || 'Geral';
+                    const sector = String(item.sector || 'Geral').trim();
 
                     if (isNew) {
                         ticketsToSave.push({
@@ -145,7 +156,7 @@ exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun
                     }
                 }
 
-                // 5. Registrar Log
+                // 5. Registrar Log e atualizar lastImportTime
                 if (newItems > 0 || updatedCount > 0) {
                     await db.collection(`events/${eventId}/import_logs`).add({
                         timestamp: Date.now(),
@@ -157,6 +168,12 @@ exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun
                         status: 'success'
                     });
                 }
+
+                // Atualizar o timestamp da última importação na fonte
+                const updatedSources = sources.map(s => 
+                    s.id === source.id ? { ...s, lastImportTime: Date.now() } : s
+                );
+                await importRef.update({ sources: updatedSources });
 
             } catch (err) {
                 console.error(`Erro ao processar fonte ${source.name} do evento ${eventName}:`, err);
