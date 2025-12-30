@@ -2,17 +2,18 @@
 import React, { useState, useEffect } from 'react';
 import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
 import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { PlusCircleIcon, TrashIcon } from './components/Icons';
+import { PlusCircleIcon, TrashIcon, SearchIcon } from './components/Icons';
 
 // Módulos
 import DashboardModule from './components/admin/DashboardModule';
 import SettingsModule from './components/admin/SettingsModule';
 import GroupingModule from './components/admin/GroupingModule';
 import LocalizadorasModule from './components/admin/LocalizadorasModule';
-import AlertTicketsModule from './components/admin/AlertTicketsModule'; // Novo
+import AlertTicketsModule from './components/admin/AlertTicketsModule';
 import ManualAddModule from './components/admin/ManualAddModule';
 import ParticipantsModule from './components/admin/ParticipantsModule';
 import AutoImportModule from './components/admin/AutoImportModule';
+import LookupModule from './components/admin/LookupModule'; // Novo
 import OperatorMonitor from './components/OperatorMonitor';
 import TicketList from './components/TicketList';
 import SuperAdminView from './components/SuperAdminView';
@@ -32,7 +33,7 @@ interface AdminViewProps {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'alerts' | 'users' | 'participants' | 'auto_import'>(() => {
+    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'alerts' | 'users' | 'participants' | 'auto_import' | 'lookup'>(() => {
         try {
             return (localStorage.getItem('admin_active_tab') as any) || 'stats';
         } catch(e) { return 'stats'; }
@@ -117,6 +118,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
             case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} allTickets={allTickets} onUpdateSectorNames={onUpdateSectorNames} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} />;
+            case 'lookup': return <LookupModule allTickets={allTickets} scanHistory={scanHistory} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
             case 'participants': return <ParticipantsModule allTickets={allTickets} sectorNames={sectorNames} />;
             case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
@@ -135,6 +137,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 {[
                     { id: 'stats', label: 'Dashboard' },
                     { id: 'auto_import', label: 'Auto Import' },
+                    { id: 'lookup', label: 'Consulta' },
                     { id: 'participants', label: 'Participantes' },
                     { id: 'settings', label: 'Configurações' },
                     { id: 'alerts', label: 'Alertas' },
