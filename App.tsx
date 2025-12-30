@@ -35,20 +35,25 @@ const getDeviceId = () => {
     }
 };
 
-// Helper robusto para formatar data do Firestore ou Number
-const formatSafeTime = (ts: any) => {
-    if (!ts) return 'Horário não registrado';
+// Helper robusto e exportado para formatar data do Firestore ou Number
+export const formatSafeTime = (ts: any) => {
+    if (!ts) return 'Não registrado';
     try {
-        // Se for objeto Timestamp do Firestore (tem método toMillis)
-        if (typeof ts.toMillis === 'function') {
-            return new Date(ts.toMillis()).toLocaleTimeString('pt-BR');
+        let date: Date;
+
+        // Caso 1: Objeto Timestamp do Firestore (tem método toMillis)
+        if (ts && typeof ts.toMillis === 'function') {
+            date = new Date(ts.toMillis());
+        } 
+        // Caso 2: Objeto bruto {seconds, nanoseconds} (comum em sync parcial)
+        else if (ts && typeof ts.seconds === 'number') {
+            date = new Date(ts.seconds * 1000);
         }
-        // Se for objeto { seconds, nanoseconds } bruto (comum em sync parcial)
-        if (ts.seconds !== undefined) {
-            return new Date(ts.seconds * 1000).toLocaleTimeString('pt-BR');
+        // Caso 3: Número (ms) ou string
+        else {
+            date = new Date(ts);
         }
-        // Se for número (ms) ou string
-        const date = new Date(ts);
+
         if (isNaN(date.getTime())) return 'Horário inválido';
         return date.toLocaleTimeString('pt-BR');
     } catch (e) {

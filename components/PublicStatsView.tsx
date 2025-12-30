@@ -6,13 +6,14 @@ import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { getDb } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
+import { formatSafeTime } from '../App';
 
 interface PublicStatsViewProps {
   event: Event;
   allTickets: Ticket[];
   scanHistory: DisplayableScanLog[];
   sectorNames: string[];
-  hiddenSectors?: string[]; // Propriedade adicionada
+  hiddenSectors?: string[]; 
   isLoading?: boolean;
 }
 
@@ -20,11 +21,9 @@ const PIE_CHART_COLORS = ['#3b82f6', '#14b8a6', '#8b5cf6', '#ec4899', '#f97316',
 
 const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [], scanHistory = [], sectorNames = [], hiddenSectors = [], isLoading = false }) => {
     
-    // Config State (Loaded from Firestore to match Admin view)
     const [viewMode, setViewMode] = useState<'raw' | 'grouped'>('raw');
     const [sectorGroups, setSectorGroups] = useState<SectorGroup[]>([]);
 
-    // CÁLCULO PRINCIPAL: Ingressos visíveis (não secretos e de setores não ocultos)
     const visibleTickets = useMemo(() => {
         return (allTickets || []).filter(t => 
             t &&
@@ -53,7 +52,6 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
     const analyticsData: AnalyticsData = useMemo(() => {
         if (isLoading) return { timeBuckets: [], firstAccess: null, lastAccess: null, peak: { time: '-', count: 0 } };
 
-        // 1. Extract valid used VISIBLE tickets with timestamps
         const validUsedTickets = (visibleTickets || []).filter(t => 
             t && 
             t.status === 'USED' && 
@@ -69,7 +67,6 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             };
         }
 
-        // Helper para normalizar timestamp para Number (milissegundos)
         const getMs = (val: any) => {
             if (!val) return 0;
             if (typeof val.toMillis === 'function') return val.toMillis();
@@ -77,14 +74,13 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             return Number(val);
         };
 
-        // Sort by usage time
         validUsedTickets.sort((a, b) => getMs(a.usedAt) - getMs(b.usedAt));
 
         const firstAccess = getMs(validUsedTickets[0].usedAt) || null;
         const lastAccess = getMs(validUsedTickets[validUsedTickets.length - 1].usedAt) || null;
 
         const buckets = new Map<string, { [sector: string]: number }>();
-        const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
+        const INTERVAL_MS = 30 * 60 * 1000; 
 
         for (const ticket of validUsedTickets) {
             const ts = getMs(ticket.usedAt);
@@ -96,11 +92,9 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             const key = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
             
             if (!buckets.has(key)) {
-                // Initial counts logic respecting grouping
                 const initialCounts: Record<string, number> = {};
                  if (viewMode === 'grouped') {
                      sectorGroups.forEach(g => initialCounts[g.name] = 0);
-                     // Also add sectors not in any group (and visible)
                      sectorNames.filter(s => !hiddenSectors.includes(s)).forEach(name => {
                         const isGrouped = sectorGroups.some(g => g.includedSectors.some(s => s.toLowerCase() === name.toLowerCase()));
                         if (!isGrouped) initialCounts[name] = 0;
@@ -167,20 +161,6 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         })).filter(item => item.value > 0);
     }, [visibleTickets, sectorNames, hiddenSectors, isLoading, viewMode, sectorGroups]);
 
-    // Helper for safe date formatting
-    const safeFormatTime = (val: any) => {
-        if (!val) return '--:--';
-        try {
-            let date: Date;
-            if (typeof val.toMillis === 'function') date = new Date(val.toMillis());
-            else if (val.seconds !== undefined) date = new Date(val.seconds * 1000);
-            else date = new Date(val);
-
-            if (isNaN(date.getTime())) return '--:--';
-            return date.toLocaleTimeString('pt-BR');
-        } catch (e) { return '--:--'; }
-    };
-
     return (
         <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8">
             <div className="w-full max-w-6xl mx-auto space-y-6">
@@ -244,13 +224,13 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Primeiro Acesso</p>
                                     <p className="text-2xl font-bold text-green-400">
-                                        {safeFormatTime(analyticsData.firstAccess)}
+                                        {formatSafeTime(analyticsData.firstAccess)}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
                                     <p className="text-xs text-gray-400 uppercase font-semibold mb-1">Último Acesso</p>
                                     <p className="text-2xl font-bold text-red-400">
-                                        {safeFormatTime(analyticsData.lastAccess)}
+                                        {formatSafeTime(analyticsData.lastAccess)}
                                     </p>
                                 </div>
                                 <div className="bg-gray-800 p-5 rounded-lg border border-gray-700 shadow-sm">
