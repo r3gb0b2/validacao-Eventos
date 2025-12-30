@@ -9,17 +9,18 @@ const Papa = require('papaparse');
 setGlobalOptions({ 
     region: 'us-central1',
     memory: '512MiB',
-    timeoutSeconds: 300 
+    timeoutSeconds: 540 // Aumentado para 9 minutos (limite máximo recomendado)
 });
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Lógica central de importação com Paging Reverso e db.getAll
+ * Lógica de sincronização robusta (v4)
+ * Replica exatamente o comportamento da importação manual que funciona no navegador.
  */
 async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização (v3)...");
+    console.log(">>> [LOG] Iniciando ciclo de sincronização v4...");
     const eventsSnapshot = await db.collection('events').get();
     let totalProcessedSources = 0;
 
@@ -33,16 +34,13 @@ async function performSync() {
         if (!importSnap.exists) continue;
         
         const configData = importSnap.data() || {};
-        if (configData.globalAutoImportEnabled === false) {
-            console.log(`>>> [LOG] Evento ${eventName}: Sincronização automática desativada.`);
-            continue;
-        }
+        if (configData.globalAutoImportEnabled === false) continue;
 
         const sources = configData.sources || [];
         const autoSources = sources.filter(s => s.autoImport);
         if (autoSources.length === 0) continue;
 
-        // Carrega nomes de setores atuais para permitir descoberta de novos
+        // Carrega configurações de setores
         const settingsRef = db.doc(`events/${eventId}/settings/main`);
         const settingsSnap = await settingsRef.get();
         const currentSectors = new Set(settingsSnap.exists ? (settingsSnap.data().sectorNames || []) : []);
@@ -51,11 +49,11 @@ async function performSync() {
 
         for (const source of autoSources) {
             totalProcessedSources++;
-            let newItems = 0;
-            let updatedCount = 0;
-            let existingCount = 0;
-            let totalFetchedCount = 0;
-            const sectorsAffected = {};
+            let newItemsCount = 0;
+            let updatedItemsCount = 0;
+            let existingItemsCount = 0;
+            let totalFetchedFromApi = 0;
+            const sectorsAffectedMap = {};
 
             try {
                 let rawItems = [];
@@ -66,7 +64,6 @@ async function performSync() {
                                 source.type === 'buyers' ? 'buyers' : 'tickets';
 
                 if (source.type === 'google_sheets') {
-                    console.log(`>>> [LOG] Lendo Google Sheets: ${source.name}`);
                     let fetchUrl = source.url.trim();
                     if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                     const response = await axios.get(fetchUrl);
@@ -79,68 +76,62 @@ async function performSync() {
                         document: row.document || row.cpf || ''
                     }));
                 } else {
-                    // 1. Descobrir total de páginas
-                    const params = { per_page: 100, page: 1 };
-                    if (source.externalEventId) params.event_id = source.externalEventId;
+                    // PAGINAÇÃO PROGRESSIVA (Igual ao Manual)
+                    let currentPage = 1;
+                    let hasMorePages = true;
+                    const maxPagesLimit = 100; // Proteção contra loops infinitos (10.000 registros)
 
-                    console.log(`>>> [LOG] Chamando API (${source.name}): ${baseUrl}/${endpoint}`);
-                    const firstRes = await axios.get(`${baseUrl}/${endpoint}`, {
-                        params,
-                        headers: { 'Authorization': cleanToken, 'Accept': 'application/json' }
-                    });
+                    while (hasMorePages && currentPage <= maxPagesLimit) {
+                        const params = { per_page: 100, page: currentPage };
+                        if (source.externalEventId) params.event_id = source.externalEventId;
 
-                    const resBody = firstRes.data;
-                    const itemsOnFirstPage = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
-                    
-                    // Se a resposta for um array direto, não há paginação ou é o próprio conteúdo
-                    if (Array.isArray(resBody)) {
-                        console.log(`>>> [LOG] API retornou array direto com ${resBody.length} itens.`);
-                        rawItems = resBody;
-                    } else {
-                        const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 1;
+                        console.log(`>>> [LOG] Buscando ${source.name} - Página ${currentPage}...`);
                         
-                        // 2. Busca REVERSA (Das últimas páginas para a primeira)
-                        let pagesToScan = [];
-                        const maxPages = 40; // Aumentado para 4000 itens por rodada
-                        for (let p = lastPage; p >= 1 && pagesToScan.length < maxPages; p--) {
-                            pagesToScan.push(p);
-                        }
+                        const response = await axios.get(`${baseUrl}/${endpoint}`, {
+                            params,
+                            headers: { 'Authorization': cleanToken, 'Accept': 'application/json' },
+                            timeout: 15000
+                        });
 
-                        console.log(`>>> [LOG] Fonte ${source.name}: Varrendo ${pagesToScan.length} páginas de trás para frente (Total: ${lastPage})`);
-
-                        for (const pageNum of pagesToScan) {
-                            const pageRes = await axios.get(`${baseUrl}/${endpoint}`, {
-                                params: { ...params, page: pageNum },
-                                headers: { 'Authorization': cleanToken, 'Accept': 'application/json' },
-                                timeout: 10000
-                            });
-                            const pBody = pageRes.data;
-                            const items = pBody.data || pBody.participants || pBody.tickets || pBody.checkins || pBody.buyers || (Array.isArray(pBody) ? pBody : []);
-                            rawItems = rawItems.concat(items);
-                            if (items.length === 0) break;
+                        const resBody = response.data;
+                        const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
+                        
+                        if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
+                            hasMorePages = false;
+                        } else {
+                            rawItems = rawItems.concat(pageItems);
+                            
+                            // Tenta detectar a última página por metadados da API
+                            const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
+                            
+                            if (lastPage > 0 && currentPage >= lastPage) {
+                                hasMorePages = false;
+                            } else {
+                                currentPage++;
+                            }
                         }
+                        
+                        // Se a resposta for um array direto, não há paginação
+                        if (Array.isArray(resBody)) hasMorePages = false;
                     }
                 }
 
-                totalFetchedCount = rawItems.length;
-                console.log(`>>> [LOG] Total de itens recuperados para processar: ${totalFetchedCount}`);
+                totalFetchedFromApi = rawItems.length;
+                console.log(`>>> [LOG] Fonte ${source.name}: ${totalFetchedFromApi} itens totais carregados da API.`);
 
-                // 3. Processamento OTIMIZADO com db.getAll
+                // PROCESSAMENTO EM LOTES COM DB.GETALL
                 const batchSize = 400;
                 for (let i = 0; i < rawItems.length; i += batchSize) {
                     const chunk = rawItems.slice(i, i + batchSize);
                     
-                    // Prepara referências para busca em lote
                     const chunkData = chunk.map(item => {
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
-                        return { code, item };
-                    }).filter(d => d.code !== '');
+                        return code ? { code, item } : null;
+                    }).filter(d => d !== null);
 
                     const refs = chunkData.map(d => db.doc(`events/${eventId}/tickets/${d.code}`));
-
                     if (refs.length === 0) continue;
 
-                    // BUSCA EM LOTE
                     const snapshots = await db.getAll(...refs);
                     const batch = db.batch();
                     let batchChanges = 0;
@@ -158,7 +149,6 @@ async function performSync() {
                         else if (item.ticket_type?.name) rawSector = item.ticket_type.name;
                         const sector = String(rawSector).trim() || 'Geral';
 
-                        // Descoberta de novo setor
                         if (!currentSectors.has(sector)) {
                             currentSectors.add(sector);
                             sectorsChanged = true;
@@ -181,24 +171,22 @@ async function performSync() {
                                     originalId: item.id || null
                                 }
                             });
-                            newItems++;
+                            newItemsCount++;
                             batchChanges++;
-                            sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
-                        } else if (shouldMarkUsed) {
+                            sectorsAffectedMap[sector] = (sectorsAffectedMap[sector] || 0) + 1;
+                        } else {
                             const currentData = ticketSnap.data();
-                            if (currentData.status !== 'USED') {
+                            if (shouldMarkUsed && currentData.status !== 'USED') {
                                 batch.update(ticketSnap.ref, {
                                     status: 'USED',
                                     usedAt: item.validated_at || Date.now()
                                 });
-                                updatedCount++;
+                                updatedItemsCount++;
                                 batchChanges++;
-                                sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
+                                sectorsAffectedMap[sector] = (sectorsAffectedMap[sector] || 0) + 1;
                             } else {
-                                existingCount++;
+                                existingItemsCount++;
                             }
-                        } else {
-                            existingCount++;
                         }
                     }
 
@@ -207,7 +195,6 @@ async function performSync() {
                     }
                 }
 
-                // Atualiza nomes de setores se novos foram encontrados
                 if (sectorsChanged) {
                     await settingsRef.update({ 
                         sectorNames: Array.from(currentSectors).sort(),
@@ -215,15 +202,15 @@ async function performSync() {
                     });
                 }
 
-                // Log de sucesso
+                // REGISTRA LOG DETALHADO
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
-                    newCount: newItems,
-                    existingCount: existingCount,
-                    updatedCount: updatedCount,
-                    totalFetched: totalFetchedCount,
-                    sectorsAffected: sectorsAffected,
+                    newCount: newItemsCount,
+                    existingCount: existingItemsCount,
+                    updatedCount: updatedItemsCount,
+                    totalFetched: totalFetchedFromApi, // Campo crucial para depuração
+                    sectorsAffected: sectorsAffectedMap,
                     status: 'success',
                     type: 'cloud'
                 });
@@ -232,7 +219,7 @@ async function performSync() {
                     [`source_last_sync_${source.id}`]: Date.now() 
                 });
 
-                console.log(`>>> [LOG] Fonte ${source.name} concluída. Novos: ${newItems}, Atualizados: ${updatedCount}`);
+                console.log(`>>> [LOG] Fonte ${source.name} finalizada. Total: ${totalFetchedFromApi}, Novos: ${newItemsCount}`);
 
             } catch (err) {
                 console.error(`>>> [ERRO] Fonte ${source.name}:`, err.message);
