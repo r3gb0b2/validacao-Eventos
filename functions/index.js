@@ -9,26 +9,24 @@ const Papa = require('papaparse');
 setGlobalOptions({ 
     region: 'us-central1',
     memory: '512MiB',
-    timeoutSeconds: 540 // Aumentado para 9 minutos (limite máximo recomendado)
+    timeoutSeconds: 540 
 });
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Lógica de sincronização robusta (v4)
- * Replica exatamente o comportamento da importação manual que funciona no navegador.
+ * Lógica de sincronização v5 - Focada em resiliência contra erros 400 e timeout
  */
 async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização v4...");
+    console.log(">>> [LOG] Iniciando ciclo de sincronização v5...");
     const eventsSnapshot = await db.collection('events').get();
     let totalProcessedSources = 0;
 
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
         const eventData = eventDoc.data();
-        const eventName = eventData.name || 'Sem Nome';
-
+        
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         if (!importSnap.exists) continue;
@@ -40,7 +38,7 @@ async function performSync() {
         const autoSources = sources.filter(s => s.autoImport);
         if (autoSources.length === 0) continue;
 
-        // Carrega configurações de setores
+        // Configurações de setores
         const settingsRef = db.doc(`events/${eventId}/settings/main`);
         const settingsSnap = await settingsRef.get();
         const currentSectors = new Set(settingsSnap.exists ? (settingsSnap.data().sectorNames || []) : []);
@@ -53,6 +51,7 @@ async function performSync() {
             let updatedItemsCount = 0;
             let existingItemsCount = 0;
             let totalFetchedFromApi = 0;
+            let lastErrorMsg = null;
             const sectorsAffectedMap = {};
 
             try {
@@ -76,122 +75,132 @@ async function performSync() {
                         document: row.document || row.cpf || ''
                     }));
                 } else {
-                    // PAGINAÇÃO PROGRESSIVA (Igual ao Manual)
                     let currentPage = 1;
                     let hasMorePages = true;
-                    const maxPagesLimit = 100; // Proteção contra loops infinitos (10.000 registros)
+                    const maxPagesLimit = 80; 
 
                     while (hasMorePages && currentPage <= maxPagesLimit) {
+                        // Limpeza de parâmetros para evitar erro 400
                         const params = { per_page: 100, page: currentPage };
-                        if (source.externalEventId) params.event_id = source.externalEventId;
-
-                        console.log(`>>> [LOG] Buscando ${source.name} - Página ${currentPage}...`);
                         
-                        const response = await axios.get(`${baseUrl}/${endpoint}`, {
-                            params,
-                            headers: { 'Authorization': cleanToken, 'Accept': 'application/json' },
-                            timeout: 15000
-                        });
+                        // SÓ envia event_id se ele não for vazio/nulo
+                        if (source.externalEventId && String(source.externalEventId).trim() !== "") {
+                            params.event_id = String(source.externalEventId).trim();
+                        }
 
-                        const resBody = response.data;
-                        const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
-                        
-                        if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
-                            hasMorePages = false;
-                        } else {
-                            rawItems = rawItems.concat(pageItems);
+                        try {
+                            console.log(`>>> [LOG] Chamando API: ${source.name} (Pág ${currentPage})`);
+                            const response = await axios.get(`${baseUrl}/${endpoint}`, {
+                                params,
+                                headers: { 
+                                    'Authorization': cleanToken, 
+                                    'Accept': 'application/json',
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/1.0'
+                                },
+                                timeout: 20000 // Aumentado para 20s
+                            });
+
+                            const resBody = response.data;
+                            const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
                             
-                            // Tenta detectar a última página por metadados da API
-                            const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
-                            
-                            if (lastPage > 0 && currentPage >= lastPage) {
+                            if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
                                 hasMorePages = false;
                             } else {
-                                currentPage++;
+                                rawItems = rawItems.concat(pageItems);
+                                const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
+                                if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
+                                else currentPage++;
+                            }
+                            
+                            if (Array.isArray(resBody)) hasMorePages = false;
+
+                        } catch (pageErr) {
+                            console.error(`>>> [ERRO PAGINA] ${source.name} Pág ${currentPage}:`, pageErr.message);
+                            lastErrorMsg = `Erro na página ${currentPage}: ${pageErr.message}`;
+                            // Se der erro 400, 401 ou 403, para a paginação mas processa o que já pegou
+                            if (pageErr.response && [400, 401, 403, 404].includes(pageErr.response.status)) {
+                                hasMorePages = false;
+                            } else {
+                                // Em outros erros, tenta pular para a próxima página ou para
+                                hasMorePages = false;
                             }
                         }
-                        
-                        // Se a resposta for um array direto, não há paginação
-                        if (Array.isArray(resBody)) hasMorePages = false;
                     }
                 }
 
                 totalFetchedFromApi = rawItems.length;
-                console.log(`>>> [LOG] Fonte ${source.name}: ${totalFetchedFromApi} itens totais carregados da API.`);
+                console.log(`>>> [LOG] Fonte ${source.name}: ${totalFetchedFromApi} itens carregados para processar.`);
 
-                // PROCESSAMENTO EM LOTES COM DB.GETALL
-                const batchSize = 400;
-                for (let i = 0; i < rawItems.length; i += batchSize) {
-                    const chunk = rawItems.slice(i, i + batchSize);
-                    
-                    const chunkData = chunk.map(item => {
-                        const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
-                        return code ? { code, item } : null;
-                    }).filter(d => d !== null);
+                if (totalFetchedFromApi > 0) {
+                    const batchSize = 400;
+                    for (let i = 0; i < rawItems.length; i += batchSize) {
+                        const chunk = rawItems.slice(i, i + batchSize);
+                        const chunkData = chunk.map(item => {
+                            const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
+                            return code ? { code, item } : null;
+                        }).filter(d => d !== null);
 
-                    const refs = chunkData.map(d => db.doc(`events/${eventId}/tickets/${d.code}`));
-                    if (refs.length === 0) continue;
+                        const refs = chunkData.map(d => db.doc(`events/${eventId}/tickets/${d.code}`));
+                        if (refs.length === 0) continue;
 
-                    const snapshots = await db.getAll(...refs);
-                    const batch = db.batch();
-                    let batchChanges = 0;
+                        const snapshots = await db.getAll(...refs);
+                        const batch = db.batch();
+                        let batchChanges = 0;
 
-                    for (let j = 0; j < snapshots.length; j++) {
-                        const ticketSnap = snapshots[j];
-                        const item = chunkData[j].item;
-                        const code = ticketSnap.id;
+                        for (let j = 0; j < snapshots.length; j++) {
+                            const ticketSnap = snapshots[j];
+                            const item = chunkData[j].item;
+                            const code = ticketSnap.id;
 
-                        let rawSector = 'Geral';
-                        if (item.sector_name) rawSector = item.sector_name;
-                        else if (item.category?.name) rawSector = item.category.name;
-                        else if (item.category) rawSector = item.category;
-                        else if (item.sector) rawSector = item.sector;
-                        else if (item.ticket_type?.name) rawSector = item.ticket_type.name;
-                        const sector = String(rawSector).trim() || 'Geral';
+                            let rawSector = 'Geral';
+                            if (item.sector_name) rawSector = item.sector_name;
+                            else if (item.category?.name) rawSector = item.category.name;
+                            else if (item.category) rawSector = item.category;
+                            else if (item.sector) rawSector = item.sector;
+                            else if (item.ticket_type?.name) rawSector = item.ticket_type.name;
+                            const sector = String(rawSector).trim() || 'Geral';
 
-                        if (!currentSectors.has(sector)) {
-                            currentSectors.add(sector);
-                            sectorsChanged = true;
-                        }
+                            if (!currentSectors.has(sector)) {
+                                currentSectors.add(sector);
+                                sectorsChanged = true;
+                            }
 
-                        const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at;
+                            const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at;
 
-                        if (!ticketSnap.exists) {
-                            batch.set(ticketSnap.ref, {
-                                id: code,
-                                sector: sector,
-                                status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
-                                usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
-                                source: 'cloud_sync',
-                                details: {
-                                    ownerName: String(item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado').trim(),
-                                    email: item.email || (item.customer && item.customer.email) || '',
-                                    phone: item.phone || item.mobile || (item.customer && item.customer.phone) || '',
-                                    document: item.document || item.cpf || (item.customer && item.customer.document) || '',
-                                    originalId: item.id || null
-                                }
-                            });
-                            newItemsCount++;
-                            batchChanges++;
-                            sectorsAffectedMap[sector] = (sectorsAffectedMap[sector] || 0) + 1;
-                        } else {
-                            const currentData = ticketSnap.data();
-                            if (shouldMarkUsed && currentData.status !== 'USED') {
-                                batch.update(ticketSnap.ref, {
-                                    status: 'USED',
-                                    usedAt: item.validated_at || Date.now()
+                            if (!ticketSnap.exists) {
+                                batch.set(ticketSnap.ref, {
+                                    id: code,
+                                    sector: sector,
+                                    status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
+                                    usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
+                                    source: 'cloud_sync',
+                                    details: {
+                                        ownerName: String(item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado').trim(),
+                                        email: item.email || (item.customer && item.customer.email) || '',
+                                        phone: item.phone || item.mobile || (item.customer && item.customer.phone) || '',
+                                        document: item.document || item.cpf || (item.customer && item.customer.document) || '',
+                                        originalId: item.id || null
+                                    }
                                 });
-                                updatedItemsCount++;
+                                newItemsCount++;
                                 batchChanges++;
                                 sectorsAffectedMap[sector] = (sectorsAffectedMap[sector] || 0) + 1;
                             } else {
-                                existingItemsCount++;
+                                const currentData = ticketSnap.data();
+                                if (shouldMarkUsed && currentData.status !== 'USED') {
+                                    batch.update(ticketSnap.ref, {
+                                        status: 'USED',
+                                        usedAt: item.validated_at || Date.now()
+                                    });
+                                    updatedItemsCount++;
+                                    batchChanges++;
+                                    sectorsAffectedMap[sector] = (sectorsAffectedMap[sector] || 0) + 1;
+                                } else {
+                                    existingItemsCount++;
+                                }
                             }
                         }
-                    }
-
-                    if (batchChanges > 0) {
-                        await batch.commit();
+                        if (batchChanges > 0) await batch.commit();
                     }
                 }
 
@@ -202,16 +211,17 @@ async function performSync() {
                     });
                 }
 
-                // REGISTRA LOG DETALHADO
+                // Log de resultado (Pode ser sucesso com aviso de erro parcial)
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
                     newCount: newItemsCount,
                     existingCount: existingItemsCount,
                     updatedCount: updatedItemsCount,
-                    totalFetched: totalFetchedFromApi, // Campo crucial para depuração
+                    totalFetched: totalFetchedFromApi,
                     sectorsAffected: sectorsAffectedMap,
-                    status: 'success',
+                    status: lastErrorMsg ? 'warning' : 'success',
+                    errorMessage: lastErrorMsg || null,
                     type: 'cloud'
                 });
 
@@ -219,10 +229,8 @@ async function performSync() {
                     [`source_last_sync_${source.id}`]: Date.now() 
                 });
 
-                console.log(`>>> [LOG] Fonte ${source.name} finalizada. Total: ${totalFetchedFromApi}, Novos: ${newItemsCount}`);
-
             } catch (err) {
-                console.error(`>>> [ERRO] Fonte ${source.name}:`, err.message);
+                console.error(`>>> [ERRO CRÍTICO] Fonte ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
