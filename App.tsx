@@ -232,7 +232,9 @@ const App: React.FC = () => {
         }
 
         if (ticket.status === 'USED') {
-            showScanResult('USED', `Já utilizado.`);
+            // FORMATAÇÃO DA HORA DA PRIMEIRA ENTRADA
+            const usedAtTime = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : 'Horário não registrado';
+            showScanResult('USED', `Já utilizado às ${usedAtTime}.`, `Código: ${ticketId}`);
             addDoc(collection(db, 'events', selectedEvent.id, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             return;
         }
