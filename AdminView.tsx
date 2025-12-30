@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
 import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon } from './components/Icons';
+import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon, CloudDownloadIcon } from './components/Icons';
 
 // Módulos
 import DashboardModule from './components/admin/DashboardModule';
@@ -86,12 +86,43 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), { sources }, { merge: true });
     };
 
+    const downloadFirebaseRC = () => {
+        const config = {
+            projects: {
+                default: "stingressos-e0a5f"
+            }
+        };
+        const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = '.firebaserc';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
     const renderModule = () => {
         if (activeTab === 'events') return (
             <div className="space-y-6">
-                <div className="flex justify-between items-center bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl">
-                    <h3 className="font-bold text-white">Gerenciar Eventos</h3>
-                    <button onClick={async () => { const n = prompt("Nome do Evento:"); if(n) await addDoc(collection(db, 'events'), { name: n, createdAt: serverTimestamp() }); }} className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-2xl text-xs font-bold flex items-center shadow-lg transition-all active:scale-95"><PlusCircleIcon className="w-5 h-5 mr-2" /> Novo Evento</button>
+                <div className="flex flex-col md:flex-row justify-between items-center bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl gap-4">
+                    <h3 className="font-bold text-white text-lg">Gerenciar Eventos</h3>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={downloadFirebaseRC} 
+                            className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-2xl text-xs font-bold flex items-center shadow-lg transition-all active:scale-95"
+                            title="Baixar arquivo de configuração do Firebase para CLI"
+                        >
+                            <CloudDownloadIcon className="w-5 h-5 mr-2" /> .firebaserc
+                        </button>
+                        <button 
+                            onClick={async () => { const n = prompt("Nome do Evento:"); if(n) await addDoc(collection(db, 'events'), { name: n, createdAt: serverTimestamp() }); }} 
+                            className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-2xl text-xs font-bold flex items-center shadow-lg transition-all active:scale-95"
+                        >
+                            <PlusCircleIcon className="w-5 h-5 mr-2" /> Novo Evento
+                        </button>
+                    </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {events.map(ev => (

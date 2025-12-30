@@ -15,7 +15,6 @@ import LoginModal from './components/LoginModal';
 import SecretTicketGenerator from './components/SecretTicketGenerator'; 
 import OperatorMonitor from './components/OperatorMonitor'; 
 import AlertConfirmationModal from './components/AlertConfirmationModal';
-// Import missing modules to fix "Cannot find name" errors in App component
 import SecurityModule from './components/admin/SecurityModule';
 import LookupModule from './components/admin/LookupModule';
 import { CogIcon, LogoutIcon, TicketIcon, UsersIcon, FunnelIcon, CheckCircleIcon, QrCodeIcon } from './components/Icons';
@@ -41,7 +40,6 @@ const App: React.FC = () => {
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
     const [isInitializing, setIsInitializing] = useState(true);
     
-    // --- RESTAURAÇÃO DE SESSÃO ---
     const [currentUser, setCurrentUser] = useState<User | null>(() => {
         try {
             const saved = localStorage.getItem('auth_user_session');
@@ -54,8 +52,6 @@ const App: React.FC = () => {
         return null;
     });
 
-    // --- RESTAURAÇÃO DE VISÃO ---
-    // Updated view state type definition to include 'security' and 'lookup' modes
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators' | 'security' | 'lookup'>(() => {
         const params = new URLSearchParams(window.location.search);
         if (params.get('mode') === 'stats') return 'public_stats';
@@ -96,7 +92,6 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
 
-    // Salva a view atual no localStorage para persistência
     useEffect(() => { 
         localStorage.setItem('current_view', view); 
     }, [view]);
@@ -120,7 +115,6 @@ const App: React.FC = () => {
         }).catch(() => setFirebaseStatus('error'));
     }, []);
 
-    // Listener de Eventos com Lógica de Hidratação de Sessão
     useEffect(() => {
         if (!db) return;
         
@@ -136,7 +130,6 @@ const App: React.FC = () => {
             }));
             setEvents(eventsData);
             
-            // Tenta restaurar o evento que estava sendo usado
             if (savedEventId) {
                 const found = eventsData.find(e => e.id === savedEventId);
                 if (found) {
@@ -148,13 +141,10 @@ const App: React.FC = () => {
                         setSelectedSectors(parsed.sectors || []);
                         setIsOperatorConfigured(true);
                     } else if (view === 'scanner' && !urlEventId) {
-                        // Só mostra o modal de config se não estiver carregando via link de stats
                         setShowOpConfigModal(true);
                     }
                 }
             }
-            
-            // IMPORTANTE: Só termina a inicialização depois que tentamos restaurar o evento
             setIsInitializing(false);
         }, (err) => {
             console.error("Erro ao carregar eventos:", err);
