@@ -46,6 +46,7 @@ const App: React.FC = () => {
     
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [showLoginModal, setShowLoginModal] = useState(false);
+    const [showOpConfigModal, setShowOpConfigModal] = useState(false);
     const [isAuthLoading, setIsAuthLoading] = useState(false);
 
     // Configurações do Operador
@@ -72,26 +73,22 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
 
-    // Salvar visualização atual
     useEffect(() => { localStorage.setItem('current_view', view); }, [view]);
 
-    // Recuperar sessão de usuário
+    // Recuperar sessão
     useEffect(() => {
         try {
             const saved = localStorage.getItem('auth_user_session');
             if (saved) {
                 const parsed = JSON.parse(saved);
                 if (parsed._expiry > Date.now()) setCurrentUser(parsed);
-                else localStorage.removeItem('auth_user_session');
             }
         } catch(e) {}
     }, []);
 
     const ticketsMap = useMemo(() => {
         const map = new Map<string, Ticket>();
-        if (Array.isArray(allTickets)) {
-            allTickets.forEach(t => map.set(t.id, t));
-        }
+        (allTickets || []).forEach(t => map.set(t.id, t));
         return map;
     }, [allTickets]);
 
@@ -101,7 +98,7 @@ const App: React.FC = () => {
         return names.filter(s => !hidden.includes(s));
     }, [sectorNames, hiddenSectors]);
 
-    // Firestore Initialization
+    // Firestore Init
     useEffect(() => {
         getDb().then(database => {
             setDb(database);
@@ -109,31 +106,7 @@ const App: React.FC = () => {
         }).catch(() => setFirebaseStatus('error'));
     }, []);
 
-    // URL Params Check
-    useEffect(() => {
-        if (!db) return;
-        const checkUrlParams = async () => {
-            const params = new URLSearchParams(window.location.search);
-            const eventIdParam = params.get('eventId');
-            const modeParam = params.get('mode');
-
-            if (eventIdParam) {
-                const docSnap = await getDoc(doc(db, 'events', eventIdParam));
-                if (docSnap.exists()) {
-                    const ev = { id: docSnap.id, name: docSnap.data().name, isHidden: docSnap.data().isHidden };
-                    setSelectedEvent(ev);
-                    if (modeParam === 'stats') setView('public_stats');
-                    else if (modeParam === 'operators') setView('operators');
-                }
-            } else if (modeParam === 'generator') {
-                setView('generator');
-            }
-            setIsCheckingUrl(false);
-        };
-        checkUrlParams();
-    }, [db]);
-
-    // Eventos Listener
+    // Events Listener
     useEffect(() => {
         if (!db || view === 'public_stats' || view === 'operators') return;
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
@@ -145,13 +118,14 @@ const App: React.FC = () => {
                 const found = eventsData.find(e => e.id === savedEventId);
                 if (found) {
                     setSelectedEvent(found);
-                    // Recuperar config do operador para este evento
                     const savedConfig = localStorage.getItem(`op_config_${found.id}`);
                     if (savedConfig) {
                         const parsed = JSON.parse(savedConfig);
                         setOperatorName(parsed.name || '');
                         setSelectedSectors(parsed.sectors || []);
                         setIsOperatorConfigured(true);
+                    } else {
+                        setShowOpConfigModal(true);
                     }
                 }
             }
@@ -159,50 +133,38 @@ const App: React.FC = () => {
         return () => eventsUnsubscribe();
     }, [db, view, selectedEvent]);
 
-    // Dados do Evento Selecionado
+    // Event Data Listener
     useEffect(() => {
         if (!db || !selectedEvent) return;
         const eventId = selectedEvent.id;
         
-        const settingsUnsubscribe = onSnapshot(doc(db, 'events', eventId, 'settings', 'main'), (docSnap) => {
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-                setSectorNames(Array.isArray(data.sectorNames) ? data.sectorNames : []);
-                setHiddenSectors(Array.isArray(data.hiddenSectors) ? data.hiddenSectors : []);
+        const unsubSettings = onSnapshot(doc(db, 'events', eventId, 'settings', 'main'), (snap) => {
+            if (snap.exists()) {
+                const data = snap.data();
+                setSectorNames(data.sectorNames || []);
+                setHiddenSectors(data.hiddenSectors || []);
             }
         });
 
-        const ticketsUnsubscribe = onSnapshot(collection(db, eventId.length > 20 ? 'events' : 'events', eventId, 'tickets'), (snapshot) => {
-            const ticketsData = snapshot.docs.map(doc => {
-                const data = doc.data();
-                const ticket: Ticket = { id: doc.id, sector: data.sector || 'Geral', status: data.status || 'AVAILABLE', source: data.source, details: data.details };
-                if (data.usedAt instanceof Timestamp) ticket.usedAt = data.usedAt.toMillis();
-                return ticket;
-            });
-            setAllTickets(ticketsData);
+        const unsubTickets = onSnapshot(collection(db, 'events', eventId, 'tickets'), (snap) => {
+            setAllTickets(snap.docs.map(d => ({ id: d.id, ...d.data() } as Ticket)));
             setTicketsLoaded(true);
         }, () => setTicketsLoaded(true));
 
-        const scansQuery = query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(50));
-        const scansUnsubscribe = onSnapshot(scansQuery, (snapshot) => {
-            const historyData = snapshot.docs.map(doc => {
-                const data = doc.data();
-                return { 
-                    id: doc.id, 
-                    ticketId: data.ticketId || '---', 
-                    status: data.status || 'ERROR', 
-                    timestamp: data.timestamp?.toMillis ? data.timestamp.toMillis() : Date.now(), 
-                    ticketSector: data.sector ?? 'Desconhecido', 
-                    isPending: doc.metadata.hasPendingWrites, 
-                    deviceId: data.deviceId, 
-                    operator: data.operator 
-                };
-            });
-            setScanHistory(historyData);
+        const unsubScans = onSnapshot(query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(50)), (snap) => {
+            setScanHistory(snap.docs.map(d => ({ 
+                id: d.id, 
+                ticketId: d.data().ticketId, 
+                status: d.data().status, 
+                timestamp: d.data().timestamp?.toMillis ? d.data().timestamp.toMillis() : Date.now(), 
+                ticketSector: d.data().sector,
+                deviceId: d.data().deviceId,
+                operator: d.data().operator
+            } as DisplayableScanLog)));
             setScansLoaded(true);
         });
 
-        return () => { ticketsUnsubscribe(); scansUnsubscribe(); settingsUnsubscribe(); };
+        return () => { unsubSettings(); unsubTickets(); unsubScans(); };
     }, [db, selectedEvent]);
 
     const handleLogin = async (username: string, pass: string) => {
@@ -222,16 +184,15 @@ const App: React.FC = () => {
             let foundUser: User | null = null;
             snap.forEach(doc => {
                 const data = doc.data();
-                if ((data.username || '').toLowerCase() === username.trim().toLowerCase() && data.password === pass) foundUser = { id: doc.id, ...data } as User;
+                if (data.username?.toLowerCase() === username.toLowerCase() && data.password === pass) foundUser = { id: doc.id, ...data } as User;
             });
             if (foundUser) {
-                const user = foundUser as User;
-                localStorage.setItem('auth_user_session', JSON.stringify({ ...user, _expiry: Date.now() + 86400000 }));
-                setCurrentUser(user);
+                setCurrentUser(foundUser);
+                localStorage.setItem('auth_user_session', JSON.stringify({ ...foundUser, _expiry: Date.now() + 86400000 }));
                 setShowLoginModal(false);
                 setView('admin');
-            } else alert("Credenciais inválidas.");
-        } catch (e) { alert("Erro no login."); } finally { setIsAuthLoading(false); }
+            } else alert("Inválido");
+        } catch (e) { alert("Erro"); } finally { setIsAuthLoading(false); }
     };
 
     const processFinalValidation = useCallback(async (ticket: Ticket, ticketId: string) => {
@@ -242,7 +203,7 @@ const App: React.FC = () => {
             batch.update(doc(db, 'events', selectedEvent.id, 'tickets', ticketId), { status: 'USED', usedAt: serverTimestamp() });
             batch.set(doc(collection(db, 'events', selectedEvent.id, 'scans')), { ticketId, status: 'VALID', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             batch.commit();
-        } catch (error) { console.error("Erro ao salvar scan", error); }
+        } catch (e) {}
     }, [db, selectedEvent, deviceId, operatorName]);
 
     const handleScanSuccess = useCallback(async (decodedText: string) => {
@@ -264,16 +225,14 @@ const App: React.FC = () => {
             return;
         }
 
-        // VALIDAÇÃO DE MÚLTIPLOS SETORES
         if (selectedSectors.length > 0 && !selectedSectors.includes(ticket.sector)) {
-            showScanResult('WRONG_SECTOR', `Setor: ${ticket.sector}`, `Setores permitidos: ${selectedSectors.join(', ')}`);
+            showScanResult('WRONG_SECTOR', `Setor: ${ticket.sector}`, `Permitidos: ${selectedSectors.join(', ')}`);
             addDoc(collection(db, 'events', selectedEvent.id, 'scans'), { ticketId, status: 'WRONG_SECTOR', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             return;
         }
 
         if (ticket.status === 'USED') {
-            const timeStr = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : 'Agora';
-            showScanResult('USED', `Entrada realizada às ${timeStr}.`);
+            showScanResult('USED', `Já utilizado.`);
             addDoc(collection(db, 'events', selectedEvent.id, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             return;
         }
@@ -295,211 +254,119 @@ const App: React.FC = () => {
     };
 
     const handleSwitchEvent = () => {
-        // Reset completo para evitar tela branca por referências nulas
-        setTicketsLoaded(false);
-        setScansLoaded(false);
+        setSelectedEvent(null);
         setAllTickets([]);
         setScanHistory([]);
-        setSectorNames([]);
-        setHiddenSectors([]);
-        setSelectedEvent(null);
         setIsOperatorConfigured(false);
         setOperatorName('');
         setSelectedSectors([]);
+        setShowOpConfigModal(false);
         localStorage.removeItem('selected_event_id');
         setView('scanner');
     };
 
-    const handleFinishOperatorSetup = () => {
-        if (!operatorName.trim()) return alert("Digite o nome do operador.");
-        if (selectedSectors.length === 0) return alert("Selecione ao menos um setor.");
-        
-        setIsOperatorConfigured(true);
-        if (selectedEvent) {
-            localStorage.setItem(`op_config_${selectedEvent.id}`, JSON.stringify({
-                name: operatorName,
-                sectors: selectedSectors
-            }));
-        }
-    };
-
-    if (!db || firebaseStatus === 'loading' || isCheckingUrl) return (
-        <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white gap-4">
-            <div className="w-16 h-16 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-xl font-black uppercase tracking-widest animate-pulse">Carregando Sistema...</p>
-        </div>
-    );
-    
+    if (!db || firebaseStatus === 'loading') return <div className="flex items-center justify-center min-h-screen bg-gray-900 text-orange-500 font-black uppercase animate-pulse">Iniciando...</div>;
     if (firebaseStatus === 'error') return <SetupInstructions />;
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white font-sans flex flex-col items-center p-4 md:p-8">
-            <div className="w-full max-w-6xl mx-auto space-y-6">
-                {!isOnline && <AlertBanner message="Você está offline." type="warning" />}
+        <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center p-4">
+            <div className="w-full max-w-6xl space-y-6">
+                {!isOnline && <AlertBanner message="Offline" type="warning" />}
                 
+                {/* MODAL CONFIG OPERADOR */}
+                {showOpConfigModal && (
+                    <div className="fixed inset-0 z-[110] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4">
+                        <div className="w-full max-w-md bg-gray-800 border border-gray-700 rounded-[2.5rem] p-8 shadow-2xl space-y-8 animate-fade-in">
+                            <div className="text-center">
+                                <UsersIcon className="w-16 h-16 text-orange-500 mx-auto mb-2" />
+                                <h2 className="text-2xl font-black uppercase">Configurar Ponto</h2>
+                            </div>
+                            <div className="space-y-4">
+                                <input 
+                                    type="text" value={operatorName} onChange={e => setOperatorName(e.target.value)} 
+                                    placeholder="Nome do Operador" className="w-full bg-gray-900 border border-gray-700 p-4 rounded-2xl text-white font-bold outline-none" 
+                                />
+                                <div className="space-y-2">
+                                    <p className="text-[10px] font-black text-gray-500 uppercase ml-2">Setores que você vai validar:</p>
+                                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                                        {visibleSectors.map(s => (
+                                            <label key={s} className={`flex items-center p-3 rounded-xl border cursor-pointer transition-all ${selectedSectors.includes(s) ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-900 border-gray-700 text-gray-500'}`}>
+                                                <input type="checkbox" className="hidden" checked={selectedSectors.includes(s)} onChange={() => {
+                                                    if (selectedSectors.includes(s)) setSelectedSectors(selectedSectors.filter(x => x !== s));
+                                                    else setSelectedSectors([...selectedSectors, s]);
+                                                }} />
+                                                <span className="text-xs font-bold truncate">{s}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+                                <button onClick={() => {
+                                    if(!operatorName || selectedSectors.length === 0) return alert("Preencha tudo");
+                                    setIsOperatorConfigured(true);
+                                    setShowOpConfigModal(false);
+                                    if(selectedEvent) localStorage.setItem(`op_config_${selectedEvent.id}`, JSON.stringify({name: operatorName, sectors: selectedSectors}));
+                                }} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl uppercase shadow-xl active:scale-95 transition-all">Iniciar Validação</button>
+                                <button onClick={handleSwitchEvent} className="w-full text-xs text-gray-500 hover:text-white uppercase font-bold">Voltar</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {pendingAlert && (
-                    <AlertConfirmationModal 
-                        message={pendingAlert.ticket.details?.alertMessage || ''}
-                        ticketId={pendingAlert.code}
-                        ownerName={pendingAlert.ticket.details?.ownerName}
-                        onConfirm={() => {
-                            const t = pendingAlert.ticket;
-                            const c = pendingAlert.code;
-                            setPendingAlert(null);
-                            processFinalValidation(t, c);
-                        }}
-                        onCancel={() => setPendingAlert(null)}
-                    />
+                    <AlertConfirmationModal message={pendingAlert.ticket.details?.alertMessage || ''} ticketId={pendingAlert.code} ownerName={pendingAlert.ticket.details?.ownerName} onConfirm={() => {
+                        const t = pendingAlert.ticket; const c = pendingAlert.code;
+                        setPendingAlert(null); processFinalValidation(t, c);
+                    }} onCancel={() => setPendingAlert(null)} />
                 )}
 
                 <header className="flex justify-between items-center w-full">
                     <div>
-                        <h1 className="text-3xl font-black text-orange-500 tracking-tighter uppercase">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
-                        {selectedEvent && (
-                            <button onClick={handleSwitchEvent} className="text-[10px] font-black text-gray-500 hover:text-white uppercase tracking-widest mt-1">
-                                [ Trocar Evento ]
-                            </button>
-                        )}
+                        <h1 className="text-2xl font-black text-orange-500 uppercase">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
+                        {selectedEvent && <button onClick={handleSwitchEvent} className="text-[10px] text-gray-500 uppercase font-bold mt-1 tracking-widest">[ Trocar Evento ]</button>}
                     </div>
-                    <div className="flex items-center space-x-3">
-                         <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className={`p-3 rounded-2xl transition-all shadow-lg ${view === 'admin' ? 'bg-orange-600' : 'bg-gray-800 hover:bg-gray-700'}`} title="Configurações"><CogIcon className="w-6 h-6" /></button>
-                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setView('scanner'); }} className="p-3 rounded-2xl bg-red-600/20 text-red-500 hover:bg-red-600 hover:text-white transition-all shadow-lg" title="Sair"><LogoutIcon className="w-6 h-6" /></button>}
+                    <div className="flex gap-2">
+                         <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className="p-3 rounded-2xl bg-gray-800 hover:bg-gray-700"><CogIcon className="w-5 h-5" /></button>
+                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setView('scanner'); }} className="p-3 rounded-2xl bg-red-600/20 text-red-500"><LogoutIcon className="w-5 h-5" /></button>}
                     </div>
                 </header>
 
-                <main className="animate-fade-in">
+                <main>
                     {showLoginModal && <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />}
                     
                     {view === 'admin' && (
-                        <AdminView 
-                            db={db} 
-                            events={events} 
-                            selectedEvent={selectedEvent} 
-                            allTickets={allTickets} 
-                            scanHistory={scanHistory} 
-                            sectorNames={sectorNames} 
-                            hiddenSectors={hiddenSectors} 
-                            onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} 
-                            isOnline={isOnline} 
-                            onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} 
-                            currentUser={currentUser} 
-                        />
+                        <AdminView db={db!} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db!, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />
                     )}
 
                     {view === 'scanner' && (
                         <>
-                            {!selectedEvent && (
-                                <EventSelector 
-                                    events={events.filter(e => !e.isHidden)} 
-                                    onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); }} 
-                                    onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} 
-                                />
-                            )}
-
-                            {selectedEvent && !isOperatorConfigured && (
-                                <div className="max-w-lg mx-auto bg-gray-800 p-8 rounded-[2.5rem] border border-gray-700 shadow-2xl space-y-8 animate-fade-in">
-                                    <div className="text-center space-y-2">
-                                        <UsersIcon className="w-16 h-16 text-orange-500 mx-auto" />
-                                        <h2 className="text-2xl font-black uppercase">Configuração do Ponto</h2>
-                                        <p className="text-gray-400 text-sm">Identifique-se e selecione os setores de validação.</p>
-                                    </div>
-
-                                    <div className="space-y-6">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Seu Nome / Operador</label>
-                                            <input 
-                                                type="text" 
-                                                value={operatorName} 
-                                                onChange={e => setOperatorName(e.target.value)}
-                                                placeholder="Digite seu nome..."
-                                                className="w-full bg-gray-900 border border-gray-700 p-4 rounded-2xl text-white font-bold outline-none focus:border-orange-500"
-                                            />
-                                        </div>
-
-                                        <div className="space-y-3">
-                                            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1 flex justify-between items-center">
-                                                <span>Setores Permitidos</span>
-                                                <span className="text-orange-500 font-black">{selectedSectors.length} selecionados</span>
-                                            </label>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-                                                {visibleSectors.map(s => (
-                                                    <label key={s} className={`flex items-center p-3 rounded-xl border cursor-pointer transition-all ${selectedSectors.includes(s) ? 'bg-orange-600/20 border-orange-500 text-orange-400' : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'}`}>
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={selectedSectors.includes(s)}
-                                                            onChange={() => {
-                                                                if (selectedSectors.includes(s)) setSelectedSectors(selectedSectors.filter(x => x !== s));
-                                                                else setSelectedSectors([...selectedSectors, s]);
-                                                            }}
-                                                            className="hidden"
-                                                        />
-                                                        <span className="text-xs font-bold truncate">{s.toUpperCase()}</span>
-                                                        {selectedSectors.includes(s) && <CheckCircleIcon className="w-4 h-4 ml-auto" />}
-                                                    </label>
-                                                ))}
-                                            </div>
-                                        </div>
-
-                                        <button 
-                                            onClick={handleFinishOperatorSetup}
-                                            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-5 rounded-2xl shadow-xl transition-all active:scale-95 uppercase tracking-tighter text-lg"
-                                        >
-                                            Confirmar e Iniciar
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-
-                            {selectedEvent && isOperatorConfigured && (
+                            {!selectedEvent ? (
+                                <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setShowOpConfigModal(true); }} onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} />
+                            ) : (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                    <div className="space-y-6">
-                                        {/* Status do Ponto de Venda */}
-                                        <div className="bg-gray-800 p-5 rounded-[2rem] border border-gray-700 shadow-xl flex justify-between items-center">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 bg-orange-600/10 rounded-full flex items-center justify-center text-orange-500">
-                                                    <UsersIcon className="w-5 h-5" />
-                                                </div>
-                                                <div>
-                                                    <p className="text-[9px] font-black text-gray-500 uppercase">Operador</p>
-                                                    <p className="text-sm font-black text-white">{operatorName.toUpperCase()}</p>
-                                                </div>
+                                    <div className="space-y-4">
+                                        <div className="bg-gray-800 p-4 rounded-3xl border border-gray-700 flex justify-between items-center">
+                                            <div className="flex items-center gap-2">
+                                                <UsersIcon className="w-4 h-4 text-orange-500" />
+                                                <span className="text-xs font-black uppercase text-white truncate max-w-[120px]">{operatorName}</span>
                                             </div>
-                                            <div className="text-right">
-                                                <p className="text-[9px] font-black text-gray-500 uppercase">Setores Ativos</p>
-                                                <p className="text-[10px] font-bold text-orange-500 truncate max-w-[120px]">
-                                                    {selectedSectors.length === visibleSectors.length ? 'TODOS' : selectedSectors.join(', ')}
-                                                </p>
+                                            <div className="flex items-center gap-2">
+                                                <FunnelIcon className="w-4 h-4 text-gray-500" />
+                                                <span className="text-[10px] font-bold text-orange-400">{selectedSectors.length} setores</span>
+                                                <button onClick={() => setShowOpConfigModal(true)} className="ml-2 bg-gray-700 p-1.5 rounded-lg hover:bg-gray-600"><CogIcon className="w-4 h-4" /></button>
                                             </div>
-                                            <button onClick={() => setIsOperatorConfigured(false)} className="bg-gray-700 p-2 rounded-lg hover:bg-gray-600">
-                                                <CogIcon className="w-4 h-4" />
-                                            </button>
                                         </div>
-
                                         <div className="relative aspect-square w-full max-w-lg mx-auto bg-gray-800 rounded-[2.5rem] overflow-hidden border-4 border-gray-700 shadow-2xl">
                                             {scanResult && <StatusDisplay status={scanResult.status} message={scanResult.message} extra={scanResult.extra} />}
-                                            <Scanner onScanSuccess={handleScanSuccess} onScanError={(e) => alert(e)} />
+                                            <Scanner onScanSuccess={handleScanSuccess} onScanError={e => alert(e)} />
                                         </div>
-
-                                        <div className="bg-gray-800 p-5 rounded-[2rem] flex space-x-3 border border-gray-700 shadow-xl">
-                                            <input 
-                                                type="text" 
-                                                value={manualCode} 
-                                                onChange={(e) => setManualCode(e.target.value)} 
-                                                placeholder="Digitar código manual..." 
-                                                className="flex-1 bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 text-white font-mono text-lg outline-none focus:border-orange-500" 
-                                            />
-                                            <button 
-                                                onClick={() => { handleScanSuccess(manualCode); setManualCode(''); }} 
-                                                className="bg-orange-600 hover:bg-orange-700 text-white font-black px-8 rounded-2xl shadow-lg transition-all active:scale-95"
-                                            >
-                                                Validar
-                                            </button>
+                                        <div className="bg-gray-800 p-4 rounded-3xl flex gap-2 border border-gray-700 shadow-xl">
+                                            <input type="text" value={manualCode} onChange={e => setManualCode(e.target.value)} placeholder="Código manual..." className="flex-1 bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white outline-none focus:border-orange-500" />
+                                            <button onClick={() => { handleScanSuccess(manualCode); setManualCode(''); }} className="bg-orange-600 text-white font-black px-6 rounded-2xl shadow-lg active:scale-95 transition-all">Validar</button>
                                         </div>
                                     </div>
-                                    
                                     <div className="space-y-4">
-                                        <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest flex items-center px-2">
-                                            <TicketIcon className="w-4 h-4 mr-2" /> Seu Histórico (Últimos 50)
+                                        <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest px-2 flex items-center gap-2">
+                                            <TicketIcon className="w-4 h-4" /> Histórico deste Dispositivo
                                         </h3>
                                         <TicketList tickets={scanHistory.filter(s => s.deviceId === deviceId)} sectorNames={visibleSectors} />
                                     </div>
