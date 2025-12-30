@@ -9,17 +9,17 @@ const Papa = require('papaparse');
 setGlobalOptions({ 
     region: 'us-central1',
     memory: '512MiB',
-    timeoutSeconds: 300 // Aumentado para 5 minutos para lidar com grandes volumes
+    timeoutSeconds: 300 
 });
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Lógica central de importação.
+ * Lógica central de importação com Paging Reverso e db.getAll
  */
 async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização...");
+    console.log(">>> [LOG] Iniciando ciclo de sincronização otimizado...");
     const eventsSnapshot = await db.collection('events').get();
     let totalProcessedSources = 0;
 
@@ -28,40 +28,34 @@ async function performSync() {
         const eventData = eventDoc.data();
         const eventName = eventData.name || 'Sem Nome';
 
-        // Tenta pegar as configurações de importação
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
-        
         if (!importSnap.exists) continue;
         
         const configData = importSnap.data() || {};
-        
-        // Verifica se o auto-import está ligado para este evento
-        if (configData.globalAutoImportEnabled === false) {
-            console.log(`>>> [LOG] Evento ${eventName}: Auto-import desligado.`);
-            continue;
-        }
+        if (configData.globalAutoImportEnabled === false) continue;
 
         const sources = configData.sources || [];
         const autoSources = sources.filter(s => s.autoImport);
-
         if (autoSources.length === 0) continue;
-
-        console.log(`>>> [LOG] Evento ${eventName}: Processando ${autoSources.length} fontes.`);
 
         for (const source of autoSources) {
             totalProcessedSources++;
-            
             let newItems = 0;
             let updatedCount = 0;
             let existingCount = 0;
-            let totalFetched = 0;
             const sectorsAffected = {};
 
             try {
                 let rawItems = [];
+                const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
+                const baseUrl = source.url.endsWith('/') ? source.url.slice(0, -1) : source.url;
+                const endpoint = source.type === 'checkins' ? 'checkins' : 
+                                source.type === 'participants' ? 'participants' :
+                                source.type === 'buyers' ? 'buyers' : 'tickets';
 
                 if (source.type === 'google_sheets') {
+                    // Google Sheets é flat, não tem páginas
                     let fetchUrl = source.url.trim();
                     if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                     const response = await axios.get(fetchUrl);
@@ -71,64 +65,66 @@ async function performSync() {
                         sector: String(row.sector || row.setor || 'Geral').trim(),
                         name: String(row.name || row.nome || 'Importado').trim(),
                         email: row.email || '',
-                        phone: row.phone || row.telefone || '',
                         document: row.document || row.cpf || ''
                     }));
                 } else {
-                    const endpoint = source.type === 'checkins' ? 'checkins' : 
-                                    source.type === 'participants' ? 'participants' :
-                                    source.type === 'buyers' ? 'buyers' : 'tickets';
+                    // 1. Descobrir quantas páginas existem (Busca a página 1)
+                    const params = { per_page: 100, page: 1 };
+                    if (source.externalEventId) params.event_id = source.externalEventId;
+
+                    const firstRes = await axios.get(`${baseUrl}/${endpoint}`, {
+                        params,
+                        headers: { 'Authorization': cleanToken, 'Accept': 'application/json' }
+                    });
+
+                    const resBody = firstRes.data;
+                    const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 1;
                     
-                    const baseUrl = source.url.endsWith('/') ? source.url.slice(0, -1) : source.url;
-                    const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
+                    // 2. Busca REVERSA (Das últimas páginas para a primeira)
+                    // Novos ingressos costumam estar no final da lista da API
+                    let pagesToScan = [];
+                    const maxPages = 30; // Limite de 3000 itens por rodada
+                    for (let p = lastPage; p >= 1 && pagesToScan.length < maxPages; p--) {
+                        pagesToScan.push(p);
+                    }
 
-                    let currentPage = 1;
-                    let hasMore = true;
+                    console.log(`>>> [LOG] Fonte ${source.name}: Varrendo ${pagesToScan.length} páginas de trás para frente (Total: ${lastPage})`);
 
-                    // Busca paginada (limite de segurança de 20 páginas por fonte em cada rodada de 1 min)
-                    while (hasMore && currentPage <= 20) {
-                        const params = { per_page: 100, page: currentPage };
-                        if (source.externalEventId) params.event_id = source.externalEventId;
-
-                        const response = await axios.get(`${baseUrl}/${endpoint}`, {
-                            params,
+                    for (const pageNum of pagesToScan) {
+                        const pageRes = await axios.get(`${baseUrl}/${endpoint}`, {
+                            params: { ...params, page: pageNum },
                             headers: { 'Authorization': cleanToken, 'Accept': 'application/json' },
-                            timeout: 10000 // 10s timeout por request
+                            timeout: 8000
                         });
-
-                        const resBody = response.data;
-                        const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
-                        
-                        if (!pageItems || pageItems.length === 0) {
-                            hasMore = false;
-                        } else {
-                            rawItems = rawItems.concat(pageItems);
-                            const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 1;
-                            if (currentPage >= lastPage) hasMore = false;
-                            else currentPage++;
-                        }
+                        const items = pageRes.data.data || pageRes.data.participants || pageRes.data.tickets || pageRes.data.checkins || pageRes.data.buyers || [];
+                        rawItems = rawItems.concat(items);
+                        if (items.length === 0) break;
                     }
                 }
 
-                totalFetched = rawItems.length;
-                console.log(`>>> [LOG] Fonte ${source.name}: ${totalFetched} itens recuperados da API.`);
-
-                // Processamento em lotes para evitar sobrecarga
+                // 3. Processamento OTIMIZADO com db.getAll
                 const batchSize = 400;
                 for (let i = 0; i < rawItems.length; i += batchSize) {
                     const chunk = rawItems.slice(i, i + batchSize);
+                    
+                    // Prepara referências para busca em lote
+                    const refs = chunk.map(item => {
+                        const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
+                        return code ? db.doc(`events/${eventId}/tickets/${code}`) : null;
+                    }).filter(r => r !== null);
+
+                    if (refs.length === 0) continue;
+
+                    // BUSCA EM LOTE (Muito mais rápido que um por um)
+                    const snapshots = await db.getAll(...refs);
                     const batch = db.batch();
                     let batchChanges = 0;
 
-                    // Para cada item no chunk, verificamos no Firestore se existe
-                    // OTIMIZAÇÃO: Usamos o ID do documento para verificar existência sem baixar a coleção inteira
-                    for (const item of chunk) {
-                        const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
-                        if (!code) continue;
+                    for (let j = 0; j < snapshots.length; j++) {
+                        const ticketSnap = snapshots[j];
+                        const item = chunk[j];
+                        const code = ticketSnap.id;
 
-                        const ticketRef = db.doc(`events/${eventId}/tickets/${code}`);
-                        const ticketSnap = await ticketRef.get();
-                        
                         let rawSector = 'Geral';
                         if (item.sector_name) rawSector = item.sector_name;
                         else if (item.category?.name) rawSector = item.category.name;
@@ -140,8 +136,7 @@ async function performSync() {
                         const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at;
 
                         if (!ticketSnap.exists) {
-                            // Ticket Novo
-                            batch.set(ticketRef, {
+                            batch.set(ticketSnap.ref, {
                                 id: code,
                                 sector: sector,
                                 status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
@@ -157,11 +152,10 @@ async function performSync() {
                             newItems++;
                             batchChanges++;
                             sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
-                        } else {
-                            // Ticket já existe - verifica se precisa atualizar check-in
+                        } else if (shouldMarkUsed) {
                             const currentData = ticketSnap.data();
-                            if (shouldMarkUsed && currentData.status !== 'USED') {
-                                batch.update(ticketRef, {
+                            if (currentData.status !== 'USED') {
+                                batch.update(ticketSnap.ref, {
                                     status: 'USED',
                                     usedAt: item.validated_at || Date.now()
                                 });
@@ -171,6 +165,8 @@ async function performSync() {
                             } else {
                                 existingCount++;
                             }
+                        } else {
+                            existingCount++;
                         }
                     }
 
@@ -179,7 +175,6 @@ async function performSync() {
                     }
                 }
 
-                // --- SEMPRE GERA LOG, mesmo que 0 itens novos ---
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
@@ -191,14 +186,9 @@ async function performSync() {
                     type: 'cloud'
                 });
 
-                // Atualiza o horário da última importação na configuração da fonte
-                const currentSources = (await importRef.get()).data().sources || [];
-                const updatedSources = currentSources.map(s => 
-                    s.id === source.id ? { ...s, lastImportTime: Date.now() } : s
-                );
-                await importRef.update({ sources: updatedSources });
-
-                console.log(`>>> [LOG] Fonte ${source.name} finalizada: ${newItems} novos, ${updatedCount} atualizados.`);
+                await importRef.update({ 
+                    [`source_last_sync_${source.id}`]: Date.now() 
+                });
 
             } catch (err) {
                 console.error(`>>> [ERRO] Fonte ${source.name}:`, err.message);
@@ -212,8 +202,7 @@ async function performSync() {
             }
         }
     }
-
-    return { success: true, processed: totalProcessedSources };
+    return { success: true };
 }
 
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
