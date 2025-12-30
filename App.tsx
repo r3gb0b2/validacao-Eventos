@@ -35,6 +35,27 @@ const getDeviceId = () => {
     }
 };
 
+// Helper robusto para formatar data do Firestore ou Number
+const formatSafeTime = (ts: any) => {
+    if (!ts) return 'Horário não registrado';
+    try {
+        // Se for objeto Timestamp do Firestore (tem método toMillis)
+        if (typeof ts.toMillis === 'function') {
+            return new Date(ts.toMillis()).toLocaleTimeString('pt-BR');
+        }
+        // Se for objeto { seconds, nanoseconds } bruto (comum em sync parcial)
+        if (ts.seconds !== undefined) {
+            return new Date(ts.seconds * 1000).toLocaleTimeString('pt-BR');
+        }
+        // Se for número (ms) ou string
+        const date = new Date(ts);
+        if (isNaN(date.getTime())) return 'Horário inválido';
+        return date.toLocaleTimeString('pt-BR');
+    } catch (e) {
+        return 'Horário inválido';
+    }
+};
+
 const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
@@ -176,7 +197,7 @@ const App: React.FC = () => {
                 id: d.id, 
                 ticketId: d.data().ticketId, 
                 status: d.data().status, 
-                timestamp: d.data().timestamp?.toMillis ? d.data().timestamp.toMillis() : Date.now(), 
+                timestamp: d.data().timestamp?.toMillis ? d.data().timestamp.toMillis() : (d.data().timestamp?.seconds ? d.data().timestamp.seconds * 1000 : Date.now()), 
                 ticketSector: d.data().sector,
                 deviceId: d.data().deviceId,
                 operator: d.data().operator
@@ -252,7 +273,7 @@ const App: React.FC = () => {
         }
 
         if (ticket.status === 'USED') {
-            const usedAtTime = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : 'Horário não registrado';
+            const usedAtTime = formatSafeTime(ticket.usedAt);
             showScanResult('USED', `Já utilizado às ${usedAtTime}.`, `Código: ${ticketId}`);
             addDoc(collection(db, 'events', selectedEvent.id, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
             return;

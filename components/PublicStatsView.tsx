@@ -57,8 +57,7 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
         const validUsedTickets = (visibleTickets || []).filter(t => 
             t && 
             t.status === 'USED' && 
-            t.usedAt && 
-            !isNaN(Number(t.usedAt))
+            t.usedAt
         );
 
         if (validUsedTickets.length === 0) {
@@ -70,17 +69,25 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
             };
         }
 
-        // Sort by usage time
-        validUsedTickets.sort((a, b) => (a.usedAt || 0) - (b.usedAt || 0));
+        // Helper para normalizar timestamp para Number (milissegundos)
+        const getMs = (val: any) => {
+            if (!val) return 0;
+            if (typeof val.toMillis === 'function') return val.toMillis();
+            if (val.seconds !== undefined) return val.seconds * 1000;
+            return Number(val);
+        };
 
-        const firstAccess = validUsedTickets[0].usedAt || null;
-        const lastAccess = validUsedTickets[validUsedTickets.length - 1].usedAt || null;
+        // Sort by usage time
+        validUsedTickets.sort((a, b) => getMs(a.usedAt) - getMs(b.usedAt));
+
+        const firstAccess = getMs(validUsedTickets[0].usedAt) || null;
+        const lastAccess = getMs(validUsedTickets[validUsedTickets.length - 1].usedAt) || null;
 
         const buckets = new Map<string, { [sector: string]: number }>();
         const INTERVAL_MS = 30 * 60 * 1000; // 30 Minutes
 
         for (const ticket of validUsedTickets) {
-            const ts = ticket.usedAt || 0;
+            const ts = getMs(ticket.usedAt);
             const bucketStart = Math.floor(ts / INTERVAL_MS) * INTERVAL_MS;
             const date = new Date(bucketStart);
             
@@ -161,10 +168,16 @@ const PublicStatsView: React.FC<PublicStatsViewProps> = ({ event, allTickets = [
     }, [visibleTickets, sectorNames, hiddenSectors, isLoading, viewMode, sectorGroups]);
 
     // Helper for safe date formatting
-    const safeFormatTime = (timestamp: number | null) => {
-        if (!timestamp || isNaN(timestamp)) return '--:--';
+    const safeFormatTime = (val: any) => {
+        if (!val) return '--:--';
         try {
-            return new Date(timestamp).toLocaleTimeString('pt-BR');
+            let date: Date;
+            if (typeof val.toMillis === 'function') date = new Date(val.toMillis());
+            else if (val.seconds !== undefined) date = new Date(val.seconds * 1000);
+            else date = new Date(val);
+
+            if (isNaN(date.getTime())) return '--:--';
+            return date.toLocaleTimeString('pt-BR');
         } catch (e) { return '--:--'; }
     };
 

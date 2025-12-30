@@ -15,14 +15,16 @@ setGlobalOptions({
 admin.initializeApp();
 const db = admin.firestore();
 
+// Helper para delay
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 /**
- * Lógica de sincronização v5 - Focada em resiliência contra erros 400 e timeout
+ * Lógica de sincronização v6 - Resiliência Máxima
  */
 async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização v5...");
+    console.log(">>> [LOG] Iniciando ciclo de sincronização v6...");
     const eventsSnapshot = await db.collection('events').get();
-    let totalProcessedSources = 0;
-
+    
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
         const eventData = eventDoc.data();
@@ -34,24 +36,23 @@ async function performSync() {
         const configData = importSnap.data() || {};
         if (configData.globalAutoImportEnabled === false) continue;
 
-        const sources = configData.sources || [];
-        const autoSources = sources.filter(s => s.autoImport);
-        if (autoSources.length === 0) continue;
+        const sources = (configData.sources || []).filter(s => s.autoImport);
+        if (sources.length === 0) continue;
 
-        // Configurações de setores
+        // Cache de setores para evitar múltiplas leituras
         const settingsRef = db.doc(`events/${eventId}/settings/main`);
         const settingsSnap = await settingsRef.get();
         const currentSectors = new Set(settingsSnap.exists ? (settingsSnap.data().sectorNames || []) : []);
         const hiddenSectors = settingsSnap.exists ? (settingsSnap.data().hiddenSectors || []) : [];
         let sectorsChanged = false;
 
-        for (const source of autoSources) {
-            totalProcessedSources++;
+        for (const source of sources) {
             let newItemsCount = 0;
             let updatedItemsCount = 0;
             let existingItemsCount = 0;
             let totalFetchedFromApi = 0;
             let lastErrorMsg = null;
+            let statusResult = 'success';
             const sectorsAffectedMap = {};
 
             try {
@@ -77,30 +78,32 @@ async function performSync() {
                 } else {
                     let currentPage = 1;
                     let hasMorePages = true;
-                    const maxPagesLimit = 80; 
+                    const maxPagesLimit = 100; 
 
                     while (hasMorePages && currentPage <= maxPagesLimit) {
-                        // Limpeza de parâmetros para evitar erro 400
                         const params = { per_page: 100, page: currentPage };
-                        
-                        // SÓ envia event_id se ele não for vazio/nulo
                         if (source.externalEventId && String(source.externalEventId).trim() !== "") {
                             params.event_id = String(source.externalEventId).trim();
                         }
 
                         try {
-                            console.log(`>>> [LOG] Chamando API: ${source.name} (Pág ${currentPage})`);
+                            console.log(`>>> [LOG] Requisição: ${source.name} Pág ${currentPage}`);
                             const response = await axios.get(`${baseUrl}/${endpoint}`, {
                                 params,
                                 headers: { 
                                     'Authorization': cleanToken, 
                                     'Accept': 'application/json',
-                                    'User-Agent': 'ST-Checkin-Cloud-Worker/1.0'
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v6'
                                 },
-                                timeout: 20000 // Aumentado para 20s
+                                timeout: 25000 
                             });
 
                             const resBody = response.data;
+                            if (!resBody) {
+                                hasMorePages = false;
+                                break;
+                            }
+
                             const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
                             
                             if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
@@ -110,18 +113,26 @@ async function performSync() {
                                 const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
                                 if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
                                 else currentPage++;
+                                
+                                // Pequena pausa para não sobrecarregar a API
+                                await sleep(150); 
                             }
                             
                             if (Array.isArray(resBody)) hasMorePages = false;
 
                         } catch (pageErr) {
-                            console.error(`>>> [ERRO PAGINA] ${source.name} Pág ${currentPage}:`, pageErr.message);
-                            lastErrorMsg = `Erro na página ${currentPage}: ${pageErr.message}`;
-                            // Se der erro 400, 401 ou 403, para a paginação mas processa o que já pegou
-                            if (pageErr.response && [400, 401, 403, 404].includes(pageErr.response.status)) {
+                            const status = pageErr.response?.status;
+                            const errorData = pageErr.response?.data;
+                            
+                            console.error(`>>> [API ERROR] Status ${status}:`, JSON.stringify(errorData || pageErr.message));
+
+                            // Se der erro 400 mas já tivermos pegado dados, provavelmente é um erro de "página inexistente" da própria API
+                            if (status === 400 && rawItems.length > 0) {
+                                console.log(`>>> [LOG] Erro 400 após ${rawItems.length} itens. Considerando fim de lista.`);
                                 hasMorePages = false;
                             } else {
-                                // Em outros erros, tenta pular para a próxima página ou para
+                                lastErrorMsg = `Erro ${status || 'Network'}: ${pageErr.message}`;
+                                statusResult = rawItems.length > 0 ? 'warning' : 'error';
                                 hasMorePages = false;
                             }
                         }
@@ -129,7 +140,6 @@ async function performSync() {
                 }
 
                 totalFetchedFromApi = rawItems.length;
-                console.log(`>>> [LOG] Fonte ${source.name}: ${totalFetchedFromApi} itens carregados para processar.`);
 
                 if (totalFetchedFromApi > 0) {
                     const batchSize = 400;
@@ -209,9 +219,9 @@ async function performSync() {
                         sectorNames: Array.from(currentSectors).sort(),
                         hiddenSectors: hiddenSectors
                     });
+                    sectorsChanged = false; // Reset para a próxima fonte
                 }
 
-                // Log de resultado (Pode ser sucesso com aviso de erro parcial)
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
@@ -220,8 +230,8 @@ async function performSync() {
                     updatedCount: updatedItemsCount,
                     totalFetched: totalFetchedFromApi,
                     sectorsAffected: sectorsAffectedMap,
-                    status: lastErrorMsg ? 'warning' : 'success',
-                    errorMessage: lastErrorMsg || null,
+                    status: statusResult,
+                    errorMessage: lastErrorMsg,
                     type: 'cloud'
                 });
 
@@ -230,7 +240,7 @@ async function performSync() {
                 });
 
             } catch (err) {
-                console.error(`>>> [ERRO CRÍTICO] Fonte ${source.name}:`, err.message);
+                console.error(`>>> [ERRO CRÍTICO] ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
