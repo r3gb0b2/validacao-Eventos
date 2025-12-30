@@ -36,26 +36,29 @@ const AlertTicketsModule: React.FC<AlertTicketsModuleProps> = ({ db, selectedEve
 
         setIsLoading(true);
         try {
-            const existingIds = new Set(allTickets.map(t => String(t.id).trim()));
+            const existingIdsMap = new Map(allTickets.map(t => [String(t.id).trim(), t]));
             let addedCount = 0;
-            let skippedCount = 0;
+            let updatedCount = 0;
 
-            const toAdd = inputList.filter(code => {
-                if (existingIds.has(code)) {
-                    skippedCount++;
-                    return false;
-                }
-                addedCount++;
-                return true;
-            });
+            const BATCH_SIZE = 450;
+            for (let i = 0; i < inputList.length; i += BATCH_SIZE) {
+                const chunk = inputList.slice(i, i + BATCH_SIZE);
+                const batch = writeBatch(db);
+                
+                chunk.forEach(code => {
+                    const ticketRef = doc(db, 'events', selectedEvent.id, 'tickets', code);
+                    const existingTicket = existingIdsMap.get(code);
 
-            if (toAdd.length > 0) {
-                const batchSize = 450;
-                for (let i = 0; i < toAdd.length; i += batchSize) {
-                    const chunk = toAdd.slice(i, i + batchSize);
-                    const batch = writeBatch(db);
-                    chunk.forEach(code => {
-                        batch.set(doc(db, 'events', selectedEvent.id, 'tickets', code), { 
+                    if (existingTicket) {
+                        // Se o ticket já existe, atualizamos APENAS a mensagem de alerta dentro do objeto details
+                        // Usamos a notação de ponto para garantir que outros campos de 'details' não sejam removidos
+                        batch.update(ticketRef, {
+                            "details.alertMessage": alertMessage.trim()
+                        });
+                        updatedCount++;
+                    } else {
+                        // Se não existe, criamos o registro completo comoAVAILABLE
+                        batch.set(ticketRef, { 
                             id: code, 
                             sector, 
                             status: 'AVAILABLE', 
@@ -64,17 +67,20 @@ const AlertTicketsModule: React.FC<AlertTicketsModuleProps> = ({ db, selectedEve
                                 alertMessage: alertMessage.trim()
                             }
                         });
-                    });
-                    await batch.commit();
-                }
+                        addedCount++;
+                    }
+                });
+                
+                await batch.commit();
             }
 
             setCodes('');
             setAlertMessage('');
             alert(
                 `Processamento de Alertas Concluído!\n\n` +
-                `• ${addedCount} ingressos com alerta adicionados.\n` +
-                `• ${skippedCount} ingressos ignorados por já existirem.`
+                `• ${addedCount} novos ingressos criados.\n` +
+                `• ${updatedCount} ingressos existentes atualizados com o novo alerta.\n\n` +
+                `Nenhuma informação de validação ou check-in foi alterada.`
             );
         } catch (e) { 
             console.error(e);
@@ -88,6 +94,14 @@ const AlertTicketsModule: React.FC<AlertTicketsModuleProps> = ({ db, selectedEve
         <div className="bg-gray-800 p-6 rounded-3xl border border-red-500/20 shadow-xl animate-fade-in">
             <h2 className="text-xl font-bold mb-4 flex items-center text-red-500"><AlertTriangleIcon className="w-6 h-6 mr-2"/> Ingressos com Alerta</h2>
             
+            <div className="bg-red-900/10 border border-red-500/30 p-4 rounded-xl mb-6 flex items-start space-x-3">
+                <CheckCircleIcon className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-red-200/70 leading-relaxed">
+                    <p className="font-bold text-red-400 uppercase mb-1">Preservação de Dados Ativa:</p>
+                    <p>Se você inserir um código que já existe no sistema, <b>apenas o alerta será adicionado</b>. O status de validação, horário de entrada e dados do participante serão mantidos intactos.</p>
+                </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4">
                 <div className="space-y-4">
                     <label className="block text-xs font-black text-gray-500 uppercase">1. Códigos dos Ingressos (Um por linha)</label>
@@ -109,7 +123,7 @@ const AlertTicketsModule: React.FC<AlertTicketsModuleProps> = ({ db, selectedEve
                     />
                     
                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-500 uppercase font-bold">Setor de Destino</label>
+                        <label className="text-[10px] text-gray-500 uppercase font-bold">Setor (Somente para novos registros)</label>
                         <select value={sector} onChange={e => setSector(e.target.value)} className="w-full bg-gray-700 p-4 rounded-xl font-bold outline-none cursor-pointer">
                             {sectorNames.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>

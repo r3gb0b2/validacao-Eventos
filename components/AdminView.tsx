@@ -130,7 +130,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
-            case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} allTickets={allTickets} onUpdateSectorNames={onUpdateSectorNames} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} />;
+            // Fix: Remove extra props not defined in AutoImportModuleProps
+            case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
             case 'participants': return <ParticipantsModule allTickets={allTickets} sectorNames={sectorNames} />;
             case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;

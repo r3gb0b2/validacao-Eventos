@@ -1,6 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
-import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
+import React, { useState, useEffect } from 'export interface Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
 import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon, CloudDownloadIcon } from './components/Icons';
 
@@ -149,7 +148,8 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
 
         switch (activeTab) {
             case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
-            case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} allTickets={allTickets} onUpdateSectorNames={onUpdateSectorNames} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} />;
+            // Fix: Remove extra props not defined in AutoImportModuleProps
+            case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} />;
             case 'security': return <SecurityModule scanHistory={scanHistory} />;
             case 'lookup': return <LookupModule allTickets={allTickets} scanHistory={scanHistory} />;
             case 'groups': return <GroupingModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} groups={groups} onUpdateGroups={handleUpdateGroups} />;
