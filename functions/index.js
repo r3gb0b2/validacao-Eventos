@@ -1,4 +1,3 @@
-
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
@@ -12,29 +11,35 @@ admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Lógica central de importação extraída para ser usada tanto no agendamento quanto no trigger manual.
+ * Lógica central de importação.
+ * IMPORTANTE: No Admin SDK (Functions), .exists é uma propriedade BOOLEANA.
  */
 async function performSync() {
-    console.log("Iniciando processamento de sincronização...");
+    console.log(">>> [LOG] Iniciando performSync no Servidor...");
     const eventsSnapshot = await db.collection('events').get();
     let totalProcessedSources = 0;
 
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
-        const eventData = eventDoc.data();
-        const eventName = eventData.name || 'Sem Nome';
+        const eventName = eventDoc.data().name || 'Sem Nome';
 
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         
-        // No Admin SDK, exists é uma propriedade booleana (true/false)
-        if (!importSnap.exists) continue;
+        // CORREÇÃO CRÍTICA: exists é propriedade. 
+        // Se der erro de "is not a function", a função rodando é antiga!
+        if (!importSnap.exists) {
+            console.log(`>>> [LOG] Configuração import_v2 não existe para o evento: ${eventName}`);
+            continue;
+        }
         
         const data = importSnap.data() || {};
         const sources = data.sources || [];
         const autoSources = sources.filter(s => s.autoImport);
 
         if (autoSources.length === 0) continue;
+
+        console.log(`>>> [LOG] Evento ${eventName}: ${autoSources.length} fontes para processar.`);
 
         const ticketsSnapshot = await db.collection(`events/${eventId}/tickets`).get();
         const existingIds = new Set();
@@ -48,7 +53,7 @@ async function performSync() {
 
         for (const source of autoSources) {
             totalProcessedSources++;
-            console.log(`[${eventName}] Processando fonte: ${source.name}`);
+            console.log(`>>> [LOG] Sincronizando: ${source.name} (${source.type})`);
             
             let newItems = 0;
             let updatedCount = 0;
@@ -61,10 +66,7 @@ async function performSync() {
 
                 if (source.type === 'google_sheets') {
                     let fetchUrl = source.url.trim();
-                    if (fetchUrl.includes('/edit')) {
-                        fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
-                    }
-                    
+                    if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                     const response = await axios.get(fetchUrl);
                     const csvData = Papa.parse(response.data, { header: true, skipEmptyLines: true });
                     items = csvData.data.map(row => ({
@@ -84,10 +86,7 @@ async function performSync() {
                     const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
 
                     const response = await axios.get(`${baseUrl}/${endpoint}`, {
-                        params: { 
-                            event_id: source.externalEventId, 
-                            per_page: 500 
-                        },
+                        params: { event_id: source.externalEventId, per_page: 500 },
                         headers: { 'Authorization': cleanToken }
                     });
 
@@ -178,7 +177,7 @@ async function performSync() {
                 await importRef.update({ sources: updatedSources });
 
             } catch (err) {
-                console.error(`Erro na fonte ${source.name}:`, err.message);
+                console.error(`>>> [ERRO] Fonte ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: Date.now(),
                     sourceName: source.name,
@@ -188,23 +187,25 @@ async function performSync() {
             }
         }
     }
-    return { success: true, processedSources: totalProcessedSources };
+    console.log(">>> [LOG] Fim do ciclo de sincronização.");
+    return { success: true, processed: totalProcessedSources };
 }
 
 /**
- * Função agendada (1 em 1 minuto agora para facilitar teste)
+ * Função Agendada (A cada 1 minuto)
+ * ATENÇÃO: Se rodar 'scheduledAutoImport', delete-a no console.
  */
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
     return await performSync();
 });
 
 /**
- * Função chamável pelo frontend para teste manual imediato.
+ * Função Manual
  */
 exports.manualTriggerSync = onCall(async (request) => {
     try {
         return await performSync();
     } catch (e) {
-        throw new Error(e.message);
+        throw new admin.functions.https.HttpsError('internal', e.message);
     }
 });
