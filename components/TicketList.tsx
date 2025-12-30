@@ -2,10 +2,10 @@
 import React, { useState } from 'react';
 import { DisplayableScanLog, Sector, ScanStatus } from '../types';
 import { ClockIcon } from './Icons';
-import { formatSafeTime } from '../App';
 
 interface TicketListProps {
   tickets: DisplayableScanLog[];
+  // FIX: Changed type from `[string, string]` to `string[]` to support a variable number of sectors.
   sectorNames: string[];
   hideTabs?: boolean;
 }
@@ -13,6 +13,8 @@ interface TicketListProps {
 const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs = false }) => {
     const [activeTab, setActiveTab] = useState<Sector | 'All'>('All');
     
+    // If hideTabs is true, we ignore the local activeTab filter (or the parent passes filtered data anyway)
+    // but typically if tabs are hidden, we assume 'All' (which shows everything passed in `tickets`).
     const filteredTickets = hideTabs 
         ? tickets 
         : tickets.filter(ticket => activeTab === 'All' || ticket.ticketSector === activeTab);
@@ -82,7 +84,7 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
               <p className="font-medium text-white">{ticket.ticketId}</p>
               <div className="flex items-center text-xs text-gray-500 mt-1">
                  <p>
-                    {formatSafeTime(ticket.timestamp)} 
+                    {new Date(ticket.timestamp).toLocaleString('pt-BR')} 
                     {ticket.operator ? ` | ${ticket.operator}` : ''}
                  </p>
                  {ticket.isPending && (

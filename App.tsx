@@ -35,34 +35,24 @@ const getDeviceId = () => {
     }
 };
 
-// Helper universal e resiliente para formatar horários
-export const formatSafeTime = (ts: any) => {
-    if (!ts) return 'Não registrado';
+// Helper robusto para formatar data do Firestore ou Number
+const formatSafeTime = (ts: any) => {
+    if (!ts) return 'Horário não registrado';
     try {
-        let date: Date;
-
-        // Caso 1: Objeto Timestamp do Firestore (tem método toMillis)
-        if (ts && typeof ts.toMillis === 'function') {
-            date = new Date(ts.toMillis());
-        } 
-        // Caso 2: Objeto bruto {seconds, nanoseconds} (comum em snapshots locais)
-        else if (ts && typeof ts.seconds === 'number') {
-            date = new Date(ts.seconds * 1000);
+        // Se for objeto Timestamp do Firestore (tem método toMillis)
+        if (typeof ts.toMillis === 'function') {
+            return new Date(ts.toMillis()).toLocaleTimeString('pt-BR');
         }
-        // Caso 3: Número (ms) ou String de data
-        else {
-            date = new Date(ts);
+        // Se for objeto { seconds, nanoseconds } bruto (comum em sync parcial)
+        if (ts.seconds !== undefined) {
+            return new Date(ts.seconds * 1000).toLocaleTimeString('pt-BR');
         }
-
+        // Se for número (ms) ou string
+        const date = new Date(ts);
         if (isNaN(date.getTime())) return 'Horário inválido';
-        
-        return date.toLocaleTimeString('pt-BR', { 
-            hour: '2-digit', 
-            minute: '2-digit', 
-            second: '2-digit' 
-        });
+        return date.toLocaleTimeString('pt-BR');
     } catch (e) {
-        return 'Erro na data';
+        return 'Horário inválido';
     }
 };
 
@@ -203,23 +193,15 @@ const App: React.FC = () => {
         }, () => setTicketsLoaded(true));
 
         const unsubScans = onSnapshot(query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(50)), (snap) => {
-            setScanHistory(snap.docs.map(d => {
-                const data = d.data();
-                let finalTs = Date.now();
-                if (data.timestamp?.toMillis) finalTs = data.timestamp.toMillis();
-                else if (data.timestamp?.seconds) finalTs = data.timestamp.seconds * 1000;
-                else if (typeof data.timestamp === 'number') finalTs = data.timestamp;
-
-                return { 
-                    id: d.id, 
-                    ticketId: data.ticketId, 
-                    status: data.status, 
-                    timestamp: finalTs, 
-                    ticketSector: data.sector,
-                    deviceId: data.deviceId,
-                    operator: data.operator
-                } as DisplayableScanLog;
-            }));
+            setScanHistory(snap.docs.map(d => ({ 
+                id: d.id, 
+                ticketId: d.data().ticketId, 
+                status: d.data().status, 
+                timestamp: d.data().timestamp?.toMillis ? d.data().timestamp.toMillis() : (d.data().timestamp?.seconds ? d.data().timestamp.seconds * 1000 : Date.now()), 
+                ticketSector: d.data().sector,
+                deviceId: d.data().deviceId,
+                operator: d.data().operator
+            } as DisplayableScanLog)));
             setScansLoaded(true);
         });
 
