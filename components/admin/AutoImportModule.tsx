@@ -1,31 +1,18 @@
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ImportSource, Event, Ticket, ImportLog } from '../../types';
-import { Firestore, doc, setDoc, writeBatch, collection, onSnapshot, query, orderBy, limit, addDoc } from 'firebase/firestore';
-import { ClockIcon, PlayIcon, PauseIcon, CheckCircleIcon, AlertTriangleIcon, CloudUploadIcon, TableCellsIcon } from '../Icons';
-import Papa from 'papaparse';
+import { Firestore, collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { ClockIcon, CheckCircleIcon, AlertTriangleIcon, TableCellsIcon, ShieldCheckIcon } from '../Icons';
 
 interface AutoImportModuleProps {
   db: Firestore;
   selectedEvent: Event;
   importSources: ImportSource[];
-  allTickets: Ticket[];
-  onUpdateSectorNames: (names: string[], hidden: string[]) => Promise<void>;
-  sectorNames: string[];
-  hiddenSectors: string[];
 }
 
-const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, importSources, allTickets, onUpdateSectorNames, sectorNames, hiddenSectors }) => {
-    const [isActive, setIsActive] = useState(false);
-    const [intervalMinutes, setIntervalMinutes] = useState(5);
-    const [countdown, setCountdown] = useState(0);
-    const [isSyncing, setIsSyncing] = useState(false);
+const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, importSources }) => {
     const [logs, setLogs] = useState<ImportLog[]>([]);
     
-    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-    // Carregar logs do Firestore
     useEffect(() => {
         if (!selectedEvent || !db) return;
         const q = query(
@@ -40,293 +27,63 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         return () => unsub();
     }, [db, selectedEvent]);
 
-    const runImportLogic = useCallback(async () => {
-        if (isSyncing || !selectedEvent || !db || !navigator.onLine) return;
-        setIsSyncing(true);
-
-        const sourcesToSync = importSources.filter(s => s.autoImport);
-        if (sourcesToSync.length === 0) {
-            setIsSyncing(false);
-            return;
-        }
-
-        // Criamos um Set dinâmico para rastrear o que já existe E o que estamos adicionando agora
-        const processedIdsInThisCycle = new Set<string>((allTickets || []).map(t => String(t.id).trim()));
-        const discoveredSectors = new Set<string>(sectorNames);
-
-        for (const source of sourcesToSync) {
-            let newItems = 0;
-            let existingCount = 0;
-            let updatedCount = 0;
-            let totalFound = 0;
-            const sectorsAffected: Record<string, number> = {};
-            let ticketsToSave: any[] = [];
-
-            try {
-                let fetchUrl = (source.url || '').trim();
-                if (!fetchUrl) throw new Error("URL da fonte está vazia.");
-
-                const headers: HeadersInit = { 'Accept': 'application/json' };
-                if (source.token) {
-                    headers['Authorization'] = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
-                }
-
-                if (source.type === 'google_sheets') {
-                    if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
-                    const res = await fetch(fetchUrl);
-                    if (!res.ok) throw new Error(`Planilha inacessível (${res.status})`);
-                    
-                    const csvText = await res.text();
-                    const rows = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data as any[];
-                    
-                    rows.forEach(row => {
-                        const code = String(row['code'] || row['codigo'] || row['id'] || '').trim();
-                        if (!code) return;
-                        totalFound++;
-                        const sector = String(row['sector'] || row['setor'] || 'Geral').trim();
-
-                        if (!processedIdsInThisCycle.has(code)) {
-                            discoveredSectors.add(sector);
-                            sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
-                            ticketsToSave.push({
-                                id: code, sector, status: 'AVAILABLE', source: 'api_import',
-                                details: { 
-                                    ownerName: String(row['name'] || row['nome'] || 'Importado'),
-                                    email: row['email'] || '',
-                                    phone: row['phone'] || row['telefone'] || '',
-                                    document: row['document'] || row['cpf'] || ''
-                                }
-                            });
-                            newItems++;
-                            processedIdsInThisCycle.add(code); 
-                        } else {
-                            existingCount++;
-                        }
-                    });
-                } else {
-                    const endpoint = source.type === 'checkins' ? 'checkins' : 
-                                    source.type === 'participants' ? 'participants' :
-                                    source.type === 'buyers' ? 'buyers' : 'tickets';
-                    
-                    const baseUrl = fetchUrl.endsWith('/') ? fetchUrl.slice(0, -1) : fetchUrl;
-                    
-                    let currentPage = 1;
-                    let hasMore = true;
-
-                    while (hasMore) {
-                        // Construção segura da URL
-                        const url = new URL(`${baseUrl}/${endpoint}`);
-                        url.searchParams.set('page', String(currentPage));
-                        url.searchParams.set('per_page', '100');
-                        if (source.externalEventId) url.searchParams.set('event_id', source.externalEventId);
-
-                        const res = await fetch(url.toString(), { headers });
-                        
-                        if (!res.ok) {
-                            if (res.status === 404 && currentPage > 1) { hasMore = false; break; }
-                            throw new Error(`Erro na API (${res.status}): ${res.statusText}`);
-                        }
-
-                        const json = await res.json();
-                        const items = json.data || json.participants || json.tickets || json.checkins || json.buyers || (Array.isArray(json) ? json : []);
-                        
-                        if (!items || items.length === 0) { hasMore = false; break; }
-
-                        items.forEach((item: any) => {
-                            totalFound++;
-                            const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
-                            if (!code) return;
-
-                            let rawSector = item.sector_name || item.category?.name || item.category || item.sector || item.ticket_type?.name || 'Geral';
-                            const sector = String(rawSector).trim();
-                            
-                            const isNew = !processedIdsInThisCycle.has(code);
-                            const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || !!item.validated_at;
-
-                            if (isNew) {
-                                discoveredSectors.add(sector);
-                                sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
-                                ticketsToSave.push({
-                                    id: code, sector, status: shouldMarkUsed ? 'USED' : 'AVAILABLE',
-                                    usedAt: shouldMarkUsed ? (item.validated_at || Date.now()) : null,
-                                    source: 'api_import',
-                                    details: { 
-                                        ownerName: String(item.name || item.customer_name || 'Importado'),
-                                        email: item.email || '',
-                                        phone: item.phone || item.mobile || '',
-                                        document: item.document || item.cpf || ''
-                                    }
-                                });
-                                newItems++;
-                                processedIdsInThisCycle.add(code);
-                            } else {
-                                existingCount++;
-                                const existingTicket = allTickets.find(t => String(t.id).trim() === code);
-                                if (shouldMarkUsed && existingTicket && existingTicket.status !== 'USED') {
-                                    updatedCount++;
-                                    sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
-                                    ticketsToSave.push({ ...existingTicket, status: 'USED', usedAt: item.validated_at || Date.now() });
-                                }
-                            }
-                        });
-
-                        const lastPage = json.last_page || json.meta?.last_page || 0;
-                        if (lastPage > 0 && currentPage >= lastPage) hasMore = false; else currentPage++;
-                        if (currentPage > 50) hasMore = false; 
-                    }
-                }
-
-                if (ticketsToSave.length > 0) {
-                    const batchSize = 450;
-                    for (let i = 0; i < ticketsToSave.length; i += batchSize) {
-                        const chunk = ticketsToSave.slice(i, i + batchSize);
-                        const batch = writeBatch(db);
-                        chunk.forEach(t => batch.set(doc(db, 'events', selectedEvent.id, 'tickets', t.id), t, { merge: true }));
-                        await batch.commit();
-                    }
-                }
-
-                if (newItems > 0 || updatedCount > 0) {
-                    await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
-                        timestamp: Date.now(),
-                        sourceName: source.name,
-                        newCount: newItems,
-                        existingCount,
-                        updatedCount,
-                        sectorsAffected,
-                        status: 'success'
-                    });
-                }
-
-            } catch (err: any) {
-                console.error("AutoImport Error:", err);
-                const isCors = err.message === 'Failed to fetch' || err.name === 'TypeError';
-                await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
-                    timestamp: Date.now(),
-                    sourceName: source.name,
-                    newCount: 0,
-                    existingCount: 0,
-                    updatedCount: 0,
-                    sectorsAffected: {},
-                    status: 'error',
-                    errorMessage: isCors ? "Erro de Rede/CORS: Verifique se a URL é HTTPS e se o domínio é permitido." : err.message
-                });
-            }
-        }
-
-        const newSectorList = Array.from(discoveredSectors).sort();
-        if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
-            await onUpdateSectorNames(newSectorList, hiddenSectors);
-        }
-
-        setIsSyncing(false);
-        setCountdown(intervalMinutes * 60);
-    }, [db, selectedEvent, importSources, allTickets, intervalMinutes, sectorNames, hiddenSectors, onUpdateSectorNames, isSyncing]);
-
-    useEffect(() => {
-        if (isActive) {
-            setCountdown(intervalMinutes * 60);
-            runImportLogic(); 
-
-            timerRef.current = setInterval(() => {
-                runImportLogic();
-            }, intervalMinutes * 60000);
-
-            countdownRef.current = setInterval(() => {
-                setCountdown(prev => Math.max(0, prev - 1));
-            }, 1000);
-        } else {
-            if (timerRef.current) clearInterval(timerRef.current);
-            if (countdownRef.current) clearInterval(countdownRef.current);
-            setCountdown(0);
-        }
-
-        return () => {
-            if (timerRef.current) clearInterval(timerRef.current);
-            if (countdownRef.current) clearInterval(countdownRef.current);
-        };
-    }, [isActive, intervalMinutes, runImportLogic]);
-
-    const formatTime = (seconds: number) => {
-        const m = Math.floor(seconds / 60);
-        const s = seconds % 60;
-        return `${m}:${s.toString().padStart(2, '0')}`;
-    };
+    const activeSources = importSources.filter(s => s.autoImport);
 
     return (
         <div className="space-y-6 animate-fade-in pb-20">
-            {/* Header / Controle */}
-            <div className="bg-gray-800 p-6 rounded-3xl border border-gray-700 shadow-xl space-y-6">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div>
-                        <h2 className="text-xl font-bold flex items-center text-blue-400">
-                            <ClockIcon className="w-6 h-6 mr-2" />
-                            Importação Automática em Tempo Real
-                        </h2>
-                        <p className="text-gray-500 text-xs mt-1 italic">* Esta página precisa ficar aberta para o loop funcionar.</p>
+            {/* Cloud Status Header */}
+            <div className="bg-gray-800 p-8 rounded-[2.5rem] border border-blue-500/20 shadow-xl space-y-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                    <div className="flex items-center gap-4">
+                        <div className="w-16 h-16 bg-blue-600/10 rounded-3xl flex items-center justify-center text-blue-500 shadow-inner">
+                            <ShieldCheckIcon className="w-10 h-10" />
+                        </div>
+                        <div>
+                            <h2 className="text-2xl font-black text-white uppercase tracking-tighter">
+                                Cloud Sync <span className="text-blue-500">Ativado</span>
+                            </h2>
+                            <p className="text-gray-500 text-xs font-bold uppercase tracking-widest">
+                                Sincronização automática via Firebase Cloud Functions
+                            </p>
+                        </div>
                     </div>
 
-                    <div className="flex items-center gap-4 bg-gray-900/50 p-2 rounded-2xl border border-gray-700">
-                        <div className="flex flex-col items-center px-3 border-r border-gray-700">
-                            <span className="text-[8px] text-gray-500 font-bold uppercase">Intervalo</span>
-                            <select 
-                                value={intervalMinutes} 
-                                onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-                                disabled={isActive}
-                                className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer"
-                            >
-                                <option value={1}>1 min</option>
-                                <option value={2}>2 min</option>
-                                <option value={5}>5 min</option>
-                                <option value={10}>10 min</option>
-                                <option value={30}>30 min</option>
-                            </select>
+                    <div className="flex items-center gap-4 bg-gray-900/50 p-4 rounded-3xl border border-gray-700">
+                        <div className="text-right border-r border-gray-700 pr-4">
+                            <p className="text-[10px] text-gray-500 font-bold uppercase">Fontes Ativas</p>
+                            <p className="text-xl font-black text-white">{activeSources.length}</p>
                         </div>
-                        
-                        <button 
-                            onClick={() => setIsActive(!isActive)}
-                            className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold transition-all ${isActive ? 'bg-red-600/20 text-red-500 hover:bg-red-600 hover:text-white' : 'bg-blue-600 text-white shadow-lg'}`}
-                        >
-                            {isActive ? <><PauseIcon className="w-5 h-5"/> Parar Loop</> : <><PlayIcon className="w-5 h-5"/> Iniciar Loop</>}
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]"></div>
+                            <span className="text-xs font-black text-green-500 uppercase">Servidor Online</span>
+                        </div>
                     </div>
                 </div>
 
-                {/* Status e Cronômetro */}
-                {isActive && (
-                    <div className="bg-blue-600/5 border border-blue-500/20 p-5 rounded-2xl flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                            <div className={`w-3 h-3 rounded-full animate-pulse ${isSyncing ? 'bg-orange-500' : 'bg-green-500'}`}></div>
-                            <div>
-                                <p className="text-sm font-bold text-gray-200">{isSyncing ? 'Sincronizando agora...' : 'Aguardando próximo ciclo'}</p>
-                                <p className="text-[10px] text-gray-500 uppercase tracking-widest">{importSources.filter(s => s.autoImport).length} fontes ativas</p>
-                            </div>
-                        </div>
-                        <div className="text-right">
-                            <p className="text-[10px] text-gray-500 font-bold uppercase">Próxima busca em:</p>
-                            <p className="text-2xl font-black text-blue-400 font-mono">{formatTime(countdown)}</p>
-                        </div>
-                    </div>
-                )}
+                <div className="bg-blue-600/5 border border-blue-500/10 p-5 rounded-3xl flex items-start gap-4">
+                    <AlertTriangleIcon className="w-6 h-6 text-blue-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-gray-400 leading-relaxed">
+                        <b>Aba Independente:</b> Este módulo agora roda diretamente nos servidores do Google a cada 5 minutos. Você não precisa mais manter esta janela ou o computador ligado para que os ingressos sejam importados.
+                    </p>
+                </div>
             </div>
 
-            {/* Logs Recentes */}
-            <div className="bg-gray-800 rounded-3xl border border-gray-700 shadow-xl overflow-hidden">
+            {/* Histórico de Logs */}
+            <div className="bg-gray-800 rounded-[2.5rem] border border-gray-700 shadow-xl overflow-hidden">
                 <div className="p-6 border-b border-gray-700 flex items-center justify-between bg-gray-900/20">
-                    <h3 className="font-bold flex items-center text-gray-300">
-                        <TableCellsIcon className="w-5 h-5 mr-2" /> Histórico de Sincronizações (Apenas Novidades)
+                    <h3 className="font-black text-xs text-gray-400 uppercase tracking-widest flex items-center">
+                        <ClockIcon className="w-4 h-4 mr-2" /> Histórico de Sincronização Remota
                     </h3>
-                    <span className="text-[10px] bg-gray-700 px-2 py-1 rounded text-gray-400 uppercase font-bold">Últimos registros</span>
                 </div>
 
                 <div className="overflow-x-auto max-h-[600px] custom-scrollbar">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="text-[10px] text-gray-500 uppercase font-black border-b border-gray-700 bg-gray-800/50">
-                                <th className="px-6 py-4">Horário</th>
+                                <th className="px-6 py-4">Horário (Cloud)</th>
                                 <th className="px-6 py-4">Fonte</th>
                                 <th className="px-6 py-4">Resultado</th>
-                                <th className="px-6 py-4">Detalhes por Setor</th>
+                                <th className="px-6 py-4">Impacto</th>
                                 <th className="px-6 py-4 text-center">Status</th>
                             </tr>
                         </thead>
@@ -337,19 +94,19 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                         {new Date(log.timestamp).toLocaleTimeString()}
                                     </td>
                                     <td className="px-6 py-4">
-                                        <p className="text-xs font-bold text-white">{log.sourceName}</p>
+                                        <p className="text-xs font-black text-white">{log.sourceName}</p>
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex gap-2">
-                                            {log.newCount > 0 && <span className="text-[10px] bg-green-500/10 text-green-400 px-1.5 py-0.5 rounded font-bold">+{log.newCount} novos</span>}
-                                            {log.updatedCount > 0 && <span className="text-[10px] bg-orange-500/10 text-orange-400 px-1.5 py-0.5 rounded font-bold">{log.updatedCount} check-ins</span>}
+                                            {log.newCount > 0 && <span className="text-[10px] bg-green-500/10 text-green-400 px-2 py-0.5 rounded-full font-black">+{log.newCount} NOVOS</span>}
+                                            {log.updatedCount > 0 && <span className="text-[10px] bg-orange-500/10 text-orange-400 px-2 py-0.5 rounded-full font-black">{log.updatedCount} CHECK-INS</span>}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex flex-wrap gap-1 max-w-[300px]">
                                             {Object.entries(log.sectorsAffected || {}).map(([sector, count]) => (
-                                                <span key={sector} className="text-[9px] bg-gray-900 border border-gray-700 text-gray-400 px-1.5 py-0.5 rounded">
-                                                    {sector}: <b className="text-gray-200">{count}</b>
+                                                <span key={sector} className="text-[9px] bg-gray-900 border border-gray-700 text-gray-500 px-1.5 py-0.5 rounded-lg">
+                                                    {sector}: <b className="text-gray-300">{count}</b>
                                                 </span>
                                             ))}
                                         </div>
@@ -361,7 +118,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                             <div className="group relative">
                                                 <AlertTriangleIcon className="w-5 h-5 text-red-500 mx-auto cursor-help" />
                                                 <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-red-600 text-white text-[10px] p-2 rounded shadow-xl w-48 z-10">
-                                                    {log.errorMessage || 'Falha na conexão'}
+                                                    {log.errorMessage}
                                                 </div>
                                             </div>
                                         )}
@@ -371,7 +128,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             {logs.length === 0 && (
                                 <tr>
                                     <td colSpan={5} className="px-6 py-20 text-center text-gray-600 italic">
-                                        Aguardando novas entradas na API... Nenhum registro novo foi detectado ainda.
+                                        Aguardando a primeira execução agendada...
                                     </td>
                                 </tr>
                             )}
