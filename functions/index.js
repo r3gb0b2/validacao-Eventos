@@ -1,17 +1,20 @@
-
-const functions = require('firebase-functions');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { setGlobalOptions } = require('firebase-functions/v2');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const Papa = require('papaparse');
+
+// Configuração Global (Opcional: define a região padrão como us-central1 ou a que preferir)
+setGlobalOptions({ region: 'us-central1' });
 
 admin.initializeApp();
 const db = admin.firestore();
 
 /**
- * Cloud Function agendada para rodar a cada 5 minutos.
+ * Cloud Function agendada para rodar a cada 5 minutos usando a API v2.
  * Percorre todos os eventos e processa as fontes com 'autoImport' ativo.
  */
-exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun(async (context) => {
+exports.scheduledAutoImport = onSchedule('every 5 minutes', async (event) => {
     const eventsSnapshot = await db.collection('events').get();
     
     for (const eventDoc of eventsSnapshot.docs) {
@@ -23,7 +26,6 @@ exports.scheduledAutoImport = functions.pubsub.schedule('every 5 minutes').onRun
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         
-        // CORREÇÃO: No Admin SDK, exists é uma propriedade, não uma função
         if (!importSnap.exists) continue;
         
         const sources = importSnap.data().sources || [];
