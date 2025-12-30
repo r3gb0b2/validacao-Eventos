@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ImportSource, Event, Ticket, ImportLog } from '../../types';
-import { Firestore, collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { Firestore, collection, onSnapshot, query, orderBy, limit, doc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { functionsInstance } from '../../firebaseConfig';
 import { ClockIcon, CheckCircleIcon, AlertTriangleIcon, ShieldCheckIcon, CloudUploadIcon } from '../Icons';
@@ -15,19 +15,33 @@ interface AutoImportModuleProps {
 const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, importSources }) => {
     const [logs, setLogs] = useState<ImportLog[]>([]);
     const [isManualSyncing, setIsManualSyncing] = useState(false);
+    const [globalAutoImport, setGlobalAutoImport] = useState(false);
     
     useEffect(() => {
         if (!selectedEvent || !db) return;
+        
+        // Listener para logs
         const q = query(
             collection(db, 'events', selectedEvent.id, 'import_logs'),
             orderBy('timestamp', 'desc'),
             limit(100)
         );
-        const unsub = onSnapshot(q, (snap) => {
+        const unsubLogs = onSnapshot(q, (snap) => {
             const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ImportLog));
             setLogs(list);
         });
-        return () => unsub();
+
+        // Listener para configuração global
+        const unsubConfig = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
+            if (snap.exists()) {
+                setGlobalAutoImport(snap.data().globalAutoImportEnabled || false);
+            }
+        });
+
+        return () => {
+            unsubLogs();
+            unsubConfig();
+        };
     }, [db, selectedEvent]);
 
     const handleManualServerSync = async () => {
@@ -44,6 +58,12 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         }
     };
 
+    const formatTimestamp = (ts: any) => {
+        if (!ts) return '--:--';
+        const date = ts.toMillis ? new Date(ts.toMillis()) : new Date(ts);
+        return date.toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+
     const activeSources = importSources.filter(s => s.autoImport);
 
     return (
@@ -51,7 +71,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             <div className="bg-gray-800 p-8 rounded-[2.5rem] border border-blue-500/20 shadow-xl space-y-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                     <div className="flex items-center gap-4">
-                        <div className="w-16 h-16 bg-blue-600/10 rounded-3xl flex items-center justify-center text-blue-500 shadow-inner">
+                        <div className={`w-16 h-16 rounded-3xl flex items-center justify-center shadow-inner transition-colors ${globalAutoImport ? 'bg-blue-600/20 text-blue-500' : 'bg-gray-700 text-gray-500'}`}>
                             <ShieldCheckIcon className="w-10 h-10" />
                         </div>
                         <div>
@@ -59,7 +79,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                 Histórico de <span className="text-blue-500">Sincronização</span>
                             </h2>
                             <p className="text-gray-500 text-xs font-bold uppercase tracking-widest">
-                                Acompanhe as atualizações automáticas (Cloud) e manuais (Locais)
+                                Status Global: {globalAutoImport ? <span className="text-green-500">ATIVADO</span> : <span className="text-red-500">DESATIVADO</span>}
                             </p>
                         </div>
                     </div>
@@ -71,8 +91,10 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                 <p className="text-xl font-black text-white">{activeSources.length}</p>
                             </div>
                             <div className="flex items-center gap-2">
-                                <div className={`w-3 h-3 rounded-full animate-pulse shadow-lg ${activeSources.length > 0 ? 'bg-green-500 shadow-green-500/50' : 'bg-gray-600'}`}></div>
-                                <span className="text-xs font-black uppercase text-gray-400">{activeSources.length > 0 ? 'Agendado' : 'Desativado'}</span>
+                                <div className={`w-3 h-3 rounded-full animate-pulse shadow-lg ${globalAutoImport && activeSources.length > 0 ? 'bg-green-500 shadow-green-500/50' : 'bg-gray-600'}`}></div>
+                                <span className="text-xs font-black uppercase text-gray-400">
+                                    {globalAutoImport ? (activeSources.length > 0 ? 'Agendado' : 'Sem Fontes') : 'Pausado'}
+                                </span>
                             </div>
                         </div>
                         <button 
@@ -109,7 +131,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             {logs.map((log) => (
                                 <tr key={log.id} className="hover:bg-gray-700/20 transition-colors">
                                     <td className="px-6 py-4 text-xs font-mono text-gray-400">
-                                        {new Date(log.timestamp).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                        {formatTimestamp(log.timestamp)}
                                     </td>
                                     <td className="px-6 py-4">
                                         <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${log.type === 'cloud' ? 'bg-blue-600/10 border-blue-600/30 text-blue-400' : 'bg-orange-600/10 border-orange-600/30 text-orange-400'}`}>

@@ -52,7 +52,7 @@ export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
 
 export interface ImportLog {
     id: string;
-    timestamp: number;
+    timestamp: any; // Pode ser number ou Timestamp do Firestore
     sourceName: string;
     newCount: number;
     existingCount: number;
@@ -60,7 +60,7 @@ export interface ImportLog {
     sectorsAffected: Record<string, number>;
     status: 'success' | 'error';
     errorMessage?: string;
-    type?: 'local' | 'cloud'; // Adicionado para distinguir a origem da importação
+    type?: 'local' | 'cloud';
 }
 
 export interface TimeBucket {
@@ -106,4 +106,9 @@ export interface ImportSource {
     type: ImportType;
     autoImport: boolean;
     lastImportTime?: number;
+}
+
+export interface ImportSettingsV2 {
+    sources: ImportSource[];
+    globalAutoImportEnabled: boolean;
 }

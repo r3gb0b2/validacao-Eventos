@@ -31,6 +31,13 @@ async function performSync() {
         }
         
         const data = importSnap.data() || {};
+        
+        // VERIFICAÇÃO DO SWITCH GLOBAL
+        if (data.globalAutoImportEnabled === false) {
+            console.log(`>>> [LOG] Evento ${eventName}: Auto-Import desativado globalmente.`);
+            continue;
+        }
+
         const sources = data.sources || [];
         const autoSources = sources.filter(s => s.autoImport);
 
@@ -38,6 +45,7 @@ async function performSync() {
 
         console.log(`>>> [LOG] Evento ${eventName}: ${autoSources.length} fontes para processar.`);
 
+        // Carrega tickets existentes (apenas IDs para economia de memória)
         const ticketsSnapshot = await db.collection(`events/${eventId}/tickets`).get();
         const existingIds = new Set();
         const ticketsMap = new Map();
@@ -54,6 +62,7 @@ async function performSync() {
             let newItems = 0;
             let updatedCount = 0;
             let existingCount = 0;
+            let totalFetched = 0;
             const sectorsAffected = {};
             const ticketsToSave = [];
 
@@ -81,24 +90,54 @@ async function performSync() {
                     const baseUrl = source.url.endsWith('/') ? source.url.slice(0, -1) : source.url;
                     const cleanToken = source.token.startsWith('Bearer ') ? source.token : `Bearer ${source.token}`;
 
-                    const response = await axios.get(`${baseUrl}/${endpoint}`, {
-                        params: { event_id: source.externalEventId, per_page: 500 },
-                        headers: { 'Authorization': cleanToken }
-                    });
+                    // SUPORTE A PAGINAÇÃO (MAX 500 itens por página)
+                    let currentPage = 1;
+                    let hasMore = true;
 
-                    const responseData = response.data;
-                    const itemsRaw = responseData.data || responseData.participants || responseData.tickets || responseData.checkins || responseData.buyers || (Array.isArray(responseData) ? responseData : []);
-                    
-                    items = itemsRaw.map(item => ({
-                        code: item.access_code || item.code || item.qr_code || item.barcode || item.id,
-                        sector: item.sector_name || item.category?.name || item.category || item.sector || item.ticket_type?.name || 'Geral',
-                        name: item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado',
-                        email: item.email || (item.customer && item.customer.email) || '',
-                        phone: item.phone || item.mobile || (item.customer && item.customer.phone) || '',
-                        document: item.document || item.cpf || (item.customer && item.customer.document) || '',
-                        used: source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at,
-                        usedAt: item.validated_at || null
-                    }));
+                    while (hasMore) {
+                        console.log(`>>> [LOG] Buscando página ${currentPage} da fonte ${source.name}`);
+                        const response = await axios.get(`${baseUrl}/${endpoint}`, {
+                            params: { 
+                                event_id: source.externalEventId, 
+                                per_page: 500,
+                                page: currentPage
+                            },
+                            headers: { 'Authorization': cleanToken }
+                        });
+
+                        const responseData = response.data;
+                        const itemsRaw = responseData.data || responseData.participants || responseData.tickets || responseData.checkins || responseData.buyers || (Array.isArray(responseData) ? responseData : []);
+                        
+                        if (!itemsRaw || itemsRaw.length === 0) {
+                            hasMore = false;
+                            break;
+                        }
+
+                        const mappedPage = itemsRaw.map(item => ({
+                            code: item.access_code || item.code || item.qr_code || item.barcode || item.id,
+                            sector: item.sector_name || item.category?.name || item.category || item.sector || item.ticket_type?.name || 'Geral',
+                            name: item.name || item.customer_name || item.buyer_name || (item.customer && item.customer.name) || 'Importado',
+                            email: item.email || (item.customer && item.customer.email) || '',
+                            phone: item.phone || item.mobile || (item.customer && item.customer.phone) || '',
+                            document: item.document || item.cpf || (item.customer && item.customer.document) || '',
+                            used: source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at,
+                            usedAt: item.validated_at || null
+                        }));
+
+                        items = items.concat(mappedPage);
+                        totalFetched += mappedPage.length;
+
+                        // Verifica se há mais páginas
+                        const lastPage = responseData.last_page || responseData.meta?.last_page || responseData.pagination?.total_pages || 1;
+                        if (currentPage >= lastPage) {
+                            hasMore = false;
+                        } else {
+                            currentPage++;
+                        }
+                        
+                        // Proteção contra loop infinito em bases gigantes no Cloud Function (limite 50 páginas por execução)
+                        if (currentPage > 50) hasMore = false;
+                    }
                 }
 
                 for (const item of items) {
@@ -157,14 +196,14 @@ async function performSync() {
 
                 // --- SEMPRE GERA LOG PARA O CLOUD SYNC ---
                 await db.collection(`events/${eventId}/import_logs`).add({
-                    timestamp: Date.now(),
+                    timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
                     newCount: newItems,
                     existingCount,
                     updatedCount,
                     sectorsAffected,
                     status: 'success',
-                    type: 'cloud' // Identificador de importação automática
+                    type: 'cloud'
                 });
 
                 const updatedSources = sources.map(s => 
@@ -175,7 +214,7 @@ async function performSync() {
             } catch (err) {
                 console.error(`>>> [ERRO] Fonte ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
-                    timestamp: Date.now(),
+                    timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
                     status: 'error',
                     errorMessage: err.message,
