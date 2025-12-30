@@ -60,6 +60,7 @@ export interface ImportLog {
     sectorsAffected: Record<string, number>;
     status: 'success' | 'error';
     errorMessage?: string;
+    type?: 'local' | 'cloud'; // Adicionado para distinguir a origem da importação
 }
 
 export interface TimeBucket {

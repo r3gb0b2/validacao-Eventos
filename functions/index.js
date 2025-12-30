@@ -1,3 +1,4 @@
+
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall } = require('firebase-functions/v2/https');
 const { setGlobalOptions } = require('firebase-functions/v2');
@@ -12,7 +13,6 @@ const db = admin.firestore();
 
 /**
  * Lógica central de importação.
- * IMPORTANTE: No Admin SDK (Functions), .exists é uma propriedade BOOLEANA.
  */
 async function performSync() {
     console.log(">>> [LOG] Iniciando performSync no Servidor...");
@@ -26,10 +26,7 @@ async function performSync() {
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
         
-        // CORREÇÃO CRÍTICA: exists é propriedade. 
-        // Se der erro de "is not a function", a função rodando é antiga!
         if (!importSnap.exists) {
-            console.log(`>>> [LOG] Configuração import_v2 não existe para o evento: ${eventName}`);
             continue;
         }
         
@@ -53,7 +50,6 @@ async function performSync() {
 
         for (const source of autoSources) {
             totalProcessedSources++;
-            console.log(`>>> [LOG] Sincronizando: ${source.name} (${source.type})`);
             
             let newItems = 0;
             let updatedCount = 0;
@@ -159,17 +155,17 @@ async function performSync() {
                     }
                 }
 
-                if (newItems > 0 || updatedCount > 0) {
-                    await db.collection(`events/${eventId}/import_logs`).add({
-                        timestamp: Date.now(),
-                        sourceName: source.name,
-                        newCount: newItems,
-                        existingCount,
-                        updatedCount,
-                        sectorsAffected,
-                        status: 'success'
-                    });
-                }
+                // --- SEMPRE GERA LOG PARA O CLOUD SYNC ---
+                await db.collection(`events/${eventId}/import_logs`).add({
+                    timestamp: Date.now(),
+                    sourceName: source.name,
+                    newCount: newItems,
+                    existingCount,
+                    updatedCount,
+                    sectorsAffected,
+                    status: 'success',
+                    type: 'cloud' // Identificador de importação automática
+                });
 
                 const updatedSources = sources.map(s => 
                     s.id === source.id ? { ...s, lastImportTime: Date.now() } : s
@@ -182,7 +178,8 @@ async function performSync() {
                     timestamp: Date.now(),
                     sourceName: source.name,
                     status: 'error',
-                    errorMessage: err.message
+                    errorMessage: err.message,
+                    type: 'cloud'
                 });
             }
         }
@@ -193,19 +190,18 @@ async function performSync() {
 
 /**
  * Função Agendada (A cada 1 minuto)
- * ATENÇÃO: Se rodar 'scheduledAutoImport', delete-a no console.
  */
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
     return await performSync();
 });
 
 /**
- * Função Manual
+ * Função Manual para acionar Cloud
  */
 exports.manualTriggerSync = onCall(async (request) => {
     try {
         return await performSync();
     } catch (e) {
-        throw new admin.functions.https.HttpsError('internal', e.message);
+        throw new Error(e.message);
     }
 });
