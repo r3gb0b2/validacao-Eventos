@@ -20,11 +20,11 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
     useEffect(() => {
         if (!selectedEvent || !db) return;
         
-        // Listener para logs
+        // Listener para logs - Ordenado por timestamp decrescente
         const q = query(
             collection(db, 'events', selectedEvent.id, 'import_logs'),
             orderBy('timestamp', 'desc'),
-            limit(100)
+            limit(50)
         );
         const unsubLogs = onSnapshot(q, (snap) => {
             const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ImportLog));
@@ -34,7 +34,9 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         // Listener para configuração global
         const unsubConfig = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
             if (snap.exists()) {
-                setGlobalAutoImport(snap.data().globalAutoImportEnabled || false);
+                setGlobalAutoImport(snap.data().globalAutoImportEnabled !== false);
+            } else {
+                setGlobalAutoImport(true); // Padrão é ativado se não existir
             }
         });
 
@@ -48,8 +50,9 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
         setIsManualSyncing(true);
         try {
             const manualSync = httpsCallable(functionsInstance, 'manualTriggerSync');
-            await manualSync();
-            alert("Sincronização do servidor solicitada! Os logs aparecerão abaixo em instantes.");
+            const result = await manualSync();
+            console.log("Sync Result:", result);
+            alert("Sincronização do servidor finalizada! Verifique os novos logs na tabela abaixo.");
         } catch (e: any) {
             console.error("Erro ao disparar sync manual:", e);
             alert("Erro ao disparar sincronização: " + e.message);
@@ -60,8 +63,15 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
 
     const formatTimestamp = (ts: any) => {
         if (!ts) return '--:--';
-        const date = ts.toMillis ? new Date(ts.toMillis()) : new Date(ts);
-        return date.toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        // Lida com Firestore Timestamp ou Number
+        const date = ts.seconds ? new Date(ts.seconds * 1000) : (ts.toMillis ? new Date(ts.toMillis()) : new Date(ts));
+        return date.toLocaleString('pt-BR', { 
+            day: '2-digit', 
+            month: '2-digit', 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+        });
     };
 
     const activeSources = importSources.filter(s => s.autoImport);
@@ -102,8 +112,8 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             disabled={isManualSyncing}
                             className={`flex items-center gap-2 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg active:scale-95 ${isManualSyncing ? 'bg-gray-700 text-gray-500' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
                         >
-                            <CloudUploadIcon className={`w-4 h-4 ${isManualSyncing ? 'animate-bounce' : ''}`} />
-                            {isManualSyncing ? 'Acionando Cloud...' : 'Forçar Cloud Sync (Servidor)'}
+                            <CloudUploadIcon className={`w-4 h-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
+                            {isManualSyncing ? 'Sincronizando Cloud...' : 'Forçar Cloud Sync Agora'}
                         </button>
                     </div>
                 </div>
@@ -112,7 +122,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             <div className="bg-gray-800 rounded-[2.5rem] border border-gray-700 shadow-xl overflow-hidden">
                 <div className="p-6 border-b border-gray-700 bg-gray-900/20">
                     <h3 className="font-black text-xs text-gray-400 uppercase tracking-widest flex items-center">
-                        <ClockIcon className="w-4 h-4 mr-2" /> Log de Execuções Recentes
+                        <ClockIcon className="w-4 h-4 mr-2" /> Log de Execuções Recentes (Servidor e Local)
                     </h3>
                 </div>
 
@@ -121,34 +131,37 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                         <thead>
                             <tr className="text-[10px] text-gray-500 uppercase font-black border-b border-gray-700 bg-gray-800/50">
                                 <th className="px-6 py-4">Horário</th>
-                                <th className="px-6 py-4">Origem / Tipo</th>
-                                <th className="px-6 py-4">Fonte de Dados</th>
-                                <th className="px-6 py-4">Novos / Check-ins</th>
+                                <th className="px-6 py-4">Origem</th>
+                                <th className="px-6 py-4">Fonte</th>
+                                <th className="px-6 py-4">Resultado</th>
                                 <th className="px-6 py-4 text-center">Status</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-700/50">
                             {logs.map((log) => (
                                 <tr key={log.id} className="hover:bg-gray-700/20 transition-colors">
-                                    <td className="px-6 py-4 text-xs font-mono text-gray-400">
+                                    <td className="px-6 py-4 text-[10px] font-mono text-gray-400 whitespace-nowrap">
                                         {formatTimestamp(log.timestamp)}
                                     </td>
                                     <td className="px-6 py-4">
-                                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border ${log.type === 'cloud' ? 'bg-blue-600/10 border-blue-600/30 text-blue-400' : 'bg-orange-600/10 border-orange-600/30 text-orange-400'}`}>
-                                            {log.type === 'cloud' ? 'AUTO / CLOUD' : 'MANUAL / LOCAL'}
+                                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-full border ${log.type === 'cloud' ? 'bg-blue-600/10 border-blue-600/30 text-blue-400' : 'bg-orange-600/10 border-orange-600/30 text-orange-400'}`}>
+                                            {log.type === 'cloud' ? 'SERVIDOR' : 'LOCAL'}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">
-                                        <p className="text-xs font-black text-white">{log.sourceName}</p>
+                                        <p className="text-xs font-black text-white truncate max-w-[150px]">{log.sourceName}</p>
                                     </td>
                                     <td className="px-6 py-4">
-                                        <div className="flex gap-2">
-                                            {log.newCount > 0 ? (
-                                                <span className="text-[10px] bg-green-500/10 text-green-400 px-2 py-0.5 rounded-full font-black">+{log.newCount} NOVOS</span>
-                                            ) : (
-                                                <span className="text-[9px] text-gray-600 uppercase font-bold">0 Novos</span>
+                                        <div className="flex flex-wrap gap-1">
+                                            {log.newCount > 0 && (
+                                                <span className="text-[9px] bg-green-500/10 text-green-400 px-1.5 py-0.5 rounded font-black">+{log.newCount} Novos</span>
                                             )}
-                                            {log.updatedCount > 0 && <span className="text-[10px] bg-yellow-500/10 text-yellow-500 px-2 py-0.5 rounded-full font-black">{log.updatedCount} CHECK-INS</span>}
+                                            {log.updatedCount > 0 && (
+                                                <span className="text-[9px] bg-yellow-500/10 text-yellow-500 px-1.5 py-0.5 rounded font-black">{log.updatedCount} Usados</span>
+                                            )}
+                                            {log.newCount === 0 && log.updatedCount === 0 && log.status === 'success' && (
+                                                <span className="text-[9px] text-gray-500 uppercase font-bold">Nenhuma alteração</span>
+                                            )}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-center">
@@ -157,8 +170,8 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                         ) : (
                                             <div className="group relative">
                                                 <AlertTriangleIcon className="w-5 h-5 text-red-500 mx-auto cursor-help" />
-                                                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-red-600 text-white text-[10px] p-2 rounded shadow-xl w-48 z-10">
-                                                    {log.errorMessage}
+                                                <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-red-600 text-white text-[10px] p-2 rounded shadow-xl w-48 z-10 text-left">
+                                                    {log.errorMessage || 'Erro desconhecido'}
                                                 </div>
                                             </div>
                                         )}
