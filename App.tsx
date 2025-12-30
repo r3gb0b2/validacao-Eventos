@@ -37,6 +37,33 @@ const App: React.FC = () => {
     const [db, setDb] = useState<Firestore | null>(null);
     const [firebaseStatus, setFirebaseStatus] = useState<'loading' | 'success' | 'error'>('loading');
     
+    // --- PERSISTÊNCIA SÍNCRONA DE SESSÃO ---
+    const [currentUser, setCurrentUser] = useState<User | null>(() => {
+        try {
+            const saved = localStorage.getItem('auth_user_session');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed._expiry > Date.now()) return parsed;
+                localStorage.removeItem('auth_user_session');
+            }
+        } catch(e) {}
+        return null;
+    });
+
+    // --- PERSISTÊNCIA SÍNCRONA DE NAVEGAÇÃO ---
+    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
+        // 1. Prioridade para parâmetros de URL (Deep Linking)
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('mode') === 'stats') return 'public_stats';
+        
+        // 2. Fallback para localStorage
+        try { 
+            const savedView = localStorage.getItem('current_view');
+            if (savedView) return savedView as any;
+        } catch(e) {}
+        return 'scanner';
+    });
+
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
     const [allTickets, setAllTickets] = useState<Ticket[]>([]);
@@ -44,7 +71,6 @@ const App: React.FC = () => {
     const [sectorNames, setSectorNames] = useState<string[]>([]); 
     const [hiddenSectors, setHiddenSectors] = useState<string[]>([]); 
     
-    const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [showLoginModal, setShowLoginModal] = useState(false);
     const [showOpConfigModal, setShowOpConfigModal] = useState(false);
     const [isAuthLoading, setIsAuthLoading] = useState(false);
@@ -54,17 +80,12 @@ const App: React.FC = () => {
     const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
     const [isOperatorConfigured, setIsOperatorConfigured] = useState(false);
     
-    const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators'>(() => {
-        try { return (localStorage.getItem('current_view') as any) || 'scanner'; } catch(e) { return 'scanner'; }
-    });
-
     const [scanResult, setScanResult] = useState<{ status: ScanStatus; message: string; extra?: string } | null>(null);
     const [pendingAlert, setPendingAlert] = useState<{ticket: Ticket, code: string} | null>(null);
 
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [ticketsLoaded, setTicketsLoaded] = useState(false); 
     const [scansLoaded, setScansLoaded] = useState(false); 
-    const [isCheckingUrl, setIsCheckingUrl] = useState(true); 
     const [manualCode, setManualCode] = useState(''); 
     
     const deviceId = useMemo(() => getDeviceId(), []);
@@ -73,18 +94,10 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
 
-    useEffect(() => { localStorage.setItem('current_view', view); }, [view]);
-
-    // Recuperar sessão
-    useEffect(() => {
-        try {
-            const saved = localStorage.getItem('auth_user_session');
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed._expiry > Date.now()) setCurrentUser(parsed);
-            }
-        } catch(e) {}
-    }, []);
+    // Salvar navegação sempre que mudar
+    useEffect(() => { 
+        localStorage.setItem('current_view', view); 
+    }, [view]);
 
     const ticketsMap = useMemo(() => {
         const map = new Map<string, Ticket>();
@@ -106,32 +119,42 @@ const App: React.FC = () => {
         }).catch(() => setFirebaseStatus('error'));
     }, []);
 
-    // Events Listener
+    // Events Listener e Restauração Automática do Evento Selecionado
     useEffect(() => {
-        if (!db || view === 'public_stats' || view === 'operators') return;
+        if (!db) return;
+        
+        // Se estivermos em public_stats, pegamos o ID da URL
+        const params = new URLSearchParams(window.location.search);
+        const urlEventId = params.get('eventId');
+        const savedEventId = urlEventId || localStorage.getItem('selected_event_id');
+
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
-            const eventsData = snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name || 'Sem Nome', isHidden: doc.data().isHidden ?? false }));
+            const eventsData = snapshot.docs.map(doc => ({ 
+                id: doc.id, 
+                name: doc.data().name || 'Sem Nome', 
+                isHidden: doc.data().isHidden ?? false 
+            }));
             setEvents(eventsData);
             
-            const savedEventId = localStorage.getItem('selected_event_id');
             if (savedEventId && !selectedEvent) {
                 const found = eventsData.find(e => e.id === savedEventId);
                 if (found) {
                     setSelectedEvent(found);
+                    // Restaurar configuração do operador se estiver no modo scanner
                     const savedConfig = localStorage.getItem(`op_config_${found.id}`);
                     if (savedConfig) {
                         const parsed = JSON.parse(savedConfig);
                         setOperatorName(parsed.name || '');
                         setSelectedSectors(parsed.sectors || []);
                         setIsOperatorConfigured(true);
-                    } else {
+                    } else if (view === 'scanner') {
                         setShowOpConfigModal(true);
                     }
                 }
             }
         });
         return () => eventsUnsubscribe();
-    }, [db, view, selectedEvent]);
+    }, [db, selectedEvent, view]);
 
     // Event Data Listener
     useEffect(() => {
@@ -232,7 +255,6 @@ const App: React.FC = () => {
         }
 
         if (ticket.status === 'USED') {
-            // FORMATAÇÃO DA HORA DA PRIMEIRA ENTRADA
             const usedAtTime = ticket.usedAt ? new Date(ticket.usedAt).toLocaleTimeString('pt-BR') : 'Horário não registrado';
             showScanResult('USED', `Já utilizado às ${usedAtTime}.`, `Código: ${ticketId}`);
             addDoc(collection(db, 'events', selectedEvent.id, 'scans'), { ticketId, status: 'USED', timestamp: serverTimestamp(), sector: ticket.sector, deviceId, operator: operatorName });
@@ -255,6 +277,13 @@ const App: React.FC = () => {
         setTimeout(() => setScanResult(null), 3000);
     };
 
+    const handleLogout = () => {
+        setCurrentUser(null);
+        localStorage.removeItem('auth_user_session');
+        // Manter a view 'scanner' por segurança após logout
+        setView('scanner');
+    };
+
     const handleSwitchEvent = () => {
         setSelectedEvent(null);
         setAllTickets([]);
@@ -264,6 +293,7 @@ const App: React.FC = () => {
         setSelectedSectors([]);
         setShowOpConfigModal(false);
         localStorage.removeItem('selected_event_id');
+        // Ao trocar evento, forçar volta para o scanner
         setView('scanner');
     };
 
@@ -328,7 +358,7 @@ const App: React.FC = () => {
                     </div>
                     <div className="flex gap-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className="p-3 rounded-2xl bg-gray-800 hover:bg-gray-700"><CogIcon className="w-5 h-5" /></button>
-                         {currentUser && <button onClick={() => { setCurrentUser(null); localStorage.removeItem('auth_user_session'); setView('scanner'); }} className="p-3 rounded-2xl bg-red-600/20 text-red-500"><LogoutIcon className="w-5 h-5" /></button>}
+                         {currentUser && <button onClick={handleLogout} className="p-3 rounded-2xl bg-red-600/20 text-red-500"><LogoutIcon className="w-5 h-5" /></button>}
                     </div>
                 </header>
 
