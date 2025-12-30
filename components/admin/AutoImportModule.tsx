@@ -133,6 +133,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                 <th className="px-6 py-4">Horário</th>
                                 <th className="px-6 py-4">Origem</th>
                                 <th className="px-6 py-4">Fonte</th>
+                                <th className="px-6 py-4">Total Lidos</th>
                                 <th className="px-6 py-4">Resultado</th>
                                 <th className="px-6 py-4 text-center">Status</th>
                             </tr>
@@ -150,6 +151,9 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                     </td>
                                     <td className="px-6 py-4">
                                         <p className="text-xs font-black text-white truncate max-w-[150px]">{log.sourceName}</p>
+                                    </td>
+                                    <td className="px-6 py-4 text-xs font-bold text-gray-400">
+                                        {(log as any).totalFetched || '--'}
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex flex-wrap gap-1">
@@ -180,7 +184,7 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                             ))}
                             {logs.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-20 text-center text-gray-600 italic">
+                                    <td colSpan={6} className="px-6 py-20 text-center text-gray-600 italic">
                                         Nenhuma importação registrada recentemente.
                                     </td>
                                 </tr>
