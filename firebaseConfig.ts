@@ -1,5 +1,5 @@
 
-import { initializeApp, FirebaseApp } from "firebase/app";
+import { initializeApp, FirebaseApp, getApp, getApps } from "firebase/app";
 import { getFirestore, enableIndexedDbPersistence, Firestore } from "firebase/firestore";
 import { getFunctions, Functions } from "firebase/functions";
 
@@ -13,9 +13,25 @@ const firebaseConfig = {
   measurementId: "G-M30E0D9TP2"
 };
 
-const app: FirebaseApp = initializeApp(firebaseConfig);
+// Inicializa o App de forma segura
+let app: FirebaseApp;
+if (!getApps().length) {
+    app = initializeApp(firebaseConfig);
+} else {
+    app = getApp();
+}
+
 const firestoreInstance: Firestore = getFirestore(app);
-export const functionsInstance: Functions = getFunctions(app, "us-central1");
+
+// Exporta funções de forma que não quebrem se o módulo não carregar
+export const getFunctionsInstance = (): Functions | null => {
+    try {
+        return getFunctions(app, "us-central1");
+    } catch (e) {
+        console.error("Firebase Functions não disponível:", e);
+        return null;
+    }
+};
 
 let dbInstance: Firestore | null = null;
 let dbInitializationPromise: Promise<Firestore> | null = null;
@@ -35,9 +51,9 @@ export const getDb = (): Promise<Firestore> => {
         })
         .catch((err: any) => {
             if (err.code === 'failed-precondition') {
-                console.warn('Multiple tabs open, persistence can only be enabled in one tab at a time.');
+                console.warn('Persistence falhou: múltiplas abas abertas.');
             } else if (err.code === 'unimplemented') {
-                console.warn('The current browser does not support all of the features required to enable persistence.');
+                console.warn('Navegador não suporta persistence.');
             }
             dbInstance = firestoreInstance;
             return dbInstance;

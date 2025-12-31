@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { ImportSource, Event, Ticket, ImportLog } from '../../types';
 import { Firestore, collection, onSnapshot, query, orderBy, limit, doc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { functionsInstance } from '../../firebaseConfig';
+import { getFunctionsInstance } from '../../firebaseConfig';
 import { ClockIcon, CheckCircleIcon, AlertTriangleIcon, ShieldCheckIcon, CloudUploadIcon } from '../Icons';
 
 interface AutoImportModuleProps {
@@ -20,7 +20,6 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
     useEffect(() => {
         if (!selectedEvent || !db) return;
         
-        // Listener para logs - Ordenado por timestamp decrescente
         const q = query(
             collection(db, 'events', selectedEvent.id, 'import_logs'),
             orderBy('timestamp', 'desc'),
@@ -31,12 +30,11 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
             setLogs(list);
         });
 
-        // Listener para configuração global
         const unsubConfig = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
             if (snap.exists()) {
                 setGlobalAutoImport(snap.data().globalAutoImportEnabled !== false);
             } else {
-                setGlobalAutoImport(true); // Padrão é ativado se não existir
+                setGlobalAutoImport(true);
             }
         });
 
@@ -47,12 +45,17 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
     }, [db, selectedEvent]);
 
     const handleManualServerSync = async () => {
+        const functions = getFunctionsInstance();
+        if (!functions) {
+            alert("Erro: O SDK de Cloud Functions não pôde ser carregado. Verifique sua conexão.");
+            return;
+        }
+
         setIsManualSyncing(true);
         try {
-            const manualSync = httpsCallable(functionsInstance, 'manualTriggerSync');
-            const result = await manualSync();
-            console.log("Sync Result:", result);
-            alert("Sincronização do servidor finalizada! Verifique os novos logs na tabela abaixo.");
+            const manualSync = httpsCallable(functions, 'manualTriggerSync');
+            await manualSync();
+            alert("Sincronização do servidor disparada com sucesso!");
         } catch (e: any) {
             console.error("Erro ao disparar sync manual:", e);
             alert("Erro ao disparar sincronização: " + e.message);
@@ -63,7 +66,6 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
 
     const formatTimestamp = (ts: any) => {
         if (!ts) return '--:--';
-        // Lida com Firestore Timestamp ou Number
         const date = ts.seconds ? new Date(ts.seconds * 1000) : (ts.toMillis ? new Date(ts.toMillis()) : new Date(ts));
         return date.toLocaleString('pt-BR', { 
             day: '2-digit', 
@@ -182,13 +184,6 @@ const AutoImportModule: React.FC<AutoImportModuleProps> = ({ db, selectedEvent, 
                                     </td>
                                 </tr>
                             ))}
-                            {logs.length === 0 && (
-                                <tr>
-                                    <td colSpan={6} className="px-6 py-20 text-center text-gray-600 italic">
-                                        Nenhuma importação registrada recentemente.
-                                    </td>
-                                </tr>
-                            )}
                         </tbody>
                     </table>
                 </div>
