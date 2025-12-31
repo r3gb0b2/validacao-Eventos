@@ -20,7 +20,7 @@ import LookupModule from './components/admin/LookupModule';
 import { CogIcon, LogoutIcon, TicketIcon, UsersIcon, FunnelIcon, CheckCircleIcon, QrCodeIcon } from './components/Icons';
 import { useSound } from './hooks/useSound';
 
-import { Ticket, ScanStatus, DisplayableScanLog, Event, User, ImportSource } from './types';
+import { Ticket, ScanStatus, DisplayableScanLog, Event, User, ImportSource, formatSafeTime } from './types';
 
 const getDeviceId = () => {
     try {
@@ -32,32 +32,6 @@ const getDeviceId = () => {
         return id;
     } catch (e) {
         return 'device_fallback_' + Date.now();
-    }
-};
-
-// Helper robusto e exportado para formatar data do Firestore ou Number
-export const formatSafeTime = (ts: any) => {
-    if (!ts) return 'Não registrado';
-    try {
-        let date: Date;
-
-        // Caso 1: Objeto Timestamp do Firestore (tem método toMillis)
-        if (ts && typeof ts.toMillis === 'function') {
-            date = new Date(ts.toMillis());
-        } 
-        // Caso 2: Objeto bruto {seconds, nanoseconds} (comum em sync parcial)
-        else if (ts && typeof ts.seconds === 'number') {
-            date = new Date(ts.seconds * 1000);
-        }
-        // Caso 3: Número (ms) ou string
-        else {
-            date = new Date(ts);
-        }
-
-        if (isNaN(date.getTime())) return 'Horário inválido';
-        return date.toLocaleTimeString('pt-BR');
-    } catch (e) {
-        return 'Horário inválido';
     }
 };
 

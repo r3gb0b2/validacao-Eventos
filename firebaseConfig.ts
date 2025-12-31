@@ -13,22 +13,28 @@ const firebaseConfig = {
   measurementId: "G-M30E0D9TP2"
 };
 
-// Inicializa o App de forma segura
+// Singleton para o Firebase App
 let app: FirebaseApp;
-if (!getApps().length) {
-    app = initializeApp(firebaseConfig);
-} else {
-    app = getApp();
+try {
+    if (!getApps().length) {
+        app = initializeApp(firebaseConfig);
+    } else {
+        app = getApp();
+    }
+} catch (e) {
+    console.error("Erro ao inicializar Firebase App:", e);
+    app = getApp(); // Fallback se já existir mas falhou a detecção
 }
 
 const firestoreInstance: Firestore = getFirestore(app);
 
-// Exporta funções de forma que não quebrem se o módulo não carregar
+// Exporta funções de forma que não quebrem se o módulo não carregar (segurança APK)
 export const getFunctionsInstance = (): Functions | null => {
     try {
-        return getFunctions(app, "us-central1");
+        const currentApp = getApp();
+        return getFunctions(currentApp, "us-central1");
     } catch (e) {
-        console.error("Firebase Functions não disponível:", e);
+        console.error("Firebase Functions não disponível no WebView:", e);
         return null;
     }
 };
@@ -37,12 +43,8 @@ let dbInstance: Firestore | null = null;
 let dbInitializationPromise: Promise<Firestore> | null = null;
 
 export const getDb = (): Promise<Firestore> => {
-    if (dbInstance) {
-        return Promise.resolve(dbInstance);
-    }
-    if (dbInitializationPromise) {
-        return dbInitializationPromise;
-    }
+    if (dbInstance) return Promise.resolve(dbInstance);
+    if (dbInitializationPromise) return dbInitializationPromise;
 
     dbInitializationPromise = enableIndexedDbPersistence(firestoreInstance)
         .then(() => {
@@ -50,11 +52,7 @@ export const getDb = (): Promise<Firestore> => {
             return dbInstance;
         })
         .catch((err: any) => {
-            if (err.code === 'failed-precondition') {
-                console.warn('Persistence falhou: múltiplas abas abertas.');
-            } else if (err.code === 'unimplemented') {
-                console.warn('Navegador não suporta persistence.');
-            }
+            console.warn('Persistence falhou, operando em modo apenas online ou memória:', err.code);
             dbInstance = firestoreInstance;
             return dbInstance;
         });

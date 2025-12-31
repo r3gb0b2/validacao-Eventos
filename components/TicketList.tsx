@@ -1,8 +1,7 @@
 
 import React, { useState } from 'react';
-import { DisplayableScanLog, Sector, ScanStatus } from '../types';
+import { DisplayableScanLog, Sector, ScanStatus, formatSafeTime } from '../types';
 import { ClockIcon } from './Icons';
-import { formatSafeTime } from '../App';
 
 interface TicketListProps {
   tickets: DisplayableScanLog[];
