@@ -1,15 +1,21 @@
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
-const rootElement = document.getElementById('root');
-if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
-}
+try {
+    const rootElement = document.getElementById('root');
+    if (!rootElement) {
+        throw new Error("Elemento root não encontrado");
+    }
 
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(
+        <React.StrictMode>
+            <App />
+        </React.StrictMode>
+    );
+} catch (err) {
+    console.error("Crash no Render:", err);
+    alert("Erro ao carregar interface: " + (err instanceof Error ? err.message : String(err)));
+}

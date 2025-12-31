@@ -1,6 +1,6 @@
 
 import { initializeApp, getApp, getApps } from "firebase/app";
-import { getFirestore, enableIndexedDbPersistence, Firestore } from "firebase/firestore";
+import { getFirestore, Firestore } from "firebase/firestore";
 import { getFunctions, Functions } from "firebase/functions";
 
 const firebaseConfig = {
@@ -13,7 +13,7 @@ const firebaseConfig = {
   measurementId: "G-M30E0D9TP2"
 };
 
-// Inicialização direta e segura
+// Inicialização ultra-simples
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const firestoreInstance = getFirestore(app);
 
@@ -25,23 +25,7 @@ export const getFunctionsInstance = (): Functions | null => {
     }
 };
 
-let dbInstance: Firestore | null = null;
-let dbInitializationPromise: Promise<Firestore> | null = null;
-
+// DESATIVADO: enableIndexedDbPersistence (Causa crash em muitos WebViews Android via protocolo file://)
 export const getDb = (): Promise<Firestore> => {
-    if (dbInstance) return Promise.resolve(dbInstance);
-    if (dbInitializationPromise) return dbInitializationPromise;
-
-    // Tenta persistência mas não trava se falhar (comum em APKs)
-    dbInitializationPromise = enableIndexedDbPersistence(firestoreInstance)
-        .then(() => {
-            dbInstance = firestoreInstance;
-            return dbInstance;
-        })
-        .catch(() => {
-            dbInstance = firestoreInstance;
-            return dbInstance;
-        });
-    
-    return dbInitializationPromise;
+    return Promise.resolve(firestoreInstance);
 };

@@ -4,43 +4,39 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>ST INGRESSOS CHECK IN</title>
+    <title>ST CHECK-IN</title>
     
-    <!-- PWA Settings -->
-    <link rel="manifest" href="manifest.json" />
-    <meta name="theme-color" content="#111827" />
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="ST Check-in">
-    
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-    <link rel="apple-touch-icon" href="icon-192.png">
+    <style>
+      /* CSS crítico embutido para não depender de rede no boot */
+      body { background-color: #111827; margin: 0; font-family: sans-serif; }
+      #boot-loader {
+        position: fixed; inset: 0; z-index: 9999; background: #111827;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+      }
+      .spinner {
+        width: 40px; height: 40px; border: 4px solid #f97316;
+        border-top-color: transparent; border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #error-display {
+        display: none; position: fixed; inset: 0; z-index: 10000;
+        background: #7f1d1d; color: white; padding: 20px; overflow: auto;
+      }
+    </style>
 
-    <script src="https://cdn.tailwindcss.com"></script>
-
-    <!-- MONITOR DE CRASH & BOOTLOADER -->
     <script>
-      // Captura erros globais antes do React carregar
-      window.onerror = function(msg, url, lineNo, columnNo, error) {
-        var debugDiv = document.getElementById('boot-screen');
-        if (debugDiv) {
-          debugDiv.style.backgroundColor = '#7f1d1d'; // Fundo vermelho escuro para erro
-          debugDiv.innerHTML = '<div style="padding:30px;font-family:sans-serif;">' +
-            '<h1 style="color:#f87171;font-size:20px;">ERRO CRÍTICO NO APK</h1>' +
-            '<p style="color:#fca5a5;font-size:14px;margin-top:10px;">O aplicativo não pôde ser iniciado.</p>' +
-            '<div style="background:#000;padding:15px;border-radius:10px;margin-top:20px;font-family:monospace;font-size:11px;color:#4ade80;overflow:auto;max-height:200px;">' +
-            '<b>Log:</b> ' + msg + '<br><b>Local:</b> ' + lineNo + ':' + columnNo + '</div>' +
-            '<button onclick="window.location.reload()" style="margin-top:20px;width:100%;padding:15px;background:#ef4444;color:white;border:none;border-radius:12px;font-weight:bold;">TENTAR NOVAMENTE</button>' +
-            '</div>';
+      // CAPTURA DE ERRO IMEDIATA
+      window.onerror = function(msg, url, line, col, error) {
+        var errDiv = document.getElementById('error-display');
+        if (errDiv) {
+          errDiv.style.display = 'block';
+          errDiv.innerHTML = '<h2>ERRO DE CARREGAMENTO</h2>' +
+            '<p><b>Msg:</b> ' + msg + '</p>' +
+            '<p><b>Linha:</b> ' + line + '</p>' +
+            '<button onclick="location.reload()" style="padding:10px;background:white;color:red;border:none;border-radius:5px;">REPETIR</button>';
         }
         return false;
-      };
-
-      // Verifica suporte a recursos modernos
-      window.onload = function() {
-        if (!HTMLScriptElement.supports || !HTMLScriptElement.supports('importmap')) {
-          window.onerror("Dispositivo incompatível: O WebView do seu Android está desatualizado (Requer Chrome 89+).");
-        }
       };
     </script>
 
@@ -65,15 +61,22 @@
 }
 </script>
   </head>
-  <body class="bg-gray-900 text-white antialiased overscroll-none">
-    <!-- Tela de Boot (Visível até o React carregar) -->
-    <div id="boot-screen" style="position:fixed;inset:0;z-index:9999;background:#111827;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;">
-        <div style="width:50px;height:50px;border:4px solid #f97316;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>
-        <p style="margin-top:20px;font-family:sans-serif;font-weight:bold;color:#f97316;letter-spacing:2px;font-size:12px;">ST INGRESSOS<br><span style="color:#4b5563;font-weight:normal;font-size:10px;">INICIANDO SISTEMA...</span></p>
-        <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+  <body>
+    <div id="error-display"></div>
+    
+    <div id="boot-loader">
+        <div class="spinner"></div>
+        <p style="color: #f97316; font-weight: bold; margin-top: 15px;">ST INGRESSOS</p>
     </div>
 
     <div id="root"></div>
+    
+    <!-- Script de entrada -->
     <script type="module" src="index.tsx"></script>
+
+    <!-- Fallback para navegadores que não suportam módulos (Android 6-8) -->
+    <script nomodule>
+      alert("Seu Android é muito antigo. Por favor, atualize o 'Android System WebView' na Play Store.");
+    </script>
   </body>
 </html>
