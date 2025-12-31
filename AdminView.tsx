@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
-import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon, CloudDownloadIcon, TicketIcon } from './components/Icons';
+import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot, updateDoc } from 'firebase/firestore';
+import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon, CloudDownloadIcon, TicketIcon, EyeIcon, EyeSlashIcon } from './components/Icons';
 
 // Módulos
 import DashboardModule from './components/admin/DashboardModule';
@@ -86,6 +86,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         await setDoc(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), { sources }, { merge: true });
     };
 
+    const toggleEventVisibility = async (ev: Event) => {
+        if (!db) return;
+        try {
+            await updateDoc(doc(db, 'events', ev.id), {
+                isHidden: !ev.isHidden
+            });
+        } catch (e) {
+            console.error("Erro ao alternar visibilidade:", e);
+        }
+    };
+
     const downloadFirebaseRC = () => {
         const config = {
             projects: {
@@ -117,7 +128,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                             <CloudDownloadIcon className="w-5 h-5 mr-2" /> .firebaserc
                         </button>
                         <button 
-                            onClick={async () => { const n = prompt("Nome do Evento:"); if(n) await addDoc(collection(db, 'events'), { name: n, createdAt: serverTimestamp() }); }} 
+                            onClick={async () => { const n = prompt("Nome do Evento:"); if(n) await addDoc(collection(db, 'events'), { name: n, createdAt: serverTimestamp(), isHidden: false }); }} 
                             className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-2xl text-xs font-bold flex items-center shadow-lg transition-all active:scale-95"
                         >
                             <PlusCircleIcon className="w-5 h-5 mr-2" /> Novo Evento
@@ -126,9 +137,19 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {events.map(ev => (
-                        <div key={ev.id} className={`bg-gray-800 p-6 rounded-3xl border flex justify-between items-center transition-all ${selectedEvent?.id === ev.id ? 'border-orange-500 ring-2 ring-orange-500/20' : 'border-gray-700 hover:border-gray-600'}`}>
-                            <span className="font-bold text-gray-100">{ev.name}</span>
+                        <div key={ev.id} className={`bg-gray-800 p-6 rounded-3xl border flex justify-between items-center transition-all ${selectedEvent?.id === ev.id ? 'border-orange-500 ring-2 ring-orange-500/20' : 'border-gray-700 hover:border-gray-600'} ${ev.isHidden ? 'opacity-60 grayscale-[0.5]' : ''}`}>
+                            <div className="flex flex-col">
+                                <span className="font-bold text-gray-100">{ev.name}</span>
+                                {ev.isHidden && <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest mt-1">Oculto da Validação</span>}
+                            </div>
                             <div className="flex gap-2">
+                                <button 
+                                    onClick={() => toggleEventVisibility(ev)} 
+                                    className={`p-2.5 rounded-xl transition-all ${ev.isHidden ? 'bg-gray-700 text-gray-400' : 'bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white'}`}
+                                    title={ev.isHidden ? "Mostrar no Scanner" : "Ocultar do Scanner"}
+                                >
+                                    {ev.isHidden ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+                                </button>
                                 <button onClick={() => onSelectEvent(ev)} className={`${selectedEvent?.id === ev.id ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'} px-5 py-2.5 rounded-xl text-xs font-bold transition-all shadow-md`}>{selectedEvent?.id === ev.id ? 'Ativo' : 'Selecionar'}</button>
                                 <button onClick={async () => { if(confirm("EXCLUIR EVENTO? Todos os ingressos e scans serão apagados.")) await deleteDoc(doc(db, 'events', ev.id)); }} className="p-2.5 text-red-500 bg-red-900/10 rounded-xl hover:bg-red-600 hover:text-white transition-all"><TrashIcon className="w-5 h-5" /></button>
                             </div>
