@@ -4,43 +4,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>ST CHECK-IN</title>
+    <title>ST INGRESSOS CHECK IN</title>
     
-    <style>
-      /* CSS crítico embutido para não depender de rede no boot */
-      body { background-color: #111827; margin: 0; font-family: sans-serif; }
-      #boot-loader {
-        position: fixed; inset: 0; z-index: 9999; background: #111827;
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-      }
-      .spinner {
-        width: 40px; height: 40px; border: 4px solid #f97316;
-        border-top-color: transparent; border-radius: 50%;
-        animation: spin 1s linear infinite;
-      }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      #error-display {
-        display: none; position: fixed; inset: 0; z-index: 10000;
-        background: #7f1d1d; color: white; padding: 20px; overflow: auto;
-      }
-    </style>
+    <!-- PWA Settings -->
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#111827" />
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ST Check-in">
+    
+    <!-- Icons -->
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
 
-    <script>
-      // CAPTURA DE ERRO IMEDIATA
-      window.onerror = function(msg, url, line, col, error) {
-        var errDiv = document.getElementById('error-display');
-        if (errDiv) {
-          errDiv.style.display = 'block';
-          errDiv.innerHTML = '<h2>ERRO DE CARREGAMENTO</h2>' +
-            '<p><b>Msg:</b> ' + msg + '</p>' +
-            '<p><b>Linha:</b> ' + line + '</p>' +
-            '<button onclick="location.reload()" style="padding:10px;background:white;color:red;border:none;border-radius:5px;">REPETIR</button>';
-        }
-        return false;
-      };
-    </script>
-
-    <script type="importmap">
+    <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
 {
   "imports": {
     "react": "https://aistudiocdn.com/react@^19.1.1",
@@ -51,32 +29,18 @@
     "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
     "firebase/functions": "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js",
     "html5-qrcode": "https://aistudiocdn.com/html5-qrcode@^2.3.8",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.2.1/",
     "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
     "jspdf-autotable": "https://aistudiocdn.com/jspdf-autotable@^3.8.2",
     "papaparse": "https://aistudiocdn.com/papaparse@^5.4.1",
     "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm",
-    "pdfjs-dist": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm",
-    "firebase/": "https://esm.sh/firebase@^12.7.0/"
+    "pdfjs-dist": "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm"
   }
 }
 </script>
-  </head>
-  <body>
-    <div id="error-display"></div>
-    
-    <div id="boot-loader">
-        <div class="spinner"></div>
-        <p style="color: #f97316; font-weight: bold; margin-top: 15px;">ST INGRESSOS</p>
-    </div>
-
+</head>
+  <body class="bg-gray-900 text-white antialiased overscroll-none">
     <div id="root"></div>
-    
-    <!-- Script de entrada -->
     <script type="module" src="index.tsx"></script>
-
-    <!-- Fallback para navegadores que não suportam módulos (Android 6-8) -->
-    <script nomodule>
-      alert("Seu Android é muito antigo. Por favor, atualize o 'Android System WebView' na Play Store.");
-    </script>
   </body>
 </html>

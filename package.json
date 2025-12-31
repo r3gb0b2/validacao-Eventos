@@ -13,12 +13,12 @@
     "react-dom": "^19.1.1",
     "@google/genai": "^1.20.0",
     "html5-qrcode": "^2.3.8",
+    "firebase": "^12.2.1",
     "jspdf": "^2.5.1",
     "jspdf-autotable": "^3.8.2",
     "papaparse": "^5.4.1",
     "jszip": "3.10.1",
-    "pdfjs-dist": "3.11.174",
-    "firebase": "^12.7.0"
+    "pdfjs-dist": "3.11.174"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

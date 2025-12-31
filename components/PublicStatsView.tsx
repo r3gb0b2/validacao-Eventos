@@ -1,11 +1,12 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Event, Ticket, DisplayableScanLog, AnalyticsData, SectorGroup, formatSafeTime } from '../types';
+import { Event, Ticket, DisplayableScanLog, AnalyticsData, SectorGroup } from '../types';
 import Stats from './Stats';
 import AnalyticsChart from './AnalyticsChart';
 import PieChart from './PieChart';
 import { getDb } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
+import { formatSafeTime } from '../App';
 
 interface PublicStatsViewProps {
   event: Event;

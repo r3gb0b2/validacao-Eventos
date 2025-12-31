@@ -26,6 +26,7 @@ export interface Ticket {
     originalId?: string | number;
     pdfConfig?: any;
     purchaseCode?: string;
+    // NOVA PROPRIEDADE: Mensagem de alerta para o operador
     alertMessage?: string;
   };
 }
@@ -51,7 +52,7 @@ export interface DisplayableScanLog extends Omit<ScanLog, 'timestamp'>{
 
 export interface ImportLog {
     id: string;
-    timestamp: any;
+    timestamp: any; // Pode ser number ou Timestamp do Firestore
     sourceName: string;
     newCount: number;
     existingCount: number;
@@ -111,25 +112,3 @@ export interface ImportSettingsV2 {
     sources: ImportSource[];
     globalAutoImportEnabled: boolean;
 }
-
-// Helper robusto movido para cá para evitar dependência cíclica entre componentes
-export const formatSafeTime = (ts: any) => {
-    if (!ts) return 'Não registrado';
-    try {
-        let date: Date;
-        if (ts && typeof ts.toMillis === 'function') {
-            date = new Date(ts.toMillis());
-        } 
-        else if (ts && typeof ts.seconds === 'number') {
-            date = new Date(ts.seconds * 1000);
-        }
-        else {
-            date = new Date(ts);
-        }
-
-        if (isNaN(date.getTime())) return 'Horário inválido';
-        return date.toLocaleTimeString('pt-BR');
-    } catch (e) {
-        return 'Horário inválido';
-    }
-};

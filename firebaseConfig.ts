@@ -1,6 +1,6 @@
 
-import { initializeApp, getApp, getApps } from "firebase/app";
-import { getFirestore, Firestore } from "firebase/firestore";
+import { initializeApp, FirebaseApp } from "firebase/app";
+import { getFirestore, enableIndexedDbPersistence, Firestore } from "firebase/firestore";
 import { getFunctions, Functions } from "firebase/functions";
 
 const firebaseConfig = {
@@ -13,19 +13,35 @@ const firebaseConfig = {
   measurementId: "G-M30E0D9TP2"
 };
 
-// Inicialização ultra-simples
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-const firestoreInstance = getFirestore(app);
+const app: FirebaseApp = initializeApp(firebaseConfig);
+const firestoreInstance: Firestore = getFirestore(app);
+export const functionsInstance: Functions = getFunctions(app, "us-central1");
 
-export const getFunctionsInstance = (): Functions | null => {
-    try {
-        return getFunctions(app, "us-central1");
-    } catch (e) {
-        return null;
-    }
-};
+let dbInstance: Firestore | null = null;
+let dbInitializationPromise: Promise<Firestore> | null = null;
 
-// DESATIVADO: enableIndexedDbPersistence (Causa crash em muitos WebViews Android via protocolo file://)
 export const getDb = (): Promise<Firestore> => {
-    return Promise.resolve(firestoreInstance);
+    if (dbInstance) {
+        return Promise.resolve(dbInstance);
+    }
+    if (dbInitializationPromise) {
+        return dbInitializationPromise;
+    }
+
+    dbInitializationPromise = enableIndexedDbPersistence(firestoreInstance)
+        .then(() => {
+            dbInstance = firestoreInstance;
+            return dbInstance;
+        })
+        .catch((err: any) => {
+            if (err.code === 'failed-precondition') {
+                console.warn('Multiple tabs open, persistence can only be enabled in one tab at a time.');
+            } else if (err.code === 'unimplemented') {
+                console.warn('The current browser does not support all of the features required to enable persistence.');
+            }
+            dbInstance = firestoreInstance;
+            return dbInstance;
+        });
+    
+    return dbInitializationPromise;
 };
