@@ -80,11 +80,15 @@ const App: React.FC = () => {
 
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators' | 'security' | 'lookup'>(() => {
         const params = new URLSearchParams(window.location.search);
+        
+        // Prioridade máxima para os modos via URL
+        if (params.get('mode') === 'generator') return 'generator';
         if (params.get('mode') === 'stats') return 'public_stats';
         
         try { 
             const savedView = localStorage.getItem('current_view');
-            if (savedView) return savedView as any;
+            // Se for generator, não restauramos do localstorage para não "travar" o usuário lá sem querer
+            if (savedView && savedView !== 'generator') return savedView as any;
         } catch(e) {}
         return 'scanner';
     });
@@ -119,7 +123,10 @@ const App: React.FC = () => {
     const lastCodeTimeRef = useRef<number>(0);
 
     useEffect(() => { 
-        localStorage.setItem('current_view', view); 
+        // Não salvamos 'generator' como view padrão para evitar loops
+        if (view !== 'generator') {
+            localStorage.setItem('current_view', view); 
+        }
     }, [view]);
 
     const ticketsMap = useMemo(() => {
@@ -433,6 +440,7 @@ const App: React.FC = () => {
                         </>
                     )}
 
+                    {view === 'generator' && <SecretTicketGenerator db={db!} />}
                     {view === 'public_stats' && selectedEvent && <PublicStatsView event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} isLoading={!ticketsLoaded} />}
                     {view === 'operators' && selectedEvent && <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isLoading={!scansLoaded} />}
                     {view === 'security' && <SecurityModule scanHistory={scanHistory} />}
