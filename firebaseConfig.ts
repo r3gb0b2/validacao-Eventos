@@ -1,5 +1,5 @@
 
-import { initializeApp, FirebaseApp, getApp, getApps } from "firebase/app";
+import { initializeApp, getApp, getApps } from "firebase/app";
 import { getFirestore, enableIndexedDbPersistence, Firestore } from "firebase/firestore";
 import { getFunctions, Functions } from "firebase/functions";
 
@@ -13,30 +13,14 @@ const firebaseConfig = {
   measurementId: "G-M30E0D9TP2"
 };
 
-console.log("[FIREBASE] Iniciando configuração...");
-
-let app: FirebaseApp;
-try {
-    if (!getApps().length) {
-        app = initializeApp(firebaseConfig);
-        console.log("[FIREBASE] App inicializado com sucesso.");
-    } else {
-        app = getApp();
-        console.log("[FIREBASE] App existente recuperado.");
-    }
-} catch (e) {
-    console.error("[FIREBASE] Falha fatal na inicialização:", e);
-    // Tenta recuperar qualquer instância se falhar
-    app = getApp();
-}
-
-const firestoreInstance: Firestore = getFirestore(app);
+// Inicialização direta e segura
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+const firestoreInstance = getFirestore(app);
 
 export const getFunctionsInstance = (): Functions | null => {
     try {
         return getFunctions(app, "us-central1");
     } catch (e) {
-        console.warn("[FIREBASE] Functions indisponível no WebView atual.");
         return null;
     }
 };
@@ -48,15 +32,13 @@ export const getDb = (): Promise<Firestore> => {
     if (dbInstance) return Promise.resolve(dbInstance);
     if (dbInitializationPromise) return dbInitializationPromise;
 
-    console.log("[FIREBASE] Ativando persistência offline...");
+    // Tenta persistência mas não trava se falhar (comum em APKs)
     dbInitializationPromise = enableIndexedDbPersistence(firestoreInstance)
         .then(() => {
-            console.log("[FIREBASE] Persistência OK.");
             dbInstance = firestoreInstance;
             return dbInstance;
         })
-        .catch((err: any) => {
-            console.warn("[FIREBASE] Persistência falhou (esperado em WebViews limitados):", err.code);
+        .catch(() => {
             dbInstance = firestoreInstance;
             return dbInstance;
         });

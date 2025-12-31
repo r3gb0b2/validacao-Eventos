@@ -53,10 +53,9 @@ const App: React.FC = () => {
     });
 
     const [view, setView] = useState<'scanner' | 'admin' | 'public_stats' | 'generator' | 'operators' | 'security' | 'lookup'>(() => {
-        const params = new URLSearchParams(window.location.search);
-        if (params.get('mode') === 'stats') return 'public_stats';
-        
-        try { 
+        try {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('mode') === 'stats') return 'public_stats';
             const savedView = localStorage.getItem('current_view');
             if (savedView) return savedView as any;
         } catch(e) {}
@@ -92,8 +91,17 @@ const App: React.FC = () => {
     const lastCodeRef = useRef<string | null>(null);
     const lastCodeTimeRef = useRef<number>(0);
 
+    // EFEITO CRÍTICO: Esconde a tela de boot do index.html quando o React montar
+    useEffect(() => {
+        const bootScreen = document.getElementById('boot-screen');
+        if (bootScreen) {
+            bootScreen.style.opacity = '0';
+            setTimeout(() => bootScreen.style.display = 'none', 500);
+        }
+    }, []);
+
     useEffect(() => { 
-        localStorage.setItem('current_view', view); 
+        try { localStorage.setItem('current_view', view); } catch(e) {}
     }, [view]);
 
     const ticketsMap = useMemo(() => {
@@ -112,15 +120,21 @@ const App: React.FC = () => {
         getDb().then(database => {
             setDb(database);
             setFirebaseStatus('success');
-        }).catch(() => setFirebaseStatus('error'));
+        }).catch((err) => {
+            console.error("Erro ao obter DB:", err);
+            setFirebaseStatus('error');
+        });
     }, []);
 
     useEffect(() => {
         if (!db) return;
         
-        const params = new URLSearchParams(window.location.search);
-        const urlEventId = params.get('eventId');
-        const savedEventId = urlEventId || localStorage.getItem('selected_event_id');
+        let savedEventId: string | null = null;
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const urlEventId = params.get('eventId');
+            savedEventId = urlEventId || localStorage.getItem('selected_event_id');
+        } catch(e) {}
 
         const eventsUnsubscribe = onSnapshot(collection(db, 'events'), (snapshot) => {
             const eventsData = snapshot.docs.map(doc => ({ 
@@ -134,15 +148,17 @@ const App: React.FC = () => {
                 const found = eventsData.find(e => e.id === savedEventId);
                 if (found) {
                     setSelectedEvent(found);
-                    const savedConfig = localStorage.getItem(`op_config_${found.id}`);
-                    if (savedConfig) {
-                        const parsed = JSON.parse(savedConfig);
-                        setOperatorName(parsed.name || '');
-                        setSelectedSectors(parsed.sectors || []);
-                        setIsOperatorConfigured(true);
-                    } else if (view === 'scanner' && !urlEventId) {
-                        setShowOpConfigModal(true);
-                    }
+                    try {
+                        const savedConfig = localStorage.getItem(`op_config_${found.id}`);
+                        if (savedConfig) {
+                            const parsed = JSON.parse(savedConfig);
+                            setOperatorName(parsed.name || '');
+                            setSelectedSectors(parsed.sectors || []);
+                            setIsOperatorConfigured(true);
+                        } else if (view === 'scanner') {
+                            setShowOpConfigModal(true);
+                        }
+                    } catch(e) {}
                 }
             }
             setIsInitializing(false);
@@ -194,7 +210,7 @@ const App: React.FC = () => {
             if (pass === '123654' || pass === '987654') {
                 const role = pass === '987654' ? 'SUPER_ADMIN' : 'ADMIN';
                 const user = { id: role.toLowerCase(), username: role === 'SUPER_ADMIN' ? 'Super Admin' : 'Administrador', role, allowedEvents: [] };
-                localStorage.setItem('auth_user_session', JSON.stringify({ ...user, _expiry: Date.now() + 86400000 }));
+                try { localStorage.setItem('auth_user_session', JSON.stringify({ ...user, _expiry: Date.now() + 86400000 })); } catch(e) {}
                 setCurrentUser(user as User);
                 setShowLoginModal(false);
                 setView('admin');
@@ -208,7 +224,7 @@ const App: React.FC = () => {
             });
             if (foundUser) {
                 setCurrentUser(foundUser);
-                localStorage.setItem('auth_user_session', JSON.stringify({ ...foundUser, _expiry: Date.now() + 86400000 }));
+                try { localStorage.setItem('auth_user_session', JSON.stringify({ ...foundUser, _expiry: Date.now() + 86400000 })); } catch(e) {}
                 setShowLoginModal(false);
                 setView('admin');
             } else alert("Inválido");
@@ -276,7 +292,7 @@ const App: React.FC = () => {
 
     const handleLogout = () => {
         setCurrentUser(null);
-        localStorage.removeItem('auth_user_session');
+        try { localStorage.removeItem('auth_user_session'); } catch(e) {}
         setView('scanner');
     };
 
@@ -288,14 +304,14 @@ const App: React.FC = () => {
         setOperatorName('');
         setSelectedSectors([]);
         setShowOpConfigModal(false);
-        localStorage.removeItem('selected_event_id');
+        try { localStorage.removeItem('selected_event_id'); } catch(e) {}
         setView('scanner');
     };
 
     if (!db || firebaseStatus === 'loading' || isInitializing) return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 space-y-4">
             <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-orange-500 font-black uppercase tracking-widest text-xs animate-pulse">Iniciando Aplicativo...</p>
+            <p className="text-orange-500 font-black uppercase tracking-widest text-xs animate-pulse">Sincronizando Banco...</p>
         </div>
     );
     
@@ -304,7 +320,7 @@ const App: React.FC = () => {
     return (
         <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center p-4">
             <div className="w-full max-w-6xl space-y-6">
-                {!isOnline && <AlertBanner message="Offline" type="warning" />}
+                {!isOnline && <AlertBanner message="Você está trabalhando offline" type="warning" />}
                 
                 {showOpConfigModal && (
                     <div className="fixed inset-0 z-[110] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4">
@@ -319,7 +335,7 @@ const App: React.FC = () => {
                                     placeholder="Nome do Operador" className="w-full bg-gray-900 border border-gray-700 p-4 rounded-2xl text-white font-bold outline-none" 
                                 />
                                 <div className="space-y-2">
-                                    <p className="text-[10px] font-black text-gray-500 uppercase ml-2">Setores que você vai validar:</p>
+                                    <p className="text-[10px] font-black text-gray-500 uppercase ml-2">Setores vinculados:</p>
                                     <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
                                         {visibleSectors.map(s => (
                                             <label key={s} className={`flex items-center p-3 rounded-xl border cursor-pointer transition-all ${selectedSectors.includes(s) ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-900 border-gray-700 text-gray-500'}`}>
@@ -333,12 +349,14 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
                                 <button onClick={() => {
-                                    if(!operatorName || selectedSectors.length === 0) return alert("Preencha tudo");
+                                    if(!operatorName || selectedSectors.length === 0) return alert("Preencha todos os campos");
                                     setIsOperatorConfigured(true);
                                     setShowOpConfigModal(false);
-                                    if(selectedEvent) localStorage.setItem(`op_config_${selectedEvent.id}`, JSON.stringify({name: operatorName, sectors: selectedSectors}));
-                                }} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl uppercase shadow-xl active:scale-95 transition-all">Iniciar Validação</button>
-                                <button onClick={handleSwitchEvent} className="w-full text-xs text-gray-500 hover:text-white uppercase font-bold">Voltar</button>
+                                    try {
+                                        if(selectedEvent) localStorage.setItem(`op_config_${selectedEvent.id}`, JSON.stringify({name: operatorName, sectors: selectedSectors}));
+                                    } catch(e) {}
+                                }} className="w-full bg-orange-600 text-white font-black py-5 rounded-2xl uppercase shadow-xl active:scale-95 transition-all">Salvar e Iniciar</button>
+                                <button onClick={handleSwitchEvent} className="w-full text-xs text-gray-500 hover:text-white uppercase font-bold">Trocar Evento</button>
                             </div>
                         </div>
                     </div>
@@ -354,7 +372,7 @@ const App: React.FC = () => {
                 <header className="flex justify-between items-center w-full">
                     <div>
                         <h1 className="text-2xl font-black text-orange-500 uppercase">{selectedEvent?.name || 'ST CHECK-IN'}</h1>
-                        {selectedEvent && <button onClick={handleSwitchEvent} className="text-[10px] text-gray-500 uppercase font-bold mt-1 tracking-widest">[ Trocar Evento ]</button>}
+                        {selectedEvent && <button onClick={handleSwitchEvent} className="text-[10px] text-gray-500 uppercase font-bold mt-1 tracking-widest">[ TROCAR EVENTO ]</button>}
                     </div>
                     <div className="flex gap-2">
                          <button onClick={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} className="p-3 rounded-2xl bg-gray-800 hover:bg-gray-700"><CogIcon className="w-5 h-5" /></button>
@@ -366,13 +384,13 @@ const App: React.FC = () => {
                     {showLoginModal && <LoginModal onLogin={handleLogin} onCancel={() => setShowLoginModal(false)} isLoading={isAuthLoading} />}
                     
                     {view === 'admin' && (
-                        <AdminView db={db!} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db!, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setView('admin'); }} currentUser={currentUser} />
+                        <AdminView db={db!} events={events} selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors} onUpdateSectorNames={async (n, h) => { if(selectedEvent) await setDoc(doc(db!, 'events', selectedEvent.id, 'settings', 'main'), { sectorNames: n, hiddenSectors: h }, { merge: true }); }} isOnline={isOnline} onSelectEvent={(e) => { setSelectedEvent(e); try { localStorage.setItem('selected_event_id', e.id); } catch(err) {} setView('admin'); }} currentUser={currentUser} />
                     )}
 
                     {view === 'scanner' && (
                         <>
                             {!selectedEvent ? (
-                                <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={(e) => { setSelectedEvent(e); localStorage.setItem('selected_event_id', e.id); setShowOpConfigModal(true); }} onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} />
+                                <EventSelector events={events.filter(e => !e.isHidden)} onSelectEvent={(e) => { setSelectedEvent(e); try { localStorage.setItem('selected_event_id', e.id); } catch(err) {} setShowOpConfigModal(true); }} onAccessAdmin={() => { if (currentUser) setView('admin'); else setShowLoginModal(true); }} />
                             ) : (
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                                     <div className="space-y-4">
@@ -383,7 +401,7 @@ const App: React.FC = () => {
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 <FunnelIcon className="w-4 h-4 text-gray-500" />
-                                                <span className="text-[10px] font-bold text-orange-400">{selectedSectors.length} setores</span>
+                                                <span className="text-[10px] font-bold text-orange-400">{selectedSectors.length} setores ativos</span>
                                                 <button onClick={() => setShowOpConfigModal(true)} className="ml-2 bg-gray-700 p-1.5 rounded-lg hover:bg-gray-600"><CogIcon className="w-4 h-4" /></button>
                                             </div>
                                         </div>
@@ -392,7 +410,7 @@ const App: React.FC = () => {
                                             <Scanner onScanSuccess={handleScanSuccess} onScanError={e => alert(e)} />
                                         </div>
                                         <div className="bg-gray-800 p-4 rounded-3xl flex gap-2 border border-gray-700 shadow-xl">
-                                            <input type="text" value={manualCode} onChange={e => setManualCode(e.target.value)} placeholder="Código manual..." className="flex-1 bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white outline-none focus:border-orange-500" />
+                                            <input type="text" value={manualCode} onChange={e => setManualCode(e.target.value)} placeholder="Código manual..." className="flex-1 bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-white outline-none focus:border-orange-500 font-mono" />
                                             <button onClick={() => { handleScanSuccess(manualCode); setManualCode(''); }} className="bg-orange-600 text-white font-black px-6 rounded-2xl shadow-lg active:scale-95 transition-all">Validar</button>
                                         </div>
                                     </div>
