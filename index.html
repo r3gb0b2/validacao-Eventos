@@ -13,11 +13,43 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ST Check-in">
     
-    <!-- Icons -->
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
     <link rel="apple-touch-icon" href="icon-192.png">
 
     <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- MONITOR DE CRASH (Script clássico para capturar falhas de boot no APK) -->
+    <script>
+      window.onerror = function(msg, url, lineNo, columnNo, error) {
+        var debugDiv = document.getElementById('crash-monitor');
+        if (debugDiv) {
+          debugDiv.style.display = 'block';
+          debugDiv.innerHTML = '<div style="background:rgba(220,38,38,0.95);color:white;padding:20px;font-family:monospace;font-size:12px;position:fixed;inset:0;z-index:9999;overflow:auto;">' +
+            '<h1 style="font-size:18px;margin-bottom:10px;">FALHA DE INICIALIZAÇÃO</h1>' +
+            '<p><b>Erro:</b> ' + msg + '</p>' +
+            '<p><b>Linha:</b> ' + lineNo + ':' + columnNo + '</p>' +
+            '<p><b>URL:</b> ' + url + '</p>' +
+            '<hr style="border:0;border-top:1px solid rgba(255,255,255,0.2);margin:15px 0;">' +
+            '<p>Sugestão: Verifique se o dispositivo tem internet no primeiro acesso ou se o WebView está atualizado.</p>' +
+            '<button onclick="window.location.reload()" style="background:white;color:red;border:0;padding:10px 20px;border-radius:8px;font-weight:bold;margin-top:10px;">Tentar Novamente</button>' +
+            '</div>';
+        }
+        return false;
+      };
+
+      window.onunhandledrejection = function(event) {
+        console.error('Promise rejected:', event.reason);
+        // Não mostra tela cheia para promessas para não ser intrusivo, mas loga no console
+      };
+
+      // Verifica suporte a importmap (importante para APKs antigos)
+      document.addEventListener('DOMContentLoaded', function() {
+        if (!HTMLScriptElement.supports || !HTMLScriptElement.supports('importmap')) {
+          window.onerror("Este dispositivo não suporta 'importmaps'. O Android WebView precisa ser versão 89 ou superior.");
+        }
+      });
+    </script>
+
     <script type="importmap">
 {
   "imports": {
@@ -40,6 +72,7 @@
 </script>
   </head>
   <body class="bg-gray-900 text-white antialiased overscroll-none">
+    <div id="crash-monitor" style="display:none;"></div>
     <div id="root"></div>
     <script type="module" src="index.tsx"></script>
   </body>
