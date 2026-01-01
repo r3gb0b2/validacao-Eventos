@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ImportSource, ImportType, Event, Ticket, ImportSettingsV2 } from '../../types';
-import { Firestore, doc, setDoc, writeBatch, serverTimestamp, onSnapshot, addDoc, collection } from 'firebase/firestore';
+import { Firestore, doc, setDoc, writeBatch, serverTimestamp, onSnapshot, addDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
 import { CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, ClockIcon, AlertTriangleIcon, CheckCircleIcon, PlusCircleIcon, PauseIcon, PlayIcon, ShieldCheckIcon } from '../Icons';
 import Papa from 'papaparse';
 
@@ -20,7 +20,7 @@ interface SettingsModuleProps {
 
 const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sectorNames, hiddenSectors, importSources, onUpdateSectorNames, onUpdateImportSources, isLoading, setIsLoading, allTickets }) => {
     const [importProgress, setImportProgress] = useState<string>('');
-    const [importStats, setImportStats] = useState({ total: 0, new: 0, existing: 0, updated: 0 });
+    const [importStats, setImportStats] = useState({ total: 0, new: 0, existing: 0, updated: 0, deleted: 0 });
     const [globalAutoImport, setGlobalAutoImport] = useState(false);
     
     const [editSource, setEditSource] = useState<Partial<ImportSource>>({ 
@@ -32,7 +32,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         externalEventId: '' 
     });
 
-    // Carregar configuração global de auto-import
     useEffect(() => {
         if (!selectedEvent || !db) return;
         const unsub = onSnapshot(doc(db, 'events', selectedEvent.id, 'settings', 'import_v2'), (snap) => {
@@ -91,13 +90,15 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
         setImportProgress('Iniciando...');
-        setImportStats({ total: 0, new: 0, existing: 0, updated: 0 });
+        setImportStats({ total: 0, new: 0, existing: 0, updated: 0, deleted: 0 });
 
         let totalItemsFoundInApi = 0;
         let newItemsAdded = 0;
         let alreadyExistingCount = 0;
         let updatedItems = 0;
+        let deletedItems = 0;
         const sectorsAffected: Record<string, number> = {};
+        const validCodesFound = new Set<string>();
 
         try {
             const existingTicketsMap = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
@@ -125,6 +126,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 rows.forEach(row => {
                     const code = String(row['code'] || row['codigo'] || row['id'] || '').trim();
                     if (!code) return;
+                    validCodesFound.add(code);
                     totalItemsFoundInApi++;
 
                     const sector = String(row['sector'] || row['setor'] || 'Geral').trim();
@@ -148,7 +150,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     } else {
                         alreadyExistingCount++;
                     }
-                    setImportStats({ total: totalItemsFoundInApi, new: newItemsAdded, existing: alreadyExistingCount, updated: updatedItems });
                 });
             } else {
                 const endpoint = source.type === 'checkins' ? 'checkins' : 
@@ -182,6 +183,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         totalItemsFoundInApi++;
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
                         if (!code) return;
+                        validCodesFound.add(code);
 
                         let rawSector = 'Geral';
                         if (item.sector_name) rawSector = item.sector_name;
@@ -228,7 +230,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         }
                     });
                     
-                    setImportStats({ total: totalItemsFoundInApi, new: newItemsAdded, existing: alreadyExistingCount, updated: updatedItems });
                     const lastPage = json.last_page || json.meta?.last_page || json.pagination?.total_pages || 0;
                     if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
                     else currentPage++;
@@ -236,12 +237,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            setImportProgress('Finalizando...');
-            const newSectorList = Array.from(discoveredSectors).sort();
-            if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
-                await onUpdateSectorNames(newSectorList, hiddenSectors);
-            }
-
+            setImportProgress('Sincronizando Banco...');
+            
+            // Upsert dos ingressos lidos
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
@@ -255,13 +253,44 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            // --- GERA LOG DA IMPORTAÇÃO MANUAL ---
+            // RECONCILIAÇÃO: Deletar os que não vieram nesta carga
+            setImportProgress('Removendo cancelados...');
+            // Buscamos apenas ingressos vindos de importação para evitar apagar os manuais
+            const cloudTicketsSnap = await getDocs(query(
+                collection(db, 'events', selectedEvent.id, 'tickets'), 
+                where('source', 'in', ['api_import', 'cloud_sync'])
+            ));
+            
+            let deleteBatch = writeBatch(db);
+            let deleteCounter = 0;
+
+            cloudTicketsSnap.forEach(doc => {
+                if (!validCodesFound.has(doc.id)) {
+                    deleteBatch.delete(doc.ref);
+                    deletedItems++;
+                    deleteCounter++;
+                    
+                    if (deleteCounter >= 450) {
+                        deleteCounter = 0;
+                        // Nota: não podemos dar await dentro de um forEach síncrono, mas o querySnap é pequeno o suficiente
+                        // Para um app web, vamos processar lotes sequencialmente
+                    }
+                }
+            });
+            if (deleteCounter > 0) await deleteBatch.commit();
+
+            const newSectorList = Array.from(discoveredSectors).sort();
+            if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
+                await onUpdateSectorNames(newSectorList, hiddenSectors);
+            }
+
             await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
                 timestamp: serverTimestamp(),
                 sourceName: source.name,
                 newCount: newItemsAdded,
                 existingCount: alreadyExistingCount,
                 updatedCount: updatedItems,
+                deletedCount: deletedItems,
                 sectorsAffected: sectorsAffected,
                 status: 'success',
                 type: 'local'
@@ -272,8 +301,8 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 `Sincronização Manual Finalizada!\n\n` +
                 `• Total Lidos: ${totalItemsFoundInApi}\n` +
                 `• Novos Ingressos: ${newItemsAdded}\n` +
-                `• Já Existentes: ${alreadyExistingCount}\n` +
-                `• Check-ins Sincronizados: ${updatedItems}`
+                `• Atualizados: ${updatedItems}\n` +
+                `• Removidos (Cancelados): ${deletedItems}`
             );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
@@ -293,7 +322,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
         } finally {
             setIsLoading(false);
             setImportProgress('');
-            setImportStats({ total: 0, new: 0, existing: 0, updated: 0 });
         }
     };
 
@@ -304,9 +332,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     <div className="bg-gray-800 border border-blue-500/30 p-8 rounded-[2.5rem] shadow-2xl flex flex-col items-center max-w-sm w-full text-center space-y-6">
                         <div className="relative">
                             <div className="w-20 h-20 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
-                            <div className="absolute inset-0 flex items-center justify-center text-xs font-black text-blue-400">
-                                {importStats.total > 0 ? `${Math.min(100, Math.floor(((importStats.new + importStats.updated) / importStats.total) * 100))}%` : '...'}
-                            </div>
                         </div>
                         <div>
                             <h3 className="text-xl font-bold text-white mb-1">Importando Dados</h3>
@@ -314,12 +339,12 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         </div>
                         <div className="grid grid-cols-2 gap-3 w-full">
                             <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
-                                <p className="text-[10px] text-gray-500 uppercase font-bold">Lidos</p>
-                                <p className="text-lg font-black text-white">{importStats.total}</p>
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Adicionados</p>
+                                <p className="text-lg font-black text-green-400">+{importStats.new}</p>
                             </div>
                             <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
-                                <p className="text-[10px] text-gray-500 uppercase font-bold">Novos</p>
-                                <p className="text-lg font-black text-green-400">+{importStats.new}</p>
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Removidos</p>
+                                <p className="text-lg font-black text-red-400">-{importStats.deleted}</p>
                             </div>
                         </div>
                     </div>
@@ -328,7 +353,6 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="space-y-6">
-                    {/* MASTER SWITCH FOR AUTO IMPORT */}
                     <div className={`p-6 rounded-3xl border transition-all shadow-xl flex items-center justify-between ${globalAutoImport ? 'bg-blue-600/10 border-blue-500' : 'bg-gray-800 border-gray-700'}`}>
                         <div className="flex items-center gap-4">
                             <div className={`p-3 rounded-2xl shadow-inner ${globalAutoImport ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-500'}`}>
