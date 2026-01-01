@@ -15,6 +15,7 @@ import ParticipantsModule from './components/admin/ParticipantsModule';
 import AutoImportModule from './components/admin/AutoImportModule';
 import LookupModule from './components/admin/LookupModule';
 import SecurityModule from './components/admin/SecurityModule';
+import RemoveTicketsModule from './components/admin/RemoveTicketsModule'; // Novo Import
 import OperatorMonitor from './components/OperatorMonitor';
 import TicketList from './components/TicketList';
 import SuperAdminView from './components/SuperAdminView';
@@ -34,7 +35,7 @@ interface AdminViewProps {
 }
 
 const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTickets, scanHistory, sectorNames = [], hiddenSectors = [], onUpdateSectorNames, isOnline, onSelectEvent, currentUser }) => {
-    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'alerts' | 'users' | 'participants' | 'auto_import' | 'lookup' | 'security'>(() => {
+    const [activeTab, setActiveTab] = useState<'stats' | 'groups' | 'settings' | 'history' | 'events' | 'operators' | 'manual' | 'locator' | 'alerts' | 'users' | 'participants' | 'auto_import' | 'lookup' | 'security' | 'remove'>(() => {
         try {
             return (localStorage.getItem('admin_active_tab') as any) || 'stats';
         } catch(e) { return 'stats'; }
@@ -180,6 +181,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
             case 'locator': return <LocalizadorasModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'alerts': return <AlertTicketsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'manual': return <ManualAddModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
+            case 'remove': return <RemoveTicketsModule db={db} selectedEvent={selectedEvent} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             default: return null;
         }
     };
@@ -199,6 +201,7 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
                     { id: 'locator', label: 'Localizadoras' },
                     { id: 'operators', label: 'Operadores' },
                     { id: 'history', label: 'Histórico' },
+                    { id: 'remove', label: 'Remover' },
                     { id: 'events', label: 'Eventos' },
                     ...(isSuperAdmin ? [{ id: 'users', label: 'Usuários' }] : [])
                 ].map(tab => (

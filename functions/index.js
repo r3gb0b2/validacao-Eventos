@@ -19,10 +19,10 @@ const db = admin.firestore();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Lógica de sincronização v7 - Com Auto-Delete (Reconciliação)
+ * Lógica de sincronização v6 - Resiliência Máxima
  */
 async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização v7...");
+    console.log(">>> [LOG] Iniciando ciclo de sincronização v6...");
     const eventsSnapshot = await db.collection('events').get();
     
     for (const eventDoc of eventsSnapshot.docs) {
@@ -39,6 +39,7 @@ async function performSync() {
         const sources = (configData.sources || []).filter(s => s.autoImport);
         if (sources.length === 0) continue;
 
+        // Cache de setores para evitar múltiplas leituras
         const settingsRef = db.doc(`events/${eventId}/settings/main`);
         const settingsSnap = await settingsRef.get();
         const currentSectors = new Set(settingsSnap.exists ? (settingsSnap.data().sectorNames || []) : []);
@@ -48,15 +49,11 @@ async function performSync() {
         for (const source of sources) {
             let newItemsCount = 0;
             let updatedItemsCount = 0;
-            let deletedItemsCount = 0;
             let existingItemsCount = 0;
             let totalFetchedFromApi = 0;
             let lastErrorMsg = null;
             let statusResult = 'success';
             const sectorsAffectedMap = {};
-            
-            // Conjunto para armazenar todos os códigos válidos encontrados nesta execução
-            const validCodesFound = new Set();
 
             try {
                 let rawItems = [];
@@ -81,7 +78,7 @@ async function performSync() {
                 } else {
                     let currentPage = 1;
                     let hasMorePages = true;
-                    const maxPagesLimit = 150; 
+                    const maxPagesLimit = 100; 
 
                     while (hasMorePages && currentPage <= maxPagesLimit) {
                         const params = { per_page: 100, page: currentPage };
@@ -90,12 +87,13 @@ async function performSync() {
                         }
 
                         try {
+                            console.log(`>>> [LOG] Requisição: ${source.name} Pág ${currentPage}`);
                             const response = await axios.get(`${baseUrl}/${endpoint}`, {
                                 params,
                                 headers: { 
                                     'Authorization': cleanToken, 
                                     'Accept': 'application/json',
-                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v7'
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v6'
                                 },
                                 timeout: 25000 
                             });
@@ -115,17 +113,27 @@ async function performSync() {
                                 const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
                                 if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
                                 else currentPage++;
-                                await sleep(100); 
+                                
+                                // Pequena pausa para não sobrecarregar a API
+                                await sleep(150); 
                             }
                             
                             if (Array.isArray(resBody)) hasMorePages = false;
 
                         } catch (pageErr) {
                             const status = pageErr.response?.status;
+                            const errorData = pageErr.response?.data;
+                            
+                            console.error(`>>> [API ERROR] Status ${status}:`, JSON.stringify(errorData || pageErr.message));
+
+                            // Se der erro 400 mas já tivermos pegado dados, provavelmente é um erro de "página inexistente" da própria API
                             if (status === 400 && rawItems.length > 0) {
+                                console.log(`>>> [LOG] Erro 400 após ${rawItems.length} itens. Considerando fim de lista.`);
                                 hasMorePages = false;
                             } else {
-                                throw pageErr; // Interrompe para não deletar por erro de conexão
+                                lastErrorMsg = `Erro ${status || 'Network'}: ${pageErr.message}`;
+                                statusResult = rawItems.length > 0 ? 'warning' : 'error';
+                                hasMorePages = false;
                             }
                         }
                     }
@@ -133,14 +141,12 @@ async function performSync() {
 
                 totalFetchedFromApi = rawItems.length;
 
-                // 1. Fase de Upsert (Adicionar ou Atualizar)
                 if (totalFetchedFromApi > 0) {
                     const batchSize = 400;
                     for (let i = 0; i < rawItems.length; i += batchSize) {
                         const chunk = rawItems.slice(i, i + batchSize);
                         const chunkData = chunk.map(item => {
                             const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
-                            if (code) validCodesFound.add(code);
                             return code ? { code, item } : null;
                         }).filter(d => d !== null);
 
@@ -208,38 +214,12 @@ async function performSync() {
                     }
                 }
 
-                // 2. Fase de Reconciliação (Deletar o que sumiu da fonte)
-                // Só executamos se conseguimos baixar a lista completa com sucesso
-                if (statusResult === 'success') {
-                    const dbTicketsSnap = await db.collection(`events/${eventId}/tickets`)
-                        .where('source', '==', 'cloud_sync')
-                        .get();
-
-                    let deleteBatch = db.batch();
-                    let deleteCounter = 0;
-
-                    for (const doc of dbTicketsSnap.docs) {
-                        if (!validCodesFound.has(doc.id)) {
-                            deleteBatch.delete(doc.ref);
-                            deletedItemsCount++;
-                            deleteCounter++;
-                            
-                            if (deleteCounter >= 450) {
-                                await deleteBatch.commit();
-                                deleteBatch = db.batch();
-                                deleteCounter = 0;
-                            }
-                        }
-                    }
-                    if (deleteCounter > 0) await deleteBatch.commit();
-                }
-
                 if (sectorsChanged) {
                     await settingsRef.update({ 
                         sectorNames: Array.from(currentSectors).sort(),
                         hiddenSectors: hiddenSectors
                     });
-                    sectorsChanged = false;
+                    sectorsChanged = false; // Reset para a próxima fonte
                 }
 
                 await db.collection(`events/${eventId}/import_logs`).add({
@@ -248,12 +228,15 @@ async function performSync() {
                     newCount: newItemsCount,
                     existingCount: existingItemsCount,
                     updatedCount: updatedItemsCount,
-                    deletedCount: deletedItemsCount,
                     totalFetched: totalFetchedFromApi,
                     sectorsAffected: sectorsAffectedMap,
                     status: statusResult,
                     errorMessage: lastErrorMsg,
                     type: 'cloud'
+                });
+
+                await importRef.update({ 
+                    [`source_last_sync_${source.id}`]: Date.now() 
                 });
 
             } catch (err) {
