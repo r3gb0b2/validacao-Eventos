@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { generateSingleTicketBlob, TicketPdfDetails } from '../utils/ticketPdfGenerator';
-import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon, PlusCircleIcon } from './Icons';
+import { TicketIcon, CloudDownloadIcon, CheckCircleIcon, CloudUploadIcon, TableCellsIcon, TrashIcon, SearchIcon, ClockIcon, XCircleIcon, LinkIcon, PlusCircleIcon, FunnelIcon } from './Icons';
 import { Firestore, collection, getDocs, doc, setDoc, writeBatch, onSnapshot, deleteDoc, query, where, getDoc } from 'firebase/firestore';
 import { Event, Ticket } from '../types';
 import JSZip from 'jszip';
@@ -17,16 +17,14 @@ interface SecretTicketGeneratorProps {
 const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => {
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedEventId, setSelectedEventId] = useState<string>('');
+    const [availableSectors, setAvailableSectors] = useState<string[]>([]);
     const [isGenerating, setIsGenerating] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
-    const [isDeletingBatch, setIsDeletingBatch] = useState(false);
     const [isSavingSettings, setIsSavingSettings] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [quantity, setQuantity] = useState(1);
-    const [lastZipUrl, setLastZipUrl] = useState<string | null>(null);
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
     const logoInputRef = useRef<HTMLInputElement>(null);
 
@@ -49,7 +47,14 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 const snap = await getDocs(collection(db, 'events'));
                 const list = snap.docs.map(d => ({ id: d.id, name: d.data().name }));
                 setEvents(list);
-                if (list.length > 0) setSelectedEventId(list[0].id);
+                
+                const params = new URLSearchParams(window.location.search);
+                const urlEventId = params.get('eventId');
+                if (urlEventId && list.some(e => e.id === urlEventId)) {
+                    setSelectedEventId(urlEventId);
+                } else if (list.length > 0) {
+                    setSelectedEventId(list[0].id);
+                }
             } catch (e) {
                 console.error("Erro ao carregar eventos", e);
             }
@@ -57,7 +62,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         loadEvents();
     }, [db]);
 
-    // 2. Carregar TODAS as configurações salvas quando mudar o evento
+    // 2. Carregar TODAS as configurações salvas e SETORES do evento selecionado
     useEffect(() => {
         if (!selectedEventId || !db) return;
 
@@ -67,18 +72,29 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
                     const data = snap.data();
-                    setFormData(prev => ({
-                        ...prev,
-                        eventName: data.eventName || prev.eventName,
-                        openingTime: data.openingTime || prev.openingTime,
-                        venue: data.venue || prev.venue,
-                        address: data.address || prev.address,
-                        producer: data.producer || prev.producer,
-                        contact: data.contact || prev.contact,
-                        sector: data.sector || prev.sector,
-                        ownerName: data.ownerName || prev.ownerName,
-                        logoUrl: data.logoUrl || prev.logoUrl
-                    }));
+                    const sectors = data.sectorNames || [];
+                    setAvailableSectors(sectors);
+
+                    setFormData(prev => {
+                        const newSector = (sectors.length > 0 && !sectors.includes(prev.sector)) 
+                            ? sectors[0] 
+                            : (data.sector || prev.sector);
+                            
+                        return {
+                            ...prev,
+                            eventName: data.eventName || prev.eventName,
+                            openingTime: data.openingTime || prev.openingTime,
+                            venue: data.venue || prev.venue,
+                            address: data.address || prev.address,
+                            producer: data.producer || prev.producer,
+                            contact: data.contact || prev.contact,
+                            sector: newSector,
+                            ownerName: data.ownerName || prev.ownerName,
+                            logoUrl: data.logoUrl || prev.logoUrl
+                        };
+                    });
+                } else {
+                    setAvailableSectors([]);
                 }
             } catch (e) {
                 console.error("Erro ao carregar configurações salvas", e);
@@ -125,7 +141,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         if (!ticket.details) return;
         setDownloadingId(ticket.id);
         try {
-            // Usa as configurações salvas no próprio ingresso para re-gerar o PDF idêntico
             const config = ticket.details.pdfConfig || formData;
             const purchaseCode = ticket.details.purchaseCode || ticket.id;
             
@@ -171,7 +186,11 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const contactMatch = text.match(/Contato:\s+([\+\d\s]+)/i);
             if (contactMatch) extracted.contact = contactMatch[1].trim();
             const sectorMatch = text.match(/Ingresso\s+(.*?)\s+Participante/i);
-            if (sectorMatch) extracted.sector = sectorMatch[1].trim();
+            if (sectorMatch) {
+                const s = sectorMatch[1].trim();
+                // Se o setor extraído existe nos setores do evento, usa ele, senão mantém
+                if (availableSectors.includes(s)) extracted.sector = s;
+            }
 
             setFormData(prev => ({ ...prev, ...extracted }));
         } catch (error) {
@@ -210,16 +229,16 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 ownerName: formData.ownerName,
                 logoUrl: formData.logoUrl 
             }, { merge: true });
-            alert("Configurações e participante salvos com sucesso!");
+            alert("Configurações salvas com sucesso!");
         } catch (e) {
             console.error(e);
-            alert("Erro ao salvar configurações no banco.");
+            alert("Erro ao salvar configurações.");
         } finally {
             setIsSavingSettings(false);
         }
     };
 
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
         const { name, value } = e.target;
         setFormData(prev => ({ ...prev, [name]: value }));
     };
@@ -262,7 +281,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             if (batchCounter > 0) await currentBatch.commit();
             const zipBlob = await zip.generateAsync({ type: "blob" });
             const url = URL.createObjectURL(zipBlob);
-            setLastZipUrl(url);
             const link = document.createElement('a');
             link.href = url;
             link.download = `ingressos_${formData.eventName}.zip`;
@@ -310,13 +328,13 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                     <select 
                                         value={selectedEventId}
                                         onChange={(e) => setSelectedEventId(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white outline-none focus:border-orange-500"
+                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white outline-none focus:border-orange-500 font-bold"
                                     >
                                         {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade</label>
+                                    <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade de Ingressos</label>
                                     <input 
                                         type="number" min="1" max="500"
                                         value={quantity} onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
@@ -330,8 +348,30 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             <h2 className="text-sm font-bold text-orange-400 uppercase mb-2 flex items-center">
                                 <TicketIcon className="w-4 h-4 mr-2" /> 2. Dados do Ingresso
                             </h2>
-                            <input name="sector" value={formData.sector} onChange={handleInputChange} placeholder="Setor" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                            <input name="ownerName" value={formData.ownerName} onChange={handleInputChange} placeholder="Nome do Participante" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            
+                            <div className="space-y-1">
+                                <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Vincular ao Setor do Evento</label>
+                                {availableSectors.length > 0 ? (
+                                    <select 
+                                        name="sector" 
+                                        value={formData.sector} 
+                                        onChange={handleInputChange} 
+                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-white font-bold outline-none focus:border-orange-500"
+                                    >
+                                        {availableSectors.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <input name="sector" value={formData.sector} onChange={handleInputChange} placeholder="Setor (Texto Livre)" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                                        <p className="text-[9px] text-red-400 italic font-bold">Aviso: Evento selecionado não possui setores configurados. Defina-os no painel para evitar erros de validação.</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-1">
+                                <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Nome no Cartão</label>
+                                <input name="ownerName" value={formData.ownerName} onChange={handleInputChange} placeholder="Ex: PARTICIPANTE / CONVIDADO" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            </div>
                         </div>
                     </div>
 
@@ -374,7 +414,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                         onClick={() => logoInputRef.current?.click()}
                                         className="w-full bg-gray-700 hover:bg-gray-600 text-xs font-bold py-2 rounded-lg border border-gray-500 transition-all flex items-center justify-center"
                                     >
-                                        <CloudUploadIcon className="w-3 h-3 mr-2" /> Upload de Logo
+                                        <CloudUploadIcon className="w-3 h-3 mr-2" /> Alterar Logo
                                     </button>
                                     <input 
                                         name="logoUrl" 
@@ -397,25 +437,30 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     >
                         {isGenerating ? "Gerando Ingressos..." : "Gerar Lote ZIP"}
                     </button>
+                    {availableSectors.length > 0 && (
+                         <div className="mt-3 flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
+                             <CheckCircleIcon className="w-4 h-4 text-green-500" /> Vínculo com setor "{formData.sector}" ativo
+                         </div>
+                    )}
                 </div>
             </div>
 
             {/* LISTA DE REGISTROS (Apenas para este evento) */}
             <div className="w-full max-w-5xl bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden">
                 <div className="p-4 border-b border-gray-700 flex justify-between items-center">
-                    <h2 className="font-bold flex items-center text-orange-500"><TableCellsIcon className="w-5 h-5 mr-2"/> Histórico de Gerados ({tickets.length})</h2>
+                    <h2 className="font-bold flex items-center text-orange-500"><TableCellsIcon className="w-5 h-5 mr-2"/> Ingressos Gerados no Evento ({tickets.length})</h2>
                     <div className="relative w-48">
                         <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" />
-                        <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Filtrar..." className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:border-orange-500" />
+                        <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Filtrar por nome ou código..." className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:border-orange-500" />
                     </div>
                 </div>
                 <div className="max-h-80 overflow-y-auto custom-scrollbar">
                     <table className="w-full text-left text-xs">
                         <thead className="sticky top-0 bg-gray-800 text-gray-500 uppercase font-bold border-b border-gray-700">
                             <tr>
-                                <th className="p-4">Código</th>
+                                <th className="p-4">Código do Ingresso</th>
                                 <th className="p-4">Participante</th>
-                                <th className="p-4">Setor</th>
+                                <th className="p-4">Setor Vinculado</th>
                                 <th className="p-4 text-right">Ações</th>
                             </tr>
                         </thead>
@@ -424,21 +469,24 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <tr key={t.id} className="hover:bg-gray-700/30 transition-colors">
                                     <td className="p-4 font-mono text-orange-400">{t.id}</td>
                                     <td className="p-4 font-bold text-gray-200">{t.details?.ownerName}</td>
-                                    <td className="p-4 text-gray-400">{t.sector}</td>
+                                    <td className="p-4 text-gray-400">
+                                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${availableSectors.includes(t.sector) ? 'bg-green-500/10 border-green-500 text-green-500' : 'bg-red-500/10 border-red-500 text-red-500'}`}>
+                                            {t.sector}
+                                        </span>
+                                    </td>
                                     <td className="p-4 text-right flex justify-end space-x-2">
-                                        {/* BOTÃO DE DOWNLOAD INDIVIDUAL RE-ADICIONADO */}
                                         <button 
                                             onClick={() => handleDownloadSingle(t)} 
                                             disabled={downloadingId === t.id}
                                             className={`p-2 rounded-lg transition-all ${downloadingId === t.id ? 'bg-gray-700 text-gray-500' : 'bg-blue-600/10 text-blue-400 hover:bg-blue-600 hover:text-white'}`}
-                                            title="Download PDF"
+                                            title="Baixar PDF Original"
                                         >
                                             <CloudDownloadIcon className="w-4 h-4" />
                                         </button>
                                         <button 
-                                            onClick={() => { if(confirm("Excluir este ingresso?")) deleteDoc(doc(db, 'events', selectedEventId, 'tickets', t.id)); }} 
+                                            onClick={() => { if(confirm("Deseja realmente excluir este ingresso do banco de dados? Ele deixará de ser válido no scanner.")) deleteDoc(doc(db, 'events', selectedEventId, 'tickets', t.id)); }} 
                                             className="p-2 bg-red-900/10 text-red-500 rounded-lg hover:bg-red-600 hover:text-white transition-all"
-                                            title="Excluir"
+                                            title="Remover Ingresso"
                                         >
                                             <TrashIcon className="w-4 h-4"/>
                                         </button>
