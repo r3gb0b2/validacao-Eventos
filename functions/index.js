@@ -19,17 +19,19 @@ const db = admin.firestore();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Lógica de sincronização v8 - Híbrida (Fast vs Full)
+ * Lógica de sincronização v9 - Híbrida Corrigida
  * @param {boolean} forceFull - Se verdadeiro, ignora otimização e lê tudo + deleta sumidos
  */
 async function performSync(forceFull = false) {
-    console.log(`>>> [LOG] Iniciando ciclo de sincronização v8 (Modo: ${forceFull ? 'FULL' : 'AUTO'})...`);
+    const now = new Date();
+    // Full sync automático a cada 10 minutos ou se forçado
+    const isScheduledFullSync = (now.getMinutes() % 10 === 0);
+    const isFullMode = forceFull || isScheduledFullSync;
+    
+    console.log(`>>> [LOG] Ciclo v9 Iniciado | Modo: ${isFullMode ? 'COMPLETO' : 'RÁPIDO'}`);
+
     const eventsSnapshot = await db.collection('events').get();
     
-    // Contador para decidir se faz full sync automático (a cada 10 minutos aprox)
-    const now = new Date();
-    const isScheduledFullSync = (now.getMinutes() % 10 === 0);
-
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
         
@@ -54,10 +56,8 @@ async function performSync(forceFull = false) {
             let updatedItemsCount = 0;
             let deletedItemsCount = 0;
             let existingItemsCount = 0;
-            let totalFetchedFromApi = 0;
-            let lastErrorMsg = null;
             let statusResult = 'success';
-            let reachedEnd = true; // Indica se lemos a API até o fim
+            let reachedEnd = true; 
             
             const sectorsAffectedMap = {};
             const validCodesFound = new Set();
@@ -71,7 +71,6 @@ async function performSync(forceFull = false) {
                                 source.type === 'buyers' ? 'buyers' : 'tickets';
 
                 if (source.type === 'google_sheets') {
-                    // Planilha sempre lê tudo (é um arquivo só)
                     let fetchUrl = source.url.trim();
                     if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                     const response = await axios.get(fetchUrl);
@@ -86,13 +85,10 @@ async function performSync(forceFull = false) {
                 } else {
                     let currentPage = 1;
                     let hasMorePages = true;
-                    let consecutiveKnownItems = 0;
-                    const maxPagesLimit = 150; 
+                    // MODO RÁPIDO: lê até 5 páginas (aprox 500 itens). MODO COMPLETO: até 200 páginas.
+                    const maxPages = isFullMode ? 200 : 5; 
 
-                    // MODO FAST SYNC: Se não for forçado e não for hora de limpeza, para cedo.
-                    const isFastMode = !forceFull && !isScheduledFullSync;
-
-                    while (hasMorePages && currentPage <= maxPagesLimit) {
+                    while (hasMorePages && currentPage <= maxPages) {
                         const params = { per_page: 100, page: currentPage };
                         if (source.externalEventId && String(source.externalEventId).trim() !== "") {
                             params.event_id = String(source.externalEventId).trim();
@@ -104,7 +100,7 @@ async function performSync(forceFull = false) {
                                 headers: { 
                                     'Authorization': cleanToken, 
                                     'Accept': 'application/json',
-                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v8'
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v9'
                                 },
                                 timeout: 25000 
                             });
@@ -116,23 +112,13 @@ async function performSync(forceFull = false) {
                                 hasMorePages = false;
                             } else {
                                 rawItems = rawItems.concat(pageItems);
-                                totalFetchedFromApi += pageItems.length;
-
-                                // Lógica de parada antecipada no Fast Sync
-                                if (isFastMode) {
-                                    // Se nesta página muitos itens já existem e são idênticos, assumimos que não há novos atrás deles
-                                    // A maioria das APIs retorna ordenado por data descendente
-                                    if (currentPage > 1) { 
-                                        // Verificamos apenas os primeiros da página para decidir
-                                        reachedEnd = false; 
-                                        hasMorePages = false;
-                                        break;
-                                    }
-                                }
-
                                 const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
-                                if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
-                                else currentPage++;
+                                
+                                if (lastPage > 0 && currentPage >= lastPage) {
+                                    hasMorePages = false;
+                                } else {
+                                    currentPage++;
+                                }
                                 await sleep(50); 
                             }
                             if (Array.isArray(resBody)) hasMorePages = false;
@@ -146,9 +132,14 @@ async function performSync(forceFull = false) {
                             }
                         }
                     }
+                    
+                    // Se paramos por causa do limite de páginas do Modo Rápido, marcamos que não chegamos ao fim
+                    if (currentPage > maxPages && !isFullMode) {
+                        reachedEnd = false;
+                    }
                 }
 
-                // Fase de Upsert
+                // Processamento dos itens (Upsert)
                 if (rawItems.length > 0) {
                     const batchSize = 400;
                     for (let i = 0; i < rawItems.length; i += batchSize) {
@@ -223,9 +214,8 @@ async function performSync(forceFull = false) {
                     }
                 }
 
-                // RECONCILIAÇÃO (Deletar sumidos)
-                // SÓ acontece se chegamos ao fim da lista (reachedEnd) E temos status de sucesso
-                if (statusResult === 'success' && reachedEnd) {
+                // Deleção de cancelados (Somente em Modo Completo e se leu tudo)
+                if (statusResult === 'success' && reachedEnd && isFullMode) {
                     const dbTicketsSnap = await db.collection(`events/${eventId}/tickets`)
                         .where('source', '==', 'cloud_sync')
                         .get();
@@ -265,7 +255,7 @@ async function performSync(forceFull = false) {
                     totalFetched: rawItems.length,
                     sectorsAffected: sectorsAffectedMap,
                     status: statusResult,
-                    errorMessage: reachedEnd ? null : "Fast Sync: Deleção pulada p/ salvar recursos",
+                    errorMessage: reachedEnd ? null : "Modo Rápido: Leu apenas as primeiras 5 páginas.",
                     type: 'cloud'
                 });
 
@@ -285,11 +275,9 @@ async function performSync(forceFull = false) {
 }
 
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
-    // Roda no modo automático ( Fast Sync na maioria das vezes )
     return await performSync(false);
 });
 
 exports.manualTriggerSync = onCall(async (request) => {
-    // Roda no modo completo ( Full Sync )
     return await performSync(true);
 });
