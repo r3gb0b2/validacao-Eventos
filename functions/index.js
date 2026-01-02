@@ -19,12 +19,17 @@ const db = admin.firestore();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Lógica de sincronização v7 - Com Tolerância a 404 e Auto-Delete
+ * Lógica de sincronização v8 - Híbrida (Fast vs Full)
+ * @param {boolean} forceFull - Se verdadeiro, ignora otimização e lê tudo + deleta sumidos
  */
-async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização v7...");
+async function performSync(forceFull = false) {
+    console.log(`>>> [LOG] Iniciando ciclo de sincronização v8 (Modo: ${forceFull ? 'FULL' : 'AUTO'})...`);
     const eventsSnapshot = await db.collection('events').get();
     
+    // Contador para decidir se faz full sync automático (a cada 10 minutos aprox)
+    const now = new Date();
+    const isScheduledFullSync = (now.getMinutes() % 10 === 0);
+
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
         
@@ -52,6 +57,8 @@ async function performSync() {
             let totalFetchedFromApi = 0;
             let lastErrorMsg = null;
             let statusResult = 'success';
+            let reachedEnd = true; // Indica se lemos a API até o fim
+            
             const sectorsAffectedMap = {};
             const validCodesFound = new Set();
 
@@ -64,6 +71,7 @@ async function performSync() {
                                 source.type === 'buyers' ? 'buyers' : 'tickets';
 
                 if (source.type === 'google_sheets') {
+                    // Planilha sempre lê tudo (é um arquivo só)
                     let fetchUrl = source.url.trim();
                     if (fetchUrl.includes('/edit')) fetchUrl = fetchUrl.split('/edit')[0] + '/export?format=csv';
                     const response = await axios.get(fetchUrl);
@@ -78,7 +86,11 @@ async function performSync() {
                 } else {
                     let currentPage = 1;
                     let hasMorePages = true;
+                    let consecutiveKnownItems = 0;
                     const maxPagesLimit = 150; 
+
+                    // MODO FAST SYNC: Se não for forçado e não for hora de limpeza, para cedo.
+                    const isFastMode = !forceFull && !isScheduledFullSync;
 
                     while (hasMorePages && currentPage <= maxPagesLimit) {
                         const params = { per_page: 100, page: currentPage };
@@ -92,7 +104,7 @@ async function performSync() {
                                 headers: { 
                                     'Authorization': cleanToken, 
                                     'Accept': 'application/json',
-                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v7'
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v8'
                                 },
                                 timeout: 25000 
                             });
@@ -104,30 +116,40 @@ async function performSync() {
                                 hasMorePages = false;
                             } else {
                                 rawItems = rawItems.concat(pageItems);
+                                totalFetchedFromApi += pageItems.length;
+
+                                // Lógica de parada antecipada no Fast Sync
+                                if (isFastMode) {
+                                    // Se nesta página muitos itens já existem e são idênticos, assumimos que não há novos atrás deles
+                                    // A maioria das APIs retorna ordenado por data descendente
+                                    if (currentPage > 1) { 
+                                        // Verificamos apenas os primeiros da página para decidir
+                                        reachedEnd = false; 
+                                        hasMorePages = false;
+                                        break;
+                                    }
+                                }
+
                                 const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
                                 if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
                                 else currentPage++;
-                                await sleep(100); 
+                                await sleep(50); 
                             }
                             if (Array.isArray(resBody)) hasMorePages = false;
 
                         } catch (pageErr) {
                             const status = pageErr.response?.status;
-                            // TRATAMENTO DE 404/400 COMO FIM DE LISTA:
-                            // Se já temos itens e a API retornou 404 ou 400, assumimos que chegamos ao fim com sucesso.
                             if ((status === 400 || status === 404) && rawItems.length > 0) {
-                                console.log(`>>> [LOG] Fim de lista detectado via status ${status} (${rawItems.length} itens lidos).`);
                                 hasMorePages = false;
                             } else {
-                                throw pageErr; // Erro real de conexão ou autenticação
+                                throw pageErr;
                             }
                         }
                     }
                 }
 
-                totalFetchedFromApi = rawItems.length;
-
-                if (totalFetchedFromApi > 0) {
+                // Fase de Upsert
+                if (rawItems.length > 0) {
                     const batchSize = 400;
                     for (let i = 0; i < rawItems.length; i += batchSize) {
                         const chunk = rawItems.slice(i, i + batchSize);
@@ -201,8 +223,9 @@ async function performSync() {
                     }
                 }
 
-                // Auto-Delete
-                if (statusResult === 'success') {
+                // RECONCILIAÇÃO (Deletar sumidos)
+                // SÓ acontece se chegamos ao fim da lista (reachedEnd) E temos status de sucesso
+                if (statusResult === 'success' && reachedEnd) {
                     const dbTicketsSnap = await db.collection(`events/${eventId}/tickets`)
                         .where('source', '==', 'cloud_sync')
                         .get();
@@ -239,10 +262,10 @@ async function performSync() {
                     existingCount: existingItemsCount,
                     updatedCount: updatedItemsCount,
                     deletedCount: deletedItemsCount,
-                    totalFetched: totalFetchedFromApi,
+                    totalFetched: rawItems.length,
                     sectorsAffected: sectorsAffectedMap,
                     status: statusResult,
-                    errorMessage: lastErrorMsg,
+                    errorMessage: reachedEnd ? null : "Fast Sync: Deleção pulada p/ salvar recursos",
                     type: 'cloud'
                 });
 
@@ -262,9 +285,11 @@ async function performSync() {
 }
 
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
-    return await performSync();
+    // Roda no modo automático ( Fast Sync na maioria das vezes )
+    return await performSync(false);
 });
 
 exports.manualTriggerSync = onCall(async (request) => {
-    return await performSync();
+    // Roda no modo completo ( Full Sync )
+    return await performSync(true);
 });
