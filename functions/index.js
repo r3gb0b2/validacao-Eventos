@@ -19,21 +19,15 @@ const db = admin.firestore();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Lógica de sincronização v9 - Híbrida Corrigida
- * @param {boolean} forceFull - Se verdadeiro, ignora otimização e lê tudo + deleta sumidos
+ * Lógica de sincronização v6 - Resiliência Máxima
  */
-async function performSync(forceFull = false) {
-    const now = new Date();
-    // Full sync automático a cada 10 minutos ou se forçado
-    const isScheduledFullSync = (now.getMinutes() % 10 === 0);
-    const isFullMode = forceFull || isScheduledFullSync;
-    
-    console.log(`>>> [LOG] Ciclo v9 Iniciado | Modo: ${isFullMode ? 'COMPLETO' : 'RÁPIDO'}`);
-
+async function performSync() {
+    console.log(">>> [LOG] Iniciando ciclo de sincronização v6...");
     const eventsSnapshot = await db.collection('events').get();
     
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
+        const eventData = eventDoc.data();
         
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
@@ -45,6 +39,7 @@ async function performSync(forceFull = false) {
         const sources = (configData.sources || []).filter(s => s.autoImport);
         if (sources.length === 0) continue;
 
+        // Cache de setores para evitar múltiplas leituras
         const settingsRef = db.doc(`events/${eventId}/settings/main`);
         const settingsSnap = await settingsRef.get();
         const currentSectors = new Set(settingsSnap.exists ? (settingsSnap.data().sectorNames || []) : []);
@@ -54,13 +49,11 @@ async function performSync(forceFull = false) {
         for (const source of sources) {
             let newItemsCount = 0;
             let updatedItemsCount = 0;
-            let deletedItemsCount = 0;
             let existingItemsCount = 0;
+            let totalFetchedFromApi = 0;
+            let lastErrorMsg = null;
             let statusResult = 'success';
-            let reachedEnd = true; 
-            
             const sectorsAffectedMap = {};
-            const validCodesFound = new Set();
 
             try {
                 let rawItems = [];
@@ -85,68 +78,75 @@ async function performSync(forceFull = false) {
                 } else {
                     let currentPage = 1;
                     let hasMorePages = true;
-                    // MODO RÁPIDO: lê até 5 páginas (aprox 500 itens). MODO COMPLETO: até 200 páginas.
-                    const maxPages = isFullMode ? 200 : 5; 
+                    const maxPagesLimit = 100; 
 
-                    while (hasMorePages && currentPage <= maxPages) {
+                    while (hasMorePages && currentPage <= maxPagesLimit) {
                         const params = { per_page: 100, page: currentPage };
                         if (source.externalEventId && String(source.externalEventId).trim() !== "") {
                             params.event_id = String(source.externalEventId).trim();
                         }
 
                         try {
+                            console.log(`>>> [LOG] Requisição: ${source.name} Pág ${currentPage}`);
                             const response = await axios.get(`${baseUrl}/${endpoint}`, {
                                 params,
                                 headers: { 
                                     'Authorization': cleanToken, 
                                     'Accept': 'application/json',
-                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v9'
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v6'
                                 },
                                 timeout: 25000 
                             });
 
                             const resBody = response.data;
-                            const pageItems = resBody?.data || resBody?.participants || resBody?.tickets || resBody?.checkins || resBody?.buyers || (Array.isArray(resBody) ? resBody : []);
+                            if (!resBody) {
+                                hasMorePages = false;
+                                break;
+                            }
+
+                            const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
                             
                             if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
                                 hasMorePages = false;
                             } else {
                                 rawItems = rawItems.concat(pageItems);
                                 const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
+                                if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
+                                else currentPage++;
                                 
-                                if (lastPage > 0 && currentPage >= lastPage) {
-                                    hasMorePages = false;
-                                } else {
-                                    currentPage++;
-                                }
-                                await sleep(50); 
+                                // Pequena pausa para não sobrecarregar a API
+                                await sleep(150); 
                             }
+                            
                             if (Array.isArray(resBody)) hasMorePages = false;
 
                         } catch (pageErr) {
                             const status = pageErr.response?.status;
-                            if ((status === 400 || status === 404) && rawItems.length > 0) {
+                            const errorData = pageErr.response?.data;
+                            
+                            console.error(`>>> [API ERROR] Status ${status}:`, JSON.stringify(errorData || pageErr.message));
+
+                            // Se der erro 400 mas já tivermos pegado dados, provavelmente é um erro de "página inexistente" da própria API
+                            if (status === 400 && rawItems.length > 0) {
+                                console.log(`>>> [LOG] Erro 400 após ${rawItems.length} itens. Considerando fim de lista.`);
                                 hasMorePages = false;
                             } else {
-                                throw pageErr;
+                                lastErrorMsg = `Erro ${status || 'Network'}: ${pageErr.message}`;
+                                statusResult = rawItems.length > 0 ? 'warning' : 'error';
+                                hasMorePages = false;
                             }
                         }
                     }
-                    
-                    // Se paramos por causa do limite de páginas do Modo Rápido, marcamos que não chegamos ao fim
-                    if (currentPage > maxPages && !isFullMode) {
-                        reachedEnd = false;
-                    }
                 }
 
-                // Processamento dos itens (Upsert)
-                if (rawItems.length > 0) {
+                totalFetchedFromApi = rawItems.length;
+
+                if (totalFetchedFromApi > 0) {
                     const batchSize = 400;
                     for (let i = 0; i < rawItems.length; i += batchSize) {
                         const chunk = rawItems.slice(i, i + batchSize);
                         const chunkData = chunk.map(item => {
                             const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
-                            if (code) validCodesFound.add(code);
                             return code ? { code, item } : null;
                         }).filter(d => d !== null);
 
@@ -214,35 +214,12 @@ async function performSync(forceFull = false) {
                     }
                 }
 
-                // Deleção de cancelados (Somente em Modo Completo e se leu tudo)
-                if (statusResult === 'success' && reachedEnd && isFullMode) {
-                    const dbTicketsSnap = await db.collection(`events/${eventId}/tickets`)
-                        .where('source', '==', 'cloud_sync')
-                        .get();
-
-                    let deleteBatch = db.batch();
-                    let deleteCounter = 0;
-
-                    for (const doc of dbTicketsSnap.docs) {
-                        if (!validCodesFound.has(doc.id)) {
-                            deleteBatch.delete(doc.ref);
-                            deletedItemsCount++;
-                            deleteCounter++;
-                            if (deleteCounter >= 450) {
-                                await deleteBatch.commit();
-                                deleteBatch = db.batch();
-                                deleteCounter = 0;
-                            }
-                        }
-                    }
-                    if (deleteCounter > 0) await deleteBatch.commit();
-                }
-
                 if (sectorsChanged) {
                     await settingsRef.update({ 
                         sectorNames: Array.from(currentSectors).sort(),
                         hiddenSectors: hiddenSectors
                     });
+                    sectorsChanged = false; // Reset para a próxima fonte
                 }
 
                 await db.collection(`events/${eventId}/import_logs`).add({
@@ -251,16 +228,19 @@ async function performSync(forceFull = false) {
                     newCount: newItemsCount,
                     existingCount: existingItemsCount,
                     updatedCount: updatedItemsCount,
-                    deletedCount: deletedItemsCount,
-                    totalFetched: rawItems.length,
+                    totalFetched: totalFetchedFromApi,
                     sectorsAffected: sectorsAffectedMap,
                     status: statusResult,
-                    errorMessage: reachedEnd ? null : "Modo Rápido: Leu apenas as primeiras 5 páginas.",
+                    errorMessage: lastErrorMsg,
                     type: 'cloud'
                 });
 
+                await importRef.update({ 
+                    [`source_last_sync_${source.id}`]: Date.now() 
+                });
+
             } catch (err) {
-                console.error(`>>> [ERRO] ${source.name}:`, err.message);
+                console.error(`>>> [ERRO CRÍTICO] ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
@@ -275,9 +255,9 @@ async function performSync(forceFull = false) {
 }
 
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
-    return await performSync(false);
+    return await performSync();
 });
 
 exports.manualTriggerSync = onCall(async (request) => {
-    return await performSync(true);
+    return await performSync();
 });
