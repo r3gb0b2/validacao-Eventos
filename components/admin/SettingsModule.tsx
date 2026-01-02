@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { ImportSource, Event, Ticket } from '../../types';
-import { Firestore, doc, setDoc, writeBatch, serverTimestamp, onSnapshot, addDoc, collection } from 'firebase/firestore';
-import { CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, ClockIcon, CheckCircleIcon, PlusCircleIcon, PauseIcon, PlayIcon, ShieldCheckIcon } from '../Icons';
+import { ImportSource, ImportType, Event, Ticket, ImportSettingsV2 } from '../../types';
+import { Firestore, doc, setDoc, writeBatch, serverTimestamp, onSnapshot, addDoc, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import { CloudUploadIcon, TableCellsIcon, EyeIcon, EyeSlashIcon, TrashIcon, ClockIcon, AlertTriangleIcon, CheckCircleIcon, PlusCircleIcon, PauseIcon, PlayIcon, ShieldCheckIcon } from '../Icons';
 import Papa from 'papaparse';
 
 interface SettingsModuleProps {
@@ -20,6 +20,7 @@ interface SettingsModuleProps {
 
 const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sectorNames, hiddenSectors, importSources, onUpdateSectorNames, onUpdateImportSources, isLoading, setIsLoading, allTickets }) => {
     const [importProgress, setImportProgress] = useState<string>('');
+    const [importStats, setImportStats] = useState({ total: 0, new: 0, existing: 0, updated: 0, deleted: 0 });
     const [globalAutoImport, setGlobalAutoImport] = useState(false);
     
     const [editSource, setEditSource] = useState<Partial<ImportSource>>({ 
@@ -89,12 +90,15 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
     const runImport = async (source: ImportSource) => {
         setIsLoading(true);
         setImportProgress('Iniciando...');
+        setImportStats({ total: 0, new: 0, existing: 0, updated: 0, deleted: 0 });
 
         let totalItemsFoundInApi = 0;
         let newItemsAdded = 0;
         let alreadyExistingCount = 0;
         let updatedItems = 0;
+        let deletedItems = 0;
         const sectorsAffected: Record<string, number> = {};
+        const validCodesFound = new Set<string>();
 
         try {
             const existingTicketsMap = new Map<string, Ticket>(allTickets.map(t => [String(t.id).trim(), t]));
@@ -122,6 +126,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 rows.forEach(row => {
                     const code = String(row['code'] || row['codigo'] || row['id'] || '').trim();
                     if (!code) return;
+                    validCodesFound.add(code);
                     totalItemsFoundInApi++;
 
                     const sector = String(row['sector'] || row['setor'] || 'Geral').trim();
@@ -164,7 +169,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     
                     const res = await fetch(urlObj.toString(), { headers, mode: 'cors' });
                     
+                    // TRATAMENTO DO ERRO 404 NA PAGINAÇÃO MANUAL:
                     if (res.status === 404 && totalItemsFoundInApi > 0) {
+                        console.log("Fim de lista detectado via 404 (Sincronização Manual)");
                         hasMorePages = false;
                         break;
                     }
@@ -186,6 +193,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         totalItemsFoundInApi++;
                         const code = String(item.access_code || item.code || item.qr_code || item.barcode || item.id || '').trim();
                         if (!code) return;
+                        validCodesFound.add(code);
 
                         let rawSector = 'Geral';
                         if (item.sector_name) rawSector = item.sector_name;
@@ -220,12 +228,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                             });
                         } else {
                             alreadyExistingCount++;
-                            // PRESERVAÇÃO DE DADOS: Apenas atualiza o status se necessário
                             if (shouldMarkUsed && existing.status !== 'USED') {
                                 updatedItems++;
                                 sectorsAffected[sector] = (sectorsAffected[sector] || 0) + 1;
                                 allTicketsToSave.push({
-                                    ...existing, // Mantém todos os dados originais
+                                    ...existing,
                                     status: 'USED',
                                     usedAt: item.validated_at || Date.now()
                                 });
@@ -253,6 +260,27 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
+            setImportProgress('Limpando cancelados...');
+            const cloudTicketsSnap = await getDocs(query(
+                collection(db, 'events', selectedEvent.id, 'tickets'), 
+                where('source', 'in', ['api_import', 'cloud_sync'])
+            ));
+            
+            let deleteBatch = writeBatch(db);
+            let deleteCounter = 0;
+
+            cloudTicketsSnap.forEach(doc => {
+                if (!validCodesFound.has(doc.id)) {
+                    deleteBatch.delete(doc.ref);
+                    deletedItems++;
+                    deleteCounter++;
+                    if (deleteCounter >= 450) {
+                        deleteCounter = 0;
+                    }
+                }
+            });
+            if (deleteCounter > 0) await deleteBatch.commit();
+
             const newSectorList = Array.from(discoveredSectors).sort();
             if (JSON.stringify(newSectorList) !== JSON.stringify(sectorNames)) {
                 await onUpdateSectorNames(newSectorList, hiddenSectors);
@@ -264,7 +292,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 newCount: newItemsAdded,
                 existingCount: alreadyExistingCount,
                 updatedCount: updatedItems,
-                deletedCount: 0,
+                deletedCount: deletedItems,
                 sectorsAffected: sectorsAffected,
                 status: 'success',
                 type: 'local'
@@ -276,7 +304,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 `• Total Lidos: ${totalItemsFoundInApi}\n` +
                 `• Novos Ingressos: ${newItemsAdded}\n` +
                 `• Atualizados: ${updatedItems}\n` +
-                `Nada foi removido.`
+                `• Removidos (Cancelados): ${deletedItems}`
             );
 
             const updatedSources = importSources.map(s => s.id === source.id ? { ...s, lastImportTime: Date.now() } : s);
