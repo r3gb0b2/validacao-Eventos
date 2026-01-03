@@ -18,7 +18,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedEventId, setSelectedEventId] = useState<string>('');
     const [availableSectors, setAvailableSectors] = useState<string[]>([]);
-    const [sectorNomenclature, setSectorNomenclature] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
     const [isParsing, setIsParsing] = useState(false);
     const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -63,7 +62,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         loadEvents();
     }, [db]);
 
-    // 2. Carregar configurações e SETORES do evento selecionado
+    // 2. Carregar TODAS as configurações salvas e SETORES do evento selecionado
     useEffect(() => {
         if (!selectedEventId || !db) return;
 
@@ -94,10 +93,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             logoUrl: data.logoUrl || prev.logoUrl
                         };
                     });
-                    
-                    if (data.sectorNomenclature) {
-                        setSectorNomenclature(data.sectorNomenclature);
-                    }
                 } else {
                     setAvailableSectors([]);
                 }
@@ -193,15 +188,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const sectorMatch = text.match(/Ingresso\s+(.*?)\s+Participante/i);
             if (sectorMatch) {
                 const s = sectorMatch[1].trim();
-                // Tenta limpar nomenclatura do PDF base para achar o setor padrão
-                const baseName = s.split('[')[0].trim();
-                if (availableSectors.includes(baseName)) {
-                    extracted.sector = baseName;
-                    const nomenclatureMatch = s.match(/\[(.*?)\]/);
-                    if (nomenclatureMatch) setSectorNomenclature(nomenclatureMatch[1]);
-                } else if (availableSectors.includes(s)) {
-                    extracted.sector = s;
-                }
+                // Se o setor extraído existe nos setores do evento, usa ele, senão mantém
+                if (availableSectors.includes(s)) extracted.sector = s;
             }
 
             setFormData(prev => ({ ...prev, ...extracted }));
@@ -238,7 +226,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 producer: formData.producer,
                 contact: formData.contact,
                 sector: formData.sector,
-                sectorNomenclature: sectorNomenclature,
                 ownerName: formData.ownerName,
                 logoUrl: formData.logoUrl 
             }, { merge: true });
@@ -259,36 +246,29 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const handleGenerateBatch = async () => {
         if (!selectedEventId) return alert("Selecione um evento.");
         setIsGenerating(true);
-        
         const zip = new JSZip();
         let currentBatch = writeBatch(db);
         let batchCounter = 0;
         const eventFolder = zip.folder(formData.eventName.replace(/\s+/g, '_'));
 
-        // Prepara o nome final do setor com a nomenclatura se houver
-        const fullSectorForPdf = sectorNomenclature.trim() 
-            ? `${formData.sector} [${sectorNomenclature.trim()}]` 
-            : formData.sector;
-
-        const pdfConfigForBatch = { ...formData, sector: fullSectorForPdf };
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
 
         try {
             for (let i = 0; i < quantity; i++) {
-                const { blob, ticketCode } = await generateSingleTicketBlob(pdfConfigForBatch, undefined, batchPurchaseCode);
+                const { blob, ticketCode } = await generateSingleTicketBlob(formData, undefined, batchPurchaseCode);
                 
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
                 
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
                 currentBatch.set(ticketRef, {
-                    sector: formData.sector, // Salva o setor LIMPO para validação
+                    sector: formData.sector.split('[')[0].trim(),
                     status: 'AVAILABLE',
                     source: 'secret_generator',
                     details: {
                         ownerName: formData.ownerName,
                         eventName: formData.eventName,
                         purchaseCode: batchPurchaseCode,
-                        pdfConfig: pdfConfigForBatch
+                        pdfConfig: { ...formData }
                     }
                 });
                 batchCounter++;
@@ -369,36 +349,24 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <TicketIcon className="w-4 h-4 mr-2" /> 2. Dados do Ingresso
                             </h2>
                             
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="space-y-1">
-                                    <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Setor do Evento</label>
-                                    {availableSectors.length > 0 ? (
-                                        <select 
-                                            name="sector" 
-                                            value={formData.sector} 
-                                            onChange={handleInputChange} 
-                                            className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-white font-bold outline-none focus:border-orange-500"
-                                        >
-                                            {availableSectors.map(s => <option key={s} value={s}>{s}</option>)}
-                                        </select>
-                                    ) : (
-                                        <input name="sector" value={formData.sector} onChange={handleInputChange} placeholder="Setor" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                                    )}
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Nomenclatura / Lote</label>
-                                    <input 
-                                        value={sectorNomenclature} 
-                                        onChange={e => setSectorNomenclature(e.target.value)} 
-                                        placeholder="Ex: Convidados / 1 LOTE" 
-                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-orange-400 font-bold outline-none focus:border-orange-500" 
-                                    />
-                                </div>
+                            <div className="space-y-1">
+                                <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Vincular ao Setor do Evento</label>
+                                {availableSectors.length > 0 ? (
+                                    <select 
+                                        name="sector" 
+                                        value={formData.sector} 
+                                        onChange={handleInputChange} 
+                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-white font-bold outline-none focus:border-orange-500"
+                                    >
+                                        {availableSectors.map(s => <option key={s} value={s}>{s}</option>)}
+                                    </select>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <input name="sector" value={formData.sector} onChange={handleInputChange} placeholder="Setor (Texto Livre)" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                                        <p className="text-[9px] text-red-400 italic font-bold">Aviso: Evento selecionado não possui setores configurados. Defina-os no painel para evitar erros de validação.</p>
+                                    </div>
+                                )}
                             </div>
-                            
-                            {availableSectors.length === 0 && (
-                                <p className="text-[9px] text-red-400 italic font-bold">Aviso: Evento sem setores configurados. Defina-os no painel para evitar erros de validação.</p>
-                            )}
 
                             <div className="space-y-1">
                                 <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Nome no Cartão</label>
@@ -471,7 +439,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     </button>
                     {availableSectors.length > 0 && (
                          <div className="mt-3 flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
-                             <CheckCircleIcon className="w-4 h-4 text-green-500" /> Vínculo com setor "{formData.sector}" {sectorNomenclature ? `+ [${sectorNomenclature}]` : ''} ativo
+                             <CheckCircleIcon className="w-4 h-4 text-green-500" /> Vínculo com setor "{formData.sector}" ativo
                          </div>
                     )}
                 </div>
@@ -492,7 +460,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             <tr>
                                 <th className="p-4">Código do Ingresso</th>
                                 <th className="p-4">Participante</th>
-                                <th className="p-4">Setor no PDF</th>
+                                <th className="p-4">Setor Vinculado</th>
                                 <th className="p-4 text-right">Ações</th>
                             </tr>
                         </thead>
@@ -503,7 +471,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                     <td className="p-4 font-bold text-gray-200">{t.details?.ownerName}</td>
                                     <td className="p-4 text-gray-400">
                                         <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${availableSectors.includes(t.sector) ? 'bg-green-500/10 border-green-500 text-green-500' : 'bg-red-500/10 border-red-500 text-red-500'}`}>
-                                            {t.details?.pdfConfig?.sector || t.sector}
+                                            {t.sector}
                                         </span>
                                     </td>
                                     <td className="p-4 text-right flex justify-end space-x-2">
