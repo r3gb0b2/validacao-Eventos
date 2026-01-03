@@ -19,15 +19,15 @@ const db = admin.firestore();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Lógica de sincronização v6 - Resiliência Máxima
+ * Lógica de sincronização v11 - Adição Pura e Leitura Exaustiva
+ * @param {boolean} forceFull - Parâmetro mantido para compatibilidade, mas agora ambos os modos são seguros (sem delete)
  */
-async function performSync() {
-    console.log(">>> [LOG] Iniciando ciclo de sincronização v6...");
+async function performSync(forceFull = false) {
+    console.log(`>>> [LOG] Iniciando ciclo de sincronização v11 (Adição Pura)...`);
     const eventsSnapshot = await db.collection('events').get();
     
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
-        const eventData = eventDoc.data();
         
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
@@ -39,11 +39,9 @@ async function performSync() {
         const sources = (configData.sources || []).filter(s => s.autoImport);
         if (sources.length === 0) continue;
 
-        // Cache de setores para evitar múltiplas leituras
         const settingsRef = db.doc(`events/${eventId}/settings/main`);
         const settingsSnap = await settingsRef.get();
         const currentSectors = new Set(settingsSnap.exists ? (settingsSnap.data().sectorNames || []) : []);
-        const hiddenSectors = settingsSnap.exists ? (settingsSnap.data().hiddenSectors || []) : [];
         let sectorsChanged = false;
 
         for (const source of sources) {
@@ -51,8 +49,9 @@ async function performSync() {
             let updatedItemsCount = 0;
             let existingItemsCount = 0;
             let totalFetchedFromApi = 0;
-            let lastErrorMsg = null;
             let statusResult = 'success';
+            let lastErrorMsg = null;
+            
             const sectorsAffectedMap = {};
 
             try {
@@ -78,7 +77,7 @@ async function performSync() {
                 } else {
                     let currentPage = 1;
                     let hasMorePages = true;
-                    const maxPagesLimit = 100; 
+                    const maxPagesLimit = 500; // Aumentado para garantir leitura total (até 50.000 ingressos)
 
                     while (hasMorePages && currentPage <= maxPagesLimit) {
                         const params = { per_page: 100, page: currentPage };
@@ -87,61 +86,48 @@ async function performSync() {
                         }
 
                         try {
-                            console.log(`>>> [LOG] Requisição: ${source.name} Pág ${currentPage}`);
                             const response = await axios.get(`${baseUrl}/${endpoint}`, {
                                 params,
                                 headers: { 
                                     'Authorization': cleanToken, 
                                     'Accept': 'application/json',
-                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v6'
+                                    'User-Agent': 'ST-Checkin-Cloud-Worker/v11'
                                 },
-                                timeout: 25000 
+                                timeout: 30000 
                             });
 
                             const resBody = response.data;
-                            if (!resBody) {
-                                hasMorePages = false;
-                                break;
-                            }
-
-                            const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
+                            const pageItems = resBody?.data || resBody?.participants || resBody?.tickets || resBody?.checkins || resBody?.buyers || (Array.isArray(resBody) ? resBody : []);
                             
                             if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
                                 hasMorePages = false;
                             } else {
                                 rawItems = rawItems.concat(pageItems);
+                                totalFetchedFromApi += pageItems.length;
+
+                                // Verifica se há uma próxima página baseada nos metadados da API
                                 const lastPage = resBody.last_page || resBody.meta?.last_page || resBody.pagination?.total_pages || 0;
-                                if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
-                                else currentPage++;
-                                
-                                // Pequena pausa para não sobrecarregar a API
-                                await sleep(150); 
+                                if (lastPage > 0 && currentPage >= lastPage) {
+                                    hasMorePages = false;
+                                } else {
+                                    currentPage++;
+                                }
+                                await sleep(100); // Evita Rate Limit
                             }
-                            
                             if (Array.isArray(resBody)) hasMorePages = false;
 
                         } catch (pageErr) {
-                            const status = pageErr.response?.status;
-                            const errorData = pageErr.response?.data;
-                            
-                            console.error(`>>> [API ERROR] Status ${status}:`, JSON.stringify(errorData || pageErr.message));
-
-                            // Se der erro 400 mas já tivermos pegado dados, provavelmente é um erro de "página inexistente" da própria API
-                            if (status === 400 && rawItems.length > 0) {
-                                console.log(`>>> [LOG] Erro 400 após ${rawItems.length} itens. Considerando fim de lista.`);
-                                hasMorePages = false;
+                            if (pageErr.response?.status === 404 || pageErr.response?.status === 400) {
+                                hasMorePages = false; // Fim da lista ou erro de parâmetro
                             } else {
-                                lastErrorMsg = `Erro ${status || 'Network'}: ${pageErr.message}`;
-                                statusResult = rawItems.length > 0 ? 'warning' : 'error';
-                                hasMorePages = false;
+                                throw pageErr;
                             }
                         }
                     }
                 }
 
-                totalFetchedFromApi = rawItems.length;
-
-                if (totalFetchedFromApi > 0) {
+                // Fase de Gravação (Upsert)
+                if (rawItems.length > 0) {
                     const batchSize = 400;
                     for (let i = 0; i < rawItems.length; i += batchSize) {
                         const chunk = rawItems.slice(i, i + batchSize);
@@ -178,6 +164,7 @@ async function performSync() {
                             const shouldMarkUsed = source.type === 'checkins' || item.used === true || item.status === 'used' || item.status === 'validated' || !!item.validated_at;
 
                             if (!ticketSnap.exists) {
+                                // Novo ingresso: Cria registro completo
                                 batch.set(ticketSnap.ref, {
                                     id: code,
                                     sector: sector,
@@ -196,6 +183,8 @@ async function performSync() {
                                 batchChanges++;
                                 sectorsAffectedMap[sector] = (sectorsAffectedMap[sector] || 0) + 1;
                             } else {
+                                // Ingresso já existe: APENAS atualiza status se for USED
+                                // NÃO sobrescreve dados de participante (nome, documento, etc)
                                 const currentData = ticketSnap.data();
                                 if (shouldMarkUsed && currentData.status !== 'USED') {
                                     batch.update(ticketSnap.ref, {
@@ -216,10 +205,8 @@ async function performSync() {
 
                 if (sectorsChanged) {
                     await settingsRef.update({ 
-                        sectorNames: Array.from(currentSectors).sort(),
-                        hiddenSectors: hiddenSectors
+                        sectorNames: Array.from(currentSectors).sort()
                     });
-                    sectorsChanged = false; // Reset para a próxima fonte
                 }
 
                 await db.collection(`events/${eventId}/import_logs`).add({
@@ -228,19 +215,16 @@ async function performSync() {
                     newCount: newItemsCount,
                     existingCount: existingItemsCount,
                     updatedCount: updatedItemsCount,
-                    totalFetched: totalFetchedFromApi,
+                    deletedCount: 0, // Deleção removida conforme solicitado
+                    totalFetched: rawItems.length,
                     sectorsAffected: sectorsAffectedMap,
                     status: statusResult,
                     errorMessage: lastErrorMsg,
                     type: 'cloud'
                 });
 
-                await importRef.update({ 
-                    [`source_last_sync_${source.id}`]: Date.now() 
-                });
-
             } catch (err) {
-                console.error(`>>> [ERRO CRÍTICO] ${source.name}:`, err.message);
+                console.error(`>>> [ERRO] ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
@@ -255,9 +239,9 @@ async function performSync() {
 }
 
 exports.syncTicketsScheduled = onSchedule('every 1 minutes', async (event) => {
-    return await performSync();
+    return await performSync(false);
 });
 
 exports.manualTriggerSync = onCall(async (request) => {
-    return await performSync();
+    return await performSync(true);
 });
