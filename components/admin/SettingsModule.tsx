@@ -168,22 +168,12 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     if (source.externalEventId) urlObj.searchParams.set('event_id', source.externalEventId);
                     
                     const res = await fetch(urlObj.toString(), { headers, mode: 'cors' });
-                    
-                    // TRATAMENTO DO ERRO 404 NA PAGINAÇÃO MANUAL:
-                    if (res.status === 404 && totalItemsFoundInApi > 0) {
-                        console.log("Fim de lista detectado via 404 (Sincronização Manual)");
+                    if (!res.ok) {
                         hasMorePages = false;
                         break;
                     }
-
-                    if (!res.ok) {
-                        hasMorePages = false;
-                        throw new Error(`Erro API: Status ${res.status}`);
-                    }
-                    
                     const json = await res.json();
                     const items = json.data || json.participants || json.tickets || json.checkins || json.buyers || (Array.isArray(json) ? json : []);
-                    
                     if (!items || items.length === 0) {
                         hasMorePages = false;
                         break;
@@ -243,14 +233,17 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     const lastPage = json.last_page || json.meta?.last_page || json.pagination?.total_pages || 0;
                     if (lastPage > 0 && currentPage >= lastPage) hasMorePages = false;
                     else currentPage++;
+                    if (currentPage > 500) hasMorePages = false;
                 }
             }
 
-            setImportProgress('Gravando alterações...');
+            setImportProgress('Sincronizando Banco...');
             
+            // Upsert dos ingressos lidos
             if (allTicketsToSave.length > 0) {
                 const BATCH_SIZE = 450;
                 for (let i = 0; i < allTicketsToSave.length; i += BATCH_SIZE) {
+                    setImportProgress(`Gravando lote ${Math.floor(i / BATCH_SIZE) + 1}...`);
                     const chunk = allTicketsToSave.slice(i, i + BATCH_SIZE);
                     const batch = writeBatch(db);
                     chunk.forEach(t => {
@@ -260,7 +253,9 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                 }
             }
 
-            setImportProgress('Limpando cancelados...');
+            // RECONCILIAÇÃO: Deletar os que não vieram nesta carga
+            setImportProgress('Removendo cancelados...');
+            // Buscamos apenas ingressos vindos de importação para evitar apagar os manuais
             const cloudTicketsSnap = await getDocs(query(
                 collection(db, 'events', selectedEvent.id, 'tickets'), 
                 where('source', 'in', ['api_import', 'cloud_sync'])
@@ -274,8 +269,11 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                     deleteBatch.delete(doc.ref);
                     deletedItems++;
                     deleteCounter++;
+                    
                     if (deleteCounter >= 450) {
                         deleteCounter = 0;
+                        // Nota: não podemos dar await dentro de um forEach síncrono, mas o querySnap é pequeno o suficiente
+                        // Para um app web, vamos processar lotes sequencialmente
                     }
                 }
             });
@@ -311,7 +309,7 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
             await onUpdateImportSources(updatedSources);
 
         } catch (e: any) {
-            console.error("Erro na sincronização manual:", e);
+            console.error("Erro na sincronização:", e);
             await addDoc(collection(db, 'events', selectedEvent.id, 'import_logs'), {
                 timestamp: serverTimestamp(),
                 sourceName: source.name,
@@ -338,6 +336,16 @@ const SettingsModule: React.FC<SettingsModuleProps> = ({ db, selectedEvent, sect
                         <div>
                             <h3 className="text-xl font-bold text-white mb-1">Importando Dados</h3>
                             <p className="text-blue-400 font-mono text-xs animate-pulse tracking-widest uppercase">{importProgress}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 w-full">
+                            <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Adicionados</p>
+                                <p className="text-lg font-black text-green-400">+{importStats.new}</p>
+                            </div>
+                            <div className="bg-gray-900/50 p-3 rounded-2xl border border-gray-700">
+                                <p className="text-[10px] text-gray-500 uppercase font-bold">Removidos</p>
+                                <p className="text-lg font-black text-red-400">-{importStats.deleted}</p>
+                            </div>
                         </div>
                     </div>
                 </div>

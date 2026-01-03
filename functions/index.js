@@ -19,7 +19,7 @@ const db = admin.firestore();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Lógica de sincronização v7 - Com Tolerância a 404 e Auto-Delete
+ * Lógica de sincronização v7 - Com Auto-Delete (Reconciliação)
  */
 async function performSync() {
     console.log(">>> [LOG] Iniciando ciclo de sincronização v7...");
@@ -27,6 +27,7 @@ async function performSync() {
     
     for (const eventDoc of eventsSnapshot.docs) {
         const eventId = eventDoc.id;
+        const eventData = eventDoc.data();
         
         const importRef = db.doc(`events/${eventId}/settings/import_v2`);
         const importSnap = await importRef.get();
@@ -53,6 +54,8 @@ async function performSync() {
             let lastErrorMsg = null;
             let statusResult = 'success';
             const sectorsAffectedMap = {};
+            
+            // Conjunto para armazenar todos os códigos válidos encontrados nesta execução
             const validCodesFound = new Set();
 
             try {
@@ -98,7 +101,12 @@ async function performSync() {
                             });
 
                             const resBody = response.data;
-                            const pageItems = resBody?.data || resBody?.participants || resBody?.tickets || resBody?.checkins || resBody?.buyers || (Array.isArray(resBody) ? resBody : []);
+                            if (!resBody) {
+                                hasMorePages = false;
+                                break;
+                            }
+
+                            const pageItems = resBody.data || resBody.participants || resBody.tickets || resBody.checkins || resBody.buyers || (Array.isArray(resBody) ? resBody : []);
                             
                             if (!pageItems || !Array.isArray(pageItems) || pageItems.length === 0) {
                                 hasMorePages = false;
@@ -109,17 +117,15 @@ async function performSync() {
                                 else currentPage++;
                                 await sleep(100); 
                             }
+                            
                             if (Array.isArray(resBody)) hasMorePages = false;
 
                         } catch (pageErr) {
                             const status = pageErr.response?.status;
-                            // TRATAMENTO DE 404/400 COMO FIM DE LISTA:
-                            // Se já temos itens e a API retornou 404 ou 400, assumimos que chegamos ao fim com sucesso.
-                            if ((status === 400 || status === 404) && rawItems.length > 0) {
-                                console.log(`>>> [LOG] Fim de lista detectado via status ${status} (${rawItems.length} itens lidos).`);
+                            if (status === 400 && rawItems.length > 0) {
                                 hasMorePages = false;
                             } else {
-                                throw pageErr; // Erro real de conexão ou autenticação
+                                throw pageErr; // Interrompe para não deletar por erro de conexão
                             }
                         }
                     }
@@ -127,6 +133,7 @@ async function performSync() {
 
                 totalFetchedFromApi = rawItems.length;
 
+                // 1. Fase de Upsert (Adicionar ou Atualizar)
                 if (totalFetchedFromApi > 0) {
                     const batchSize = 400;
                     for (let i = 0; i < rawItems.length; i += batchSize) {
@@ -201,7 +208,8 @@ async function performSync() {
                     }
                 }
 
-                // Auto-Delete
+                // 2. Fase de Reconciliação (Deletar o que sumiu da fonte)
+                // Só executamos se conseguimos baixar a lista completa com sucesso
                 if (statusResult === 'success') {
                     const dbTicketsSnap = await db.collection(`events/${eventId}/tickets`)
                         .where('source', '==', 'cloud_sync')
@@ -215,6 +223,7 @@ async function performSync() {
                             deleteBatch.delete(doc.ref);
                             deletedItemsCount++;
                             deleteCounter++;
+                            
                             if (deleteCounter >= 450) {
                                 await deleteBatch.commit();
                                 deleteBatch = db.batch();
@@ -230,6 +239,7 @@ async function performSync() {
                         sectorNames: Array.from(currentSectors).sort(),
                         hiddenSectors: hiddenSectors
                     });
+                    sectorsChanged = false;
                 }
 
                 await db.collection(`events/${eventId}/import_logs`).add({
@@ -247,7 +257,7 @@ async function performSync() {
                 });
 
             } catch (err) {
-                console.error(`>>> [ERRO] ${source.name}:`, err.message);
+                console.error(`>>> [ERRO CRÍTICO] ${source.name}:`, err.message);
                 await db.collection(`events/${eventId}/import_logs`).add({
                     timestamp: admin.firestore.FieldValue.serverTimestamp(),
                     sourceName: source.name,
