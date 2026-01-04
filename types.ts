@@ -26,8 +26,9 @@ export interface Ticket {
     originalId?: string | number;
     pdfConfig?: any;
     purchaseCode?: string;
-    // NOVA PROPRIEDADE: Mensagem de alerta para o operador
     alertMessage?: string;
+    // Campo para controle interno: Para quem o ingresso foi enviado
+    destination?: string;
   };
 }
 

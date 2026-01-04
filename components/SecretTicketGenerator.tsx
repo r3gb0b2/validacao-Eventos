@@ -14,9 +14,10 @@ interface SecretTicketGeneratorProps {
     db: Firestore;
 }
 
-// Interface estendida para incluir a atribuição no formulário local
+// Interface estendida para incluir a atribuição e destino no formulário local
 interface ExtendedTicketPdfDetails extends TicketPdfDetails {
     assignment: string;
+    destination: string; // Novo campo para controle interno
 }
 
 const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => {
@@ -41,7 +42,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         producer: 'Produtora',
         contact: '+5500000000000',
         sector: 'Setor Único',
-        assignment: 'Ingresso Cortesia', // Nova atribuição
+        assignment: 'Ingresso Cortesia',
+        destination: '', // Inicializa destino vazio
         ownerName: 'PARTICIPANTE',
         logoUrl: 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'
     });
@@ -96,6 +98,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             contact: data.contact || prev.contact,
                             sector: newSector,
                             assignment: data.assignment || prev.assignment,
+                            destination: data.destination || prev.destination,
                             ownerName: data.ownerName || prev.ownerName,
                             logoUrl: data.logoUrl || prev.logoUrl
                         };
@@ -140,7 +143,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         if (!term) return tickets;
         return tickets.filter(t => 
             t.id.toLowerCase().includes(term) || 
-            t.details?.ownerName?.toLowerCase().includes(term)
+            t.details?.ownerName?.toLowerCase().includes(term) ||
+            t.details?.destination?.toLowerCase().includes(term)
         );
     }, [tickets, searchTerm]);
 
@@ -151,10 +155,9 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const config = ticket.details.pdfConfig || formData;
             const purchaseCode = ticket.details.purchaseCode || ticket.id;
             
-            // Garantimos que o PDF use o setor completo com atribuição
             const pdfDetails = {
                 ...config,
-                sector: ticket.sector // Usamos o que está no banco que já é "Setor [Atribuição]"
+                sector: ticket.sector 
             };
 
             const { blob } = await generateSingleTicketBlob(pdfDetails, ticket.id, purchaseCode);
@@ -199,7 +202,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const contactMatch = text.match(/Contato:\s+([\+\d\s]+)/i);
             if (contactMatch) extracted.contact = contactMatch[1].trim();
             
-            // Tenta extrair o setor e a atribuição
             const sectorMatch = text.match(/Ingresso\s+(.*?)\s+Participante/i);
             if (sectorMatch) {
                 const fullSector = sectorMatch[1].trim();
@@ -247,6 +249,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 contact: formData.contact,
                 sector: formData.sector,
                 assignment: formData.assignment,
+                destination: formData.destination,
                 ownerName: formData.ownerName,
                 logoUrl: formData.logoUrl 
             }, { merge: true });
@@ -274,14 +277,12 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
         
-        // O setor gravado será: Nome do Setor [Atribuição]
         const finalSectorString = formData.assignment.trim() 
             ? `${formData.sector.trim()} [${formData.assignment.trim()}]` 
             : formData.sector.trim();
 
         try {
             for (let i = 0; i < quantity; i++) {
-                // PDF deve mostrar o nome do setor completo
                 const pdfDetails = { ...formData, sector: finalSectorString };
                 const { blob, ticketCode } = await generateSingleTicketBlob(pdfDetails, undefined, batchPurchaseCode);
                 
@@ -296,6 +297,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         ownerName: formData.ownerName,
                         eventName: formData.eventName,
                         purchaseCode: batchPurchaseCode,
+                        destination: formData.destination, // Salva o destino no banco
                         pdfConfig: { ...formData }
                     }
                 });
@@ -361,13 +363,25 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                         {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade de Ingressos</label>
-                                    <input 
-                                        type="number" min="1" max="500"
-                                        value={quantity} onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-xl font-bold text-center"
-                                    />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade</label>
+                                        <input 
+                                            type="number" min="1" max="500"
+                                            value={quantity} onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+                                            className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-xl font-bold text-center"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Destino (Controle Interno)</label>
+                                        <input 
+                                            name="destination"
+                                            value={formData.destination} 
+                                            onChange={handleInputChange} 
+                                            placeholder="Ex: Fulano de Tal" 
+                                            className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-sm outline-none focus:border-orange-500 font-bold"
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -428,7 +442,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         </div>
                         <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-20" />
                         
-                        {/* SEÇÃO DA LOGO PERSISTENTE */}
                         <div className="bg-gray-700/50 p-4 rounded-xl border border-gray-600">
                             <div className="flex items-center justify-between mb-3">
                                 <span className="text-[10px] text-gray-400 font-bold uppercase flex items-center">
@@ -480,15 +493,16 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     <h2 className="font-bold flex items-center text-orange-500"><TableCellsIcon className="w-5 h-5 mr-2"/> Ingressos Gerados no Evento ({tickets.length})</h2>
                     <div className="relative w-48">
                         <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" />
-                        <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Filtrar por nome ou código..." className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:border-orange-500" />
+                        <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Filtrar por nome, destino ou código..." className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-8 pr-3 py-1.5 text-xs outline-none focus:border-orange-500" />
                     </div>
                 </div>
                 <div className="max-h-80 overflow-y-auto custom-scrollbar">
                     <table className="w-full text-left text-xs">
                         <thead className="sticky top-0 bg-gray-800 text-gray-500 uppercase font-bold border-b border-gray-700">
                             <tr>
-                                <th className="p-4">Código do Ingresso</th>
+                                <th className="p-4">Código</th>
                                 <th className="p-4">Participante</th>
+                                <th className="p-4">Destino</th>
                                 <th className="p-4">Setor / Atribuição</th>
                                 <th className="p-4 text-center">Status</th>
                                 <th className="p-4 text-right">Ações</th>
@@ -499,6 +513,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <tr key={t.id} className="hover:bg-gray-700/30 transition-colors">
                                     <td className="p-4 font-mono text-orange-400">{t.id}</td>
                                     <td className="p-4 font-bold text-gray-200">{t.details?.ownerName}</td>
+                                    <td className="p-4 text-blue-400 font-bold italic">{t.details?.destination || '---'}</td>
                                     <td className="p-4 text-gray-400">
                                         <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${t.sector.includes('[') ? 'bg-orange-500/10 border-orange-500 text-orange-500' : 'bg-blue-500/10 border-blue-500 text-blue-500'}`}>
                                             {t.sector}
