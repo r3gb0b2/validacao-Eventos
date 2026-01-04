@@ -14,6 +14,11 @@ interface SecretTicketGeneratorProps {
     db: Firestore;
 }
 
+// Interface estendida para incluir a atribuição no formulário local
+interface ExtendedTicketPdfDetails extends TicketPdfDetails {
+    assignment: string;
+}
+
 const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => {
     const [events, setEvents] = useState<Event[]>([]);
     const [selectedEventId, setSelectedEventId] = useState<string>('');
@@ -28,7 +33,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const logoInputRef = useRef<HTMLInputElement>(null);
 
-    const [formData, setFormData] = useState<TicketPdfDetails>({
+    const [formData, setFormData] = useState<ExtendedTicketPdfDetails>({
         eventName: 'NOME DO EVENTO',
         openingTime: '01/01/2026 16:00',
         venue: 'Local do Evento',
@@ -36,6 +41,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         producer: 'Produtora',
         contact: '+5500000000000',
         sector: 'Setor Único',
+        assignment: 'Ingresso Cortesia', // Nova atribuição
         ownerName: 'PARTICIPANTE',
         logoUrl: 'https://i.ibb.co/LzNf9F5/logo-st-ingressos-white.png'
     });
@@ -89,6 +95,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             producer: data.producer || prev.producer,
                             contact: data.contact || prev.contact,
                             sector: newSector,
+                            assignment: data.assignment || prev.assignment,
                             ownerName: data.ownerName || prev.ownerName,
                             logoUrl: data.logoUrl || prev.logoUrl
                         };
@@ -144,7 +151,13 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const config = ticket.details.pdfConfig || formData;
             const purchaseCode = ticket.details.purchaseCode || ticket.id;
             
-            const { blob } = await generateSingleTicketBlob(config, ticket.id, purchaseCode);
+            // Garantimos que o PDF use o setor completo com atribuição
+            const pdfDetails = {
+                ...config,
+                sector: ticket.sector // Usamos o que está no banco que já é "Setor [Atribuição]"
+            };
+
+            const { blob } = await generateSingleTicketBlob(pdfDetails, ticket.id, purchaseCode);
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
@@ -172,7 +185,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const textContent = await page.getTextContent();
             const text = textContent.items.map((item: any) => item.str).join(' ');
 
-            const extracted: Partial<TicketPdfDetails> = {};
+            const extracted: Partial<ExtendedTicketPdfDetails> = {};
             const eventMatch = text.match(/CARTÃO DE ACESSO\s+(.*?)\s+Abertura/i);
             if (eventMatch) extracted.eventName = eventMatch[1].trim();
             const openingMatch = text.match(/Abertura:\s+([\d\/:\s]+)/i);
@@ -185,11 +198,18 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             if (producerMatch) extracted.producer = producerMatch[1].trim();
             const contactMatch = text.match(/Contato:\s+([\+\d\s]+)/i);
             if (contactMatch) extracted.contact = contactMatch[1].trim();
+            
+            // Tenta extrair o setor e a atribuição
             const sectorMatch = text.match(/Ingresso\s+(.*?)\s+Participante/i);
             if (sectorMatch) {
-                const s = sectorMatch[1].trim();
-                // Se o setor extraído existe nos setores do evento, usa ele, senão mantém
-                if (availableSectors.includes(s)) extracted.sector = s;
+                const fullSector = sectorMatch[1].trim();
+                if (fullSector.includes('[') && fullSector.includes(']')) {
+                    const [s, a] = fullSector.split('[');
+                    extracted.sector = s.trim();
+                    extracted.assignment = a.replace(']', '').trim();
+                } else {
+                    extracted.sector = fullSector;
+                }
             }
 
             setFormData(prev => ({ ...prev, ...extracted }));
@@ -226,6 +246,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                 producer: formData.producer,
                 contact: formData.contact,
                 sector: formData.sector,
+                assignment: formData.assignment,
                 ownerName: formData.ownerName,
                 logoUrl: formData.logoUrl 
             }, { merge: true });
@@ -252,16 +273,23 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         const eventFolder = zip.folder(formData.eventName.replace(/\s+/g, '_'));
 
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
+        
+        // O setor gravado será: Nome do Setor [Atribuição]
+        const finalSectorString = formData.assignment.trim() 
+            ? `${formData.sector.trim()} [${formData.assignment.trim()}]` 
+            : formData.sector.trim();
 
         try {
             for (let i = 0; i < quantity; i++) {
-                const { blob, ticketCode } = await generateSingleTicketBlob(formData, undefined, batchPurchaseCode);
+                // PDF deve mostrar o nome do setor completo
+                const pdfDetails = { ...formData, sector: finalSectorString };
+                const { blob, ticketCode } = await generateSingleTicketBlob(pdfDetails, undefined, batchPurchaseCode);
                 
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
                 
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
                 currentBatch.set(ticketRef, {
-                    sector: formData.sector.split('[')[0].trim(),
+                    sector: finalSectorString,
                     status: 'AVAILABLE',
                     source: 'secret_generator',
                     details: {
@@ -349,23 +377,26 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                 <TicketIcon className="w-4 h-4 mr-2" /> 2. Dados do Ingresso
                             </h2>
                             
-                            <div className="space-y-1">
-                                <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Vincular ao Setor do Evento</label>
-                                {availableSectors.length > 0 ? (
-                                    <select 
-                                        name="sector" 
-                                        value={formData.sector} 
-                                        onChange={handleInputChange} 
-                                        className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-white font-bold outline-none focus:border-orange-500"
-                                    >
-                                        {availableSectors.map(s => <option key={s} value={s}>{s}</option>)}
-                                    </select>
-                                ) : (
-                                    <div className="space-y-2">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                    <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Setor do Evento</label>
+                                    {availableSectors.length > 0 ? (
+                                        <select 
+                                            name="sector" 
+                                            value={formData.sector} 
+                                            onChange={handleInputChange} 
+                                            className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-white font-bold outline-none focus:border-orange-500"
+                                        >
+                                            {availableSectors.map(s => <option key={s} value={s}>{s}</option>)}
+                                        </select>
+                                    ) : (
                                         <input name="sector" value={formData.sector} onChange={handleInputChange} placeholder="Setor (Texto Livre)" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
-                                        <p className="text-[9px] text-red-400 italic font-bold">Aviso: Evento selecionado não possui setores configurados. Defina-os no painel para evitar erros de validação.</p>
-                                    </div>
-                                )}
+                                    )}
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="block text-[10px] text-gray-500 uppercase font-bold ml-1">Atribuição (Nome do Ingresso)</label>
+                                    <input name="assignment" value={formData.assignment} onChange={handleInputChange} placeholder="Ex: Cortesia, VIP" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm text-orange-400 font-bold outline-none focus:border-orange-500" />
+                                </div>
                             </div>
 
                             <div className="space-y-1">
@@ -437,11 +468,9 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     >
                         {isGenerating ? "Gerando Ingressos..." : "Gerar Lote ZIP"}
                     </button>
-                    {availableSectors.length > 0 && (
-                         <div className="mt-3 flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
-                             <CheckCircleIcon className="w-4 h-4 text-green-500" /> Vínculo com setor "{formData.sector}" ativo
-                         </div>
-                    )}
+                    <div className="mt-3 flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
+                        <CheckCircleIcon className="w-4 h-4 text-green-500" /> Formato: {formData.sector} {formData.assignment ? `[${formData.assignment}]` : ''}
+                    </div>
                 </div>
             </div>
 
@@ -460,7 +489,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                             <tr>
                                 <th className="p-4">Código do Ingresso</th>
                                 <th className="p-4">Participante</th>
-                                <th className="p-4">Setor Vinculado</th>
+                                <th className="p-4">Setor / Atribuição</th>
+                                <th className="p-4 text-center">Status</th>
                                 <th className="p-4 text-right">Ações</th>
                             </tr>
                         </thead>
@@ -470,9 +500,16 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                     <td className="p-4 font-mono text-orange-400">{t.id}</td>
                                     <td className="p-4 font-bold text-gray-200">{t.details?.ownerName}</td>
                                     <td className="p-4 text-gray-400">
-                                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${availableSectors.includes(t.sector) ? 'bg-green-500/10 border-green-500 text-green-500' : 'bg-red-500/10 border-red-500 text-red-500'}`}>
+                                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${t.sector.includes('[') ? 'bg-orange-500/10 border-orange-500 text-orange-500' : 'bg-blue-500/10 border-blue-500 text-blue-500'}`}>
                                             {t.sector}
                                         </span>
+                                    </td>
+                                    <td className="p-4 text-center">
+                                        {t.status === 'USED' ? (
+                                            <span className="bg-green-600 text-white px-2 py-1 rounded-lg text-[9px] font-black uppercase">Utilizado</span>
+                                        ) : (
+                                            <span className="bg-gray-700 text-gray-400 px-2 py-1 rounded-lg text-[9px] font-black uppercase">Disponível</span>
+                                        )}
                                     </td>
                                     <td className="p-4 text-right flex justify-end space-x-2">
                                         <button 
