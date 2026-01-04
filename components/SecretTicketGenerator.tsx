@@ -446,11 +446,19 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         </div>
 
                         <input name="eventName" value={formData.eventName} onChange={handleInputChange} placeholder="Nome do Evento" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                        
                         <div className="grid grid-cols-2 gap-4">
                             <input name="openingTime" value={formData.openingTime} onChange={handleInputChange} placeholder="Abertura" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
                             <input name="venue" value={formData.venue} onChange={handleInputChange} placeholder="Local" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
                         </div>
-                        <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-20" />
+
+                        <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-16" />
+
+                        {/* Campos Produtora e Contato - Adicionados conforme solicitado */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <input name="producer" value={formData.producer} onChange={handleInputChange} placeholder="Produtora" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                            <input name="contact" value={formData.contact} onChange={handleInputChange} placeholder="Contato" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
+                        </div>
                         
                         <div className="bg-gray-700/50 p-4 rounded-xl border border-gray-600">
                             <div className="flex items-center justify-between mb-3">
