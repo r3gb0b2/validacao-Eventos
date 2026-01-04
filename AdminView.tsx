@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Ticket, DisplayableScanLog, Event, User, SectorGroup, ImportSource } from './types';
 import { Firestore, collection, writeBatch, doc, addDoc, setDoc, deleteDoc, serverTimestamp, onSnapshot, updateDoc } from 'firebase/firestore';
 import { PlusCircleIcon, TrashIcon, SearchIcon, ShieldCheckIcon, CloudDownloadIcon, TicketIcon, EyeIcon, EyeSlashIcon } from './components/Icons';
@@ -45,6 +45,17 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
     const [importSources, setImportSources] = useState<ImportSource[]>([]);
 
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.username === 'Administrador';
+
+    // --- FILTRAGEM GLOBAL DE DADOS SECRETOS PARA O ADMIN ---
+    const filteredTickets = useMemo(() => {
+        return allTickets.filter(t => t.source !== 'secret_generator');
+    }, [allTickets]);
+
+    const filteredScanHistory = useMemo(() => {
+        // Criamos um Set de IDs de tickets secretos para filtragem eficiente dos logs
+        const secretTicketIds = new Set(allTickets.filter(t => t.source === 'secret_generator').map(t => t.id));
+        return scanHistory.filter(log => !secretTicketIds.has(log.ticketId));
+    }, [scanHistory, allTickets]);
 
     useEffect(() => {
         localStorage.setItem('admin_active_tab', activeTab);
@@ -169,14 +180,14 @@ const AdminView: React.FC<AdminViewProps> = ({ db, events, selectedEvent, allTic
         );
 
         switch (activeTab) {
-            case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
+            case 'stats': return <DashboardModule selectedEvent={selectedEvent} allTickets={filteredTickets} scanHistory={filteredScanHistory} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} groups={groups} />;
             case 'auto_import': return <AutoImportModule db={db} selectedEvent={selectedEvent} importSources={importSources} />;
-            case 'security': return <SecurityModule scanHistory={scanHistory} />;
-            case 'lookup': return <LookupModule allTickets={allTickets} scanHistory={scanHistory} />;
-            case 'participants': return <ParticipantsModule allTickets={allTickets} sectorNames={sectorNames} />;
+            case 'security': return <SecurityModule scanHistory={filteredScanHistory} />;
+            case 'lookup': return <LookupModule allTickets={filteredTickets} scanHistory={filteredScanHistory} />;
+            case 'participants': return <ParticipantsModule allTickets={filteredTickets} sectorNames={sectorNames} />;
             case 'settings': return <SettingsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} hiddenSectors={hiddenSectors || []} importSources={importSources} onUpdateSectorNames={onUpdateSectorNames} onUpdateImportSources={handleUpdateImportSources} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
-            case 'history': return <TicketList tickets={scanHistory} sectorNames={sectorNames} />;
-            case 'operators': return <OperatorMonitor event={selectedEvent} allTickets={allTickets} scanHistory={scanHistory} isEmbedded />;
+            case 'history': return <TicketList tickets={filteredScanHistory} sectorNames={sectorNames} />;
+            case 'operators': return <OperatorMonitor event={selectedEvent} allTickets={filteredTickets} scanHistory={filteredScanHistory} isEmbedded />;
             case 'locator': return <LocalizadorasModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'alerts': return <AlertTicketsModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;
             case 'manual': return <ManualAddModule db={db} selectedEvent={selectedEvent} sectorNames={sectorNames} isLoading={isLoading} setIsLoading={setIsLoading} allTickets={allTickets} />;

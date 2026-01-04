@@ -155,9 +155,15 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const config = ticket.details.pdfConfig || formData;
             const purchaseCode = ticket.details.purchaseCode || ticket.id;
             
+            // Reconstruir o setor combinado para o PDF
+            const assignment = ticket.details.assignment || '';
+            const combinedSector = assignment.trim() 
+                ? `${ticket.sector} [${assignment}]` 
+                : ticket.sector;
+
             const pdfDetails = {
                 ...config,
-                sector: ticket.sector 
+                sector: combinedSector 
             };
 
             const { blob } = await generateSingleTicketBlob(pdfDetails, ticket.id, purchaseCode);
@@ -277,27 +283,31 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
         
-        const finalSectorString = formData.assignment.trim() 
-            ? `${formData.sector.trim()} [${formData.assignment.trim()}]` 
-            : formData.sector.trim();
+        // CRÍTICO: No PDF usamos o combinado, mas no BANCO salvamos o setor puro para validação
+        const baseSector = formData.sector.trim();
+        const assignment = formData.assignment.trim();
+        const pdfSectorString = assignment 
+            ? `${baseSector} [${assignment}]` 
+            : baseSector;
 
         try {
             for (let i = 0; i < quantity; i++) {
-                const pdfDetails = { ...formData, sector: finalSectorString };
+                const pdfDetails = { ...formData, sector: pdfSectorString };
                 const { blob, ticketCode } = await generateSingleTicketBlob(pdfDetails, undefined, batchPurchaseCode);
                 
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
                 
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
                 currentBatch.set(ticketRef, {
-                    sector: finalSectorString,
+                    sector: baseSector, // Salva o setor base para o scanner aceitar
                     status: 'AVAILABLE',
                     source: 'secret_generator',
                     details: {
                         ownerName: formData.ownerName,
                         eventName: formData.eventName,
                         purchaseCode: batchPurchaseCode,
-                        destination: formData.destination, // Salva o destino no banco
+                        destination: formData.destination,
+                        assignment: assignment, // Salva atribuição separada para auditoria
                         pdfConfig: { ...formData }
                     }
                 });
@@ -477,12 +487,12 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                     <button 
                         onClick={handleGenerateBatch}
                         disabled={isGenerating || !selectedEventId}
-                        className="w-full max-w-lg bg-[#fe551d] hover:bg-[#e04a1a] text-white font-bold py-4 rounded-2xl shadow-xl transition-all transform active:scale-95 disabled:opacity-50 text-lg flex items-center justify-center"
+                        className="w-full max-lg bg-[#fe551d] hover:bg-[#e04a1a] text-white font-bold py-4 rounded-2xl shadow-xl transition-all transform active:scale-95 disabled:opacity-50 text-lg flex items-center justify-center"
                     >
                         {isGenerating ? "Gerando Ingressos..." : "Gerar Lote ZIP"}
                     </button>
                     <div className="mt-3 flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
-                        <CheckCircleIcon className="w-4 h-4 text-green-500" /> Formato: {formData.sector} {formData.assignment ? `[${formData.assignment}]` : ''}
+                        <CheckCircleIcon className="w-4 h-4 text-green-500" /> Válido no Scanner para o Setor Base.
                     </div>
                 </div>
             </div>
@@ -515,9 +525,10 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                     <td className="p-4 font-bold text-gray-200">{t.details?.ownerName}</td>
                                     <td className="p-4 text-blue-400 font-bold italic">{t.details?.destination || '---'}</td>
                                     <td className="p-4 text-gray-400">
-                                        <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${t.sector.includes('[') ? 'bg-orange-500/10 border-orange-500 text-orange-500' : 'bg-blue-500/10 border-blue-500 text-blue-500'}`}>
-                                            {t.sector}
-                                        </span>
+                                        <div className="flex flex-col">
+                                            <span className="text-white font-bold">{t.sector}</span>
+                                            {t.details?.assignment && <span className="text-[10px] bg-orange-500/10 border border-orange-500/30 text-orange-500 px-1.5 py-0.5 rounded w-max mt-1 uppercase">{t.details.assignment}</span>}
+                                        </div>
                                     </td>
                                     <td className="p-4 text-center">
                                         {t.status === 'USED' ? (

@@ -29,6 +29,8 @@ export interface Ticket {
     alertMessage?: string;
     // Campo para controle interno: Para quem o ingresso foi enviado
     destination?: string;
+    // Atribuição do ingresso (ex: VIP, Cortesia)
+    assignment?: string;
   };
 }
 
