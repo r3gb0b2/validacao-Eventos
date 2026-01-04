@@ -120,21 +120,28 @@ export const generateSingleTicketBlob = async (details: TicketPdfDetails, forced
     currentAddrY += 6; 
   });
   
-  doc.setFontSize(headerFontSize);
-  // O produtor desce dinamicamente
-  const prodY = Math.max(126, currentAddrY - 1); 
-  const l3Label1 = 'Produzido: ';
-  const l3Val1 = details.producer || 'Organização';
-  const l3Label2 = '   Contato: ';
-  const l3Val2 = details.contact || '-';
+  // --- PRODUTORA E CONTATO COM QUEBRA DE LINHA ---
+  const footerFontSize = 11.5;
+  doc.setFontSize(footerFontSize);
+  const maxWidthFooter = 175;
   
-  const fullL3Width = doc.getTextWidth(l3Label1) + doc.getTextWidth(l3Val1) + doc.getTextWidth(l3Label2) + doc.getTextWidth(l3Val2);
-  let curX3 = 105 - (fullL3Width / 2);
+  const producerText = details.producer || 'Organização';
+  const contactText = details.contact || '-';
+  const combinedFooter = `Produzido por: ${producerText}  |  Contato: ${contactText}`;
   
-  doc.setFont('helvetica', 'normal'); doc.text(l3Label1, curX3, prodY); curX3 += doc.getTextWidth(l3Label1);
-  doc.setFont('helvetica', 'bold'); doc.text(l3Val1, curX3, prodY); curX3 += doc.getTextWidth(l3Val1);
-  doc.setFont('helvetica', 'normal'); doc.text(l3Label2, curX3, prodY); curX3 += doc.getTextWidth(l3Label2);
-  doc.setFont('helvetica', 'bold'); doc.text(l3Val2, curX3, prodY);
+  const splitFooter = doc.splitTextToSize(combinedFooter, maxWidthFooter);
+  
+  // Calcula o Y inicial garantindo que não sobreponha o endereço
+  let currentFooterY = Math.max(currentAddrY + 1, 128); 
+  
+  doc.setFont('helvetica', 'bold');
+  splitFooter.forEach((line: string) => {
+    // Garante que não saia do box laranja (Y=140)
+    if (currentFooterY <= 138) {
+        doc.text(line.trim(), 105, currentFooterY, { align: 'center' });
+        currentFooterY += 5;
+    }
+  });
 
   const startDataY = 148; 
   doc.setTextColor(textPrimary[0], textPrimary[1], textPrimary[2]);
