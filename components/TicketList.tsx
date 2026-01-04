@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { DisplayableScanLog, Sector, ScanStatus } from '../types';
 import { ClockIcon } from './Icons';
 import { formatSafeTime } from '../App';
@@ -13,9 +13,15 @@ interface TicketListProps {
 const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs = false }) => {
     const [activeTab, setActiveTab] = useState<Sector | 'All'>('All');
     
-    const filteredTickets = hideTabs 
-        ? tickets 
-        : tickets.filter(ticket => activeTab === 'All' || ticket.ticketSector === activeTab);
+    const filteredTickets = useMemo(() => {
+        const list = hideTabs 
+            ? tickets 
+            : tickets.filter(ticket => activeTab === 'All' || ticket.ticketSector === activeTab);
+        
+        // Otimização visual: Exibir apenas os primeiros 300 itens para evitar travamentos no DOM
+        // mantendo a performance mesmo com 10.000 registros em memória.
+        return list.slice(0, 300);
+    }, [tickets, activeTab, hideTabs]);
 
   if (!tickets.length) {
     return (
@@ -54,7 +60,7 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
   return (
     <div className="w-full bg-gray-800/80 backdrop-blur-sm p-4 rounded-lg border border-gray-700 shadow-lg">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 gap-2">
-        <h3 className="text-lg font-semibold text-white">Histórico de Validações</h3>
+        <h3 className="text-lg font-semibold text-white">Histórico (Top 300)</h3>
         {!hideTabs && (
             <div className="w-full md:w-auto overflow-x-auto pb-1">
                 <div className="flex space-x-1 bg-gray-700 p-1 rounded-lg min-w-max">
@@ -75,7 +81,7 @@ const TicketList: React.FC<TicketListProps> = ({ tickets, sectorNames, hideTabs 
             </div>
         )}
       </div>
-      <ul className="divide-y divide-gray-700 h-96 overflow-y-auto">
+      <ul className="divide-y divide-gray-700 h-96 overflow-y-auto custom-scrollbar">
         {filteredTickets.map((ticket) => (
           <li key={ticket.id} className="py-3 flex justify-between items-center">
             <div>

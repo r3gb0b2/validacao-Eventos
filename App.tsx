@@ -204,7 +204,8 @@ const App: React.FC = () => {
             setTicketsLoaded(true);
         }, () => setTicketsLoaded(true));
 
-        const unsubScans = onSnapshot(query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(50)), (snap) => {
+        // Aumentado o limite de 50 para 10000 para refletir estatísticas reais de operadores
+        const unsubScans = onSnapshot(query(collection(db, 'events', eventId, 'scans'), orderBy('timestamp', 'desc'), limit(10000)), (snap) => {
             setScanHistory(snap.docs.map(d => ({ 
                 id: d.id, 
                 ticketId: d.data().ticketId, 
