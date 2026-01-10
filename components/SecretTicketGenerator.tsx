@@ -28,7 +28,12 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
     const [isParsing, setIsParsing] = useState(false);
     const [isSavingSettings, setIsSavingSettings] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    
+    // Novas estados para códigos manuais
+    const [generationMode, setGenerationMode] = useState<'random' | 'manual'>('random');
     const [quantity, setQuantity] = useState(1);
+    const [manualCodesInput, setManualCodesInput] = useState('');
+    
     const [tickets, setTickets] = useState<Ticket[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -148,6 +153,13 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
         );
     }, [tickets, searchTerm]);
 
+    // Processa os códigos manuais para saber quantos são
+    const manualCodesList = useMemo(() => {
+        return manualCodesInput.split('\n')
+            .map(c => c.trim())
+            .filter(c => c.length > 0);
+    }, [manualCodesInput]);
+
     const handleDownloadSingle = async (ticket: Ticket) => {
         if (!ticket.details) return;
         setDownloadingId(ticket.id);
@@ -155,7 +167,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             const config = ticket.details.pdfConfig || formData;
             const purchaseCode = ticket.details.purchaseCode || ticket.id;
             
-            // Reconstruir o setor combinado para o PDF
             const assignment = ticket.details.assignment || '';
             const combinedSector = assignment.trim() 
                 ? `${ticket.sector} [${assignment}]` 
@@ -275,6 +286,14 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
     const handleGenerateBatch = async () => {
         if (!selectedEventId) return alert("Selecione um evento.");
+        
+        const finalCodes = generationMode === 'manual' ? manualCodesList : [];
+        const finalQuantity = generationMode === 'manual' ? finalCodes.length : quantity;
+
+        if (generationMode === 'manual' && finalCodes.length === 0) {
+            return alert("Insira ao menos um código manual.");
+        }
+
         setIsGenerating(true);
         const zip = new JSZip();
         let currentBatch = writeBatch(db);
@@ -283,7 +302,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
         const batchPurchaseCode = Math.random().toString(36).substring(2, 14).toUpperCase().padEnd(12, 'X');
         
-        // CRÍTICO: No PDF usamos o combinado, mas no BANCO salvamos o setor puro para validação
         const baseSector = formData.sector.trim();
         const assignment = formData.assignment.trim();
         const pdfSectorString = assignment 
@@ -291,15 +309,17 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             : baseSector;
 
         try {
-            for (let i = 0; i < quantity; i++) {
+            for (let i = 0; i < finalQuantity; i++) {
+                const manualCode = generationMode === 'manual' ? finalCodes[i] : undefined;
+                
                 const pdfDetails = { ...formData, sector: pdfSectorString };
-                const { blob, ticketCode } = await generateSingleTicketBlob(pdfDetails, undefined, batchPurchaseCode);
+                const { blob, ticketCode } = await generateSingleTicketBlob(pdfDetails, manualCode, batchPurchaseCode);
                 
                 if (eventFolder) eventFolder.file(`ingresso_${i + 1}_${ticketCode}.pdf`, blob);
                 
                 const ticketRef = doc(db, 'events', selectedEventId, 'tickets', ticketCode);
                 currentBatch.set(ticketRef, {
-                    sector: baseSector, // Salva o setor base para o scanner aceitar
+                    sector: baseSector,
                     status: 'AVAILABLE',
                     source: 'secret_generator',
                     details: {
@@ -307,7 +327,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         eventName: formData.eventName,
                         purchaseCode: batchPurchaseCode,
                         destination: formData.destination,
-                        assignment: assignment, // Salva atribuição separada para auditoria
+                        assignment: assignment,
                         pdfConfig: { ...formData }
                     }
                 });
@@ -325,6 +345,8 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
             link.href = url;
             link.download = `ingressos_${formData.eventName}.zip`;
             link.click();
+            
+            if (generationMode === 'manual') setManualCodesInput('');
         } catch (e) {
             console.error(e);
             alert("Erro ao gerar lote.");
@@ -373,26 +395,70 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                                         {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
                                     </select>
                                 </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade</label>
-                                        <input 
-                                            type="number" min="1" max="500"
-                                            value={quantity} onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
-                                            className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-xl font-bold text-center"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Destino (Controle Interno)</label>
-                                        <input 
-                                            name="destination"
-                                            value={formData.destination} 
-                                            onChange={handleInputChange} 
-                                            placeholder="Ex: Fulano de Tal" 
-                                            className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-sm outline-none focus:border-orange-500 font-bold"
-                                        />
-                                    </div>
+
+                                {/* Seletor de Modo de Geração */}
+                                <div className="flex bg-gray-900/50 p-1 rounded-xl border border-gray-600">
+                                    <button 
+                                        onClick={() => setGenerationMode('random')}
+                                        className={`flex-1 py-2 text-[10px] font-black uppercase rounded-lg transition-all ${generationMode === 'random' ? 'bg-orange-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                        Aleatórios
+                                    </button>
+                                    <button 
+                                        onClick={() => setGenerationMode('manual')}
+                                        className={`flex-1 py-2 text-[10px] font-black uppercase rounded-lg transition-all ${generationMode === 'manual' ? 'bg-orange-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                        Códigos Manuais
+                                    </button>
                                 </div>
+
+                                {generationMode === 'random' ? (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Quantidade</label>
+                                            <input 
+                                                type="number" min="1" max="500"
+                                                value={quantity} onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
+                                                className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-xl font-bold text-center"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Destino (Controle Interno)</label>
+                                            <input 
+                                                name="destination"
+                                                value={formData.destination} 
+                                                onChange={handleInputChange} 
+                                                placeholder="Ex: Fulano de Tal" 
+                                                className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-sm outline-none focus:border-orange-500 font-bold"
+                                            />
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div className="relative">
+                                            <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1 flex justify-between">
+                                                <span>Códigos (um por linha)</span>
+                                                <span className="text-orange-400">{manualCodesList.length} detectados</span>
+                                            </label>
+                                            <textarea 
+                                                value={manualCodesInput}
+                                                onChange={(e) => setManualCodesInput(e.target.value)}
+                                                placeholder="CÓDIGO1&#10;CÓDIGO2&#10;CÓDIGO3..."
+                                                className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-sm font-mono h-32 focus:border-orange-500 outline-none"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[10px] text-gray-500 uppercase font-bold mb-1">Destino (Controle Interno)</label>
+                                            <input 
+                                                name="destination"
+                                                value={formData.destination} 
+                                                onChange={handleInputChange} 
+                                                placeholder="Ex: Fulano de Tal" 
+                                                className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-white text-sm outline-none focus:border-orange-500 font-bold"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -454,7 +520,6 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
 
                         <textarea name="address" value={formData.address} onChange={handleInputChange} placeholder="Endereço" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm h-16" />
 
-                        {/* Campos Produtora e Contato - Adicionados conforme solicitado */}
                         <div className="grid grid-cols-2 gap-4">
                             <input name="producer" value={formData.producer} onChange={handleInputChange} placeholder="Produtora" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
                             <input name="contact" value={formData.contact} onChange={handleInputChange} placeholder="Contato" className="w-full bg-gray-900 border border-gray-600 rounded-lg p-3 text-sm" />
@@ -497,7 +562,7 @@ const SecretTicketGenerator: React.FC<SecretTicketGeneratorProps> = ({ db }) => 
                         disabled={isGenerating || !selectedEventId}
                         className="w-full max-lg bg-[#fe551d] hover:bg-[#e04a1a] text-white font-bold py-4 rounded-2xl shadow-xl transition-all transform active:scale-95 disabled:opacity-50 text-lg flex items-center justify-center"
                     >
-                        {isGenerating ? "Gerando Ingressos..." : "Gerar Lote ZIP"}
+                        {isGenerating ? "Gerando Ingressos..." : `Gerar ${generationMode === 'manual' ? manualCodesList.length : quantity} Ingressos (ZIP)`}
                     </button>
                     <div className="mt-3 flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase">
                         <CheckCircleIcon className="w-4 h-4 text-green-500" /> Válido no Scanner para o Setor Base.
